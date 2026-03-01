@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Search } from 'lucide-react';
 
 interface Chat {
   id: number;
@@ -25,6 +25,11 @@ export function UserChatList() {
     console.log('New chat');
   };
 
+  const handleSearch = () => {
+    // Handle search
+    console.log('Search');
+  };
+
   return (
     <div className="flex flex-col h-full bg-white">
       {/* New Chat Button */}
@@ -35,6 +40,17 @@ export function UserChatList() {
         >
           <Plus className="w-4 h-4" />
           New Chat
+        </button>
+      </div>
+
+      {/* Search Button */}
+      <div className="p-4 border-b border-border">
+        <button
+          onClick={handleSearch}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-border rounded-lg hover:bg-panel transition-colors text-sm text-text-secondary"
+        >
+          <Search className="w-4 h-4" />
+          Search
         </button>
       </div>
 
