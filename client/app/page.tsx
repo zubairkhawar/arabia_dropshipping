@@ -1,5 +1,18 @@
-import { redirect } from 'next/navigation';
+'use client';
+
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 
 export default function Home() {
-  redirect('/user/dashboard');
+  const router = useRouter();
+  
+  useEffect(() => {
+    router.push('/user/dashboard');
+  }, [router]);
+
+  return (
+    <div className="flex items-center justify-center h-screen">
+      <p className="text-text-secondary">Redirecting...</p>
+    </div>
+  );
 }
