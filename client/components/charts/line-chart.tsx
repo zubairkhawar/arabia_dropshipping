@@ -9,7 +9,7 @@ interface LineChartProps {
   height?: number;
 }
 
-export function LineChartComponent({ data, dataKey, strokeColor = '#4F46E5', height = 300 }: LineChartProps) {
+export function LineChartComponent({ data, dataKey, strokeColor = '#1158A4', height = 300 }: LineChartProps) {
   return (
     <ResponsiveContainer width="100%" height={height}>
       <LineChart data={data}>

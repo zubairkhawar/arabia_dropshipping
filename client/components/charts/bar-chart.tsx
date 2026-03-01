@@ -9,7 +9,7 @@ interface BarChartProps {
   height?: number;
 }
 
-export function BarChartComponent({ data, dataKey, fillColor = '#4F46E5', height = 300 }: BarChartProps) {
+export function BarChartComponent({ data, dataKey, fillColor = '#1158A4', height = 300 }: BarChartProps) {
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data}>

@@ -8,7 +8,7 @@ interface PieChartProps {
   height?: number;
 }
 
-const DEFAULT_COLORS = ['#4F46E5', '#22C55E', '#F59E0B', '#EF4444', '#3B82F6', '#8B5CF6'];
+const DEFAULT_COLORS = ['#1158A4', '#22C55E', '#F59E0B', '#EF4444', '#3B82F6', '#8B5CF6'];
 
 export function PieChartComponent({ data, colors = DEFAULT_COLORS, height = 300 }: PieChartProps) {
   return (
