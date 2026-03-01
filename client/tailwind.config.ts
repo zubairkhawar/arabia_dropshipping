@@ -11,9 +11,9 @@ const config: Config = {
       colors: {
         // Koru CRM Color Scheme - Light Theme
         primary: {
-          DEFAULT: '#0F766E', // Teal (Primary)
-          light: '#14B8A6',
-          dark: '#0D9488',
+          DEFAULT: '#1158A4', // Primary color
+          light: '#1A7BC4',
+          dark: '#0E4A7A',
           gradient: 'linear-gradient(135deg, #1E3A8A 0%, #1E40AF 50%, #3B82F6 100%)',
         },
         secondary: {
@@ -34,7 +34,7 @@ const config: Config = {
         },
         border: '#E5E7EB',
         chat: {
-          user: '#0F766E',
+          user: '#1158A4',
           agent: '#F1F5F9',
           ai: '#EEF2FF',
         },
