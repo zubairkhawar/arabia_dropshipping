@@ -12,9 +12,8 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-scaffold">
       <AgentSidebar />
       <div
-        className={`flex-1 flex flex-col transition-all duration-300 ${
-          isCollapsed ? 'ml-20' : 'ml-64'
-        }`}
+        className="flex-1 flex flex-col transition-all duration-300"
+        style={{ marginLeft: isCollapsed ? '80px' : '256px' }}
       >
         <AgentHeader />
         <main className="flex-1 overflow-hidden bg-scaffold">{children}</main>

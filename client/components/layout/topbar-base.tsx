@@ -22,9 +22,10 @@ export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopB
   ];
 
   return (
-    <div className={`h-16 bg-bar border-b border-border flex items-center justify-between px-6 transition-all duration-300 ${
-      isCollapsed ? 'ml-20' : 'ml-64'
-    }`}>
+    <div 
+      className="h-16 bg-bar border-b border-border flex items-center justify-between px-6 transition-all duration-300"
+      style={{ marginLeft: isCollapsed ? '80px' : '256px' }}
+    >
       {/* Search */}
       <div className="flex-1 max-w-md">
         <div className="relative">

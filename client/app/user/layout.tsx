@@ -12,9 +12,8 @@ function UserLayoutContent({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-scaffold">
       <UserSidebar />
       <div
-        className={`flex-1 flex flex-col transition-all duration-300 ${
-          isCollapsed ? 'ml-20' : 'ml-64'
-        }`}
+        className="flex-1 flex flex-col transition-all duration-300"
+        style={{ marginLeft: isCollapsed ? '80px' : '256px' }}
       >
         <UserHeader />
         <main className="flex-1 overflow-y-auto p-6 bg-scaffold">{children}</main>
