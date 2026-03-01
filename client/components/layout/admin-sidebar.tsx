@@ -1,6 +1,6 @@
 'use client';
 
-import { LayoutDashboard, Inbox, Users, Building2, TrendingUp, Workflow, BookOpen, Settings } from 'lucide-react';
+import { LayoutDashboard, Inbox, Users, Building2, TrendingUp, BookOpen, Settings } from 'lucide-react';
 import { SidebarBase } from './sidebar-base';
 
 const menuItems = [
@@ -9,7 +9,6 @@ const menuItems = [
   { icon: Users, label: 'Agents', path: '/admin/agents' },
   { icon: Building2, label: 'Tenants', path: '/admin/tenants' },
   { icon: TrendingUp, label: 'Analytics', path: '/admin/analytics' },
-  { icon: Workflow, label: 'Workflows', path: '/admin/workflows' },
   { icon: BookOpen, label: 'Knowledge Base', path: '/admin/knowledge-base' },
   { icon: Settings, label: 'Settings', path: '/admin/settings' },
 ];
