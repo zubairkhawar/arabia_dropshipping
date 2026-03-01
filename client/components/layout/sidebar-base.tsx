@@ -1,0 +1,98 @@
+'use client';
+
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { Menu, X, LucideIcon } from 'lucide-react';
+import { useSidebar } from '@/contexts/SidebarContext';
+import Image from 'next/image';
+
+interface MenuItem {
+  icon: LucideIcon;
+  label: string;
+  path: string;
+}
+
+interface SidebarBaseProps {
+  menuItems: MenuItem[];
+  title?: string;
+}
+
+export function SidebarBase({ menuItems, title = 'Arabia' }: SidebarBaseProps) {
+  const pathname = usePathname();
+  const { isCollapsed, toggleSidebar } = useSidebar();
+
+  return (
+    <div
+      className={`fixed left-0 top-0 h-full bg-sidebar border-r border-border transition-all duration-300 z-50 ${
+        isCollapsed ? 'w-20' : 'w-64'
+      }`}
+    >
+      <div className="flex flex-col h-full">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          {!isCollapsed && (
+            <div className="flex items-center gap-2">
+              <Image
+                src="/arabia_logo.png"
+                alt="Arabia Dropshipping"
+                width={100}
+                height={32}
+                className="h-8 w-auto"
+              />
+              <Image
+                src="/Arabia_thumbnail.png"
+                alt="Arabia"
+                width={24}
+                height={24}
+                className="h-6 w-6"
+              />
+            </div>
+          )}
+          <button
+            onClick={toggleSidebar}
+            className="p-2 rounded-lg hover:bg-panel transition-colors"
+          >
+            {isCollapsed ? (
+              <Menu className="w-5 h-5 text-text-secondary" />
+            ) : (
+              <X className="w-5 h-5 text-text-secondary" />
+            )}
+          </button>
+        </div>
+
+        {/* Menu Items */}
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+          {menuItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = pathname === item.path || pathname?.startsWith(item.path + '/');
+            return (
+              <Link
+                key={item.path}
+                href={item.path}
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                  isActive
+                    ? 'bg-primary text-white'
+                    : 'text-text-secondary hover:bg-panel hover:text-text-primary'
+                }`}
+              >
+                <Icon className="w-5 h-5 flex-shrink-0" />
+                {!isCollapsed && (
+                  <span className="font-medium text-sm">{item.label}</span>
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* Footer */}
+        {!isCollapsed && (
+          <div className="p-4 border-t border-border">
+            <p className="text-xs text-text-muted">
+              © 2024 Arabia Dropshipping
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
