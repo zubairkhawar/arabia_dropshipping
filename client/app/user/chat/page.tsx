@@ -22,7 +22,7 @@ function UserChatContent() {
               <h2 className="font-semibold text-text-primary">Conversations</h2>
               <button
                 onClick={toggleChatList}
-                className="p-1 rounded hover:bg-panel transition-colors md:hidden"
+                className="p-1 rounded hover:bg-white transition-colors"
               >
                 <X className="w-4 h-4 text-text-secondary" />
               </button>
@@ -34,7 +34,7 @@ function UserChatContent() {
           {isCollapsed && (
             <button
               onClick={toggleChatList}
-              className="absolute left-4 top-4 z-10 p-2 bg-white border border-border rounded-lg shadow-sm hover:bg-panel transition-colors md:hidden"
+              className="absolute left-4 top-4 z-10 p-2 bg-white border border-border rounded-lg shadow-sm hover:bg-panel transition-colors"
             >
               <Menu className="w-5 h-5 text-text-secondary" />
             </button>
