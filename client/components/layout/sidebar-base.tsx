@@ -30,34 +30,48 @@ export function SidebarBase({ menuItems, title = 'Arabia' }: SidebarBaseProps) {
       <div className="flex flex-col h-full">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
-          {!isCollapsed && (
+          {isCollapsed ? (
             <div className="flex items-center gap-2">
-              <Image
-                src="/arabia_logo.png"
-                alt="Arabia Dropshipping"
-                width={100}
-                height={32}
-                className="h-8 w-auto"
-              />
               <Image
                 src="/Arabia_thumbnail.png"
                 alt="Arabia"
-                width={24}
-                height={24}
-                className="h-6 w-6"
+                width={32}
+                height={32}
+                className="h-8 w-8"
               />
+              <button
+                onClick={toggleSidebar}
+                className="p-2 rounded-lg hover:bg-panel transition-colors"
+              >
+                <Menu className="w-5 h-5 text-text-secondary" />
+              </button>
             </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <Image
+                  src="/arabia_logo.png"
+                  alt="Arabia Dropshipping"
+                  width={100}
+                  height={32}
+                  className="h-8 w-auto"
+                />
+                <Image
+                  src="/Arabia_thumbnail.png"
+                  alt="Arabia"
+                  width={24}
+                  height={24}
+                  className="h-6 w-6"
+                />
+              </div>
+              <button
+                onClick={toggleSidebar}
+                className="p-2 rounded-lg hover:bg-panel transition-colors"
+              >
+                <X className="w-5 h-5 text-text-secondary" />
+              </button>
+            </>
           )}
-          <button
-            onClick={toggleSidebar}
-            className="p-2 rounded-lg hover:bg-panel transition-colors"
-          >
-            {isCollapsed ? (
-              <Menu className="w-5 h-5 text-text-secondary" />
-            ) : (
-              <X className="w-5 h-5 text-text-secondary" />
-            )}
-          </button>
         </div>
 
         {/* Menu Items */}
