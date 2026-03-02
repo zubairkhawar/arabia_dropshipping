@@ -50,14 +50,14 @@ export function SidebarBase({ menuItems, title = 'Arabia' }: SidebarBaseProps) {
             <>
               <div className="flex items-center gap-2">
                 <Image
-                  src="/arabia_logo.png"
+                  src="/Arabia_thumbnail.png"
                   alt="Arabia Dropshipping"
                   width={100}
                   height={32}
                   className="h-8 w-auto"
                 />
                 <Image
-                  src="/Arabia_thumbnail.png"
+                  src="/arabia_logo.png"
                   alt="Arabia"
                   width={24}
                   height={24}
