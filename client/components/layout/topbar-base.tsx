@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Search, Bell, User, ChevronDown, LogOut, Settings } from 'lucide-react';
+import { Search, Bell, User, ChevronDown, LogOut, Settings, Menu, PanelLeftClose } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
 
@@ -13,7 +13,7 @@ interface TopBarBaseProps {
 export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopBarBaseProps) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const { isCollapsed } = useSidebar();
+  const { isCollapsed, toggleSidebar } = useSidebar();
 
   const notifications = [
     { id: 1, message: 'New order #1234 received', time: '2 min ago' },
@@ -26,15 +26,29 @@ export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopB
       className="h-16 bg-bar border-b border-border flex items-center justify-between px-6 transition-all duration-300"
       style={{ marginLeft: isCollapsed ? '80px' : '256px' }}
     >
-      {/* Search */}
-      <div className="flex-1 max-w-md">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-text-muted" />
-          <input
-            type="text"
-            placeholder="Search orders, products, customers..."
-            className="w-full pl-10 pr-4 py-2 bg-panel border border-border rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-primary focus:bg-white"
-          />
+      {/* Left side: sidebar toggle + search */}
+      <div className="flex items-center gap-4 flex-1">
+        <button
+          onClick={toggleSidebar}
+          className="p-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors"
+          aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {isCollapsed ? (
+            <Menu className="w-5 h-5 text-text-secondary" />
+          ) : (
+            <PanelLeftClose className="w-5 h-5 text-text-secondary" />
+          )}
+        </button>
+
+        <div className="flex-1 max-w-md">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-text-muted" />
+            <input
+              type="text"
+              placeholder="Search orders, products, customers..."
+              className="w-full pl-10 pr-4 py-2 bg-panel border border-border rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-primary focus:bg-white"
+            />
+          </div>
         </div>
       </div>
 

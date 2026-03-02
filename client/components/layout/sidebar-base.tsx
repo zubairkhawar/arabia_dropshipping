@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Menu, X, LucideIcon } from 'lucide-react';
+import { LucideIcon } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
 
@@ -19,7 +19,7 @@ interface SidebarBaseProps {
 
 export function SidebarBase({ menuItems, title = 'Arabia' }: SidebarBaseProps) {
   const pathname = usePathname();
-  const { isCollapsed, toggleSidebar } = useSidebar();
+  const { isCollapsed } = useSidebar();
 
   return (
     <div
@@ -31,6 +31,16 @@ export function SidebarBase({ menuItems, title = 'Arabia' }: SidebarBaseProps) {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
           {isCollapsed ? (
+            <div className="flex items-center justify-center w-full">
+              <Image
+                src="/Arabia_thumbnail.png"
+                alt="Arabia"
+                width={32}
+                height={32}
+                className="h-8 w-8"
+              />
+            </div>
+          ) : (
             <div className="flex items-center gap-2">
               <Image
                 src="/Arabia_thumbnail.png"
@@ -39,38 +49,14 @@ export function SidebarBase({ menuItems, title = 'Arabia' }: SidebarBaseProps) {
                 height={32}
                 className="h-8 w-8"
               />
-              <button
-                onClick={toggleSidebar}
-                className="p-2 rounded-lg hover:bg-panel transition-colors"
-              >
-                <Menu className="w-5 h-5 text-text-secondary" />
-              </button>
+              <Image
+                src="/arabia_logo.png"
+                alt="Arabia Dropshipping"
+                width={120}
+                height={32}
+                className="h-8 w-auto"
+              />
             </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <Image
-                  src="/Arabia_thumbnail.png"
-                  alt="Arabia"
-                  width={32}
-                  height={32}
-                  className="h-8 w-8"
-                />
-                <Image
-                  src="/arabia_logo.png"
-                  alt="Arabia Dropshipping"
-                  width={120}
-                  height={32}
-                  className="h-8 w-auto"
-                />
-              </div>
-              <button
-                onClick={toggleSidebar}
-                className="p-2 rounded-lg hover:bg-panel transition-colors"
-              >
-                <X className="w-5 h-5 text-text-secondary" />
-              </button>
-            </>
           )}
         </div>
 
