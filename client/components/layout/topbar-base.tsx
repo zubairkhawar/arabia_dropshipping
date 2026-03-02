@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Search, Bell, User, ChevronDown, LogOut, Settings, Menu, PanelLeftClose } from 'lucide-react';
+import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
 
@@ -23,8 +23,7 @@ export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopB
 
   return (
     <div 
-      className="h-16 bg-bar border-b border-border flex items-center justify-between px-6 transition-all duration-300"
-      style={{ marginLeft: isCollapsed ? '80px' : '256px' }}
+      className="h-16 bg-bar border-b border-border flex items-center justify-between px-6 transition-all duration-300 w-full"
     >
       {/* Left side: sidebar toggle + search */}
       <div className="flex items-center gap-4 flex-1">
@@ -34,7 +33,7 @@ export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopB
           aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {isCollapsed ? (
-            <Menu className="w-5 h-5 text-text-secondary" />
+            <PanelRightOpen className="w-5 h-5 text-text-secondary" />
           ) : (
             <PanelLeftClose className="w-5 h-5 text-text-secondary" />
           )}
