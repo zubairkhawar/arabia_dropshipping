@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useInboxPanels } from '@/contexts/InboxPanelsContext';
-import { PanelLeftClose } from 'lucide-react';
+import { SquareChevronLeft } from 'lucide-react';
 
 interface Conversation {
   id: number;
@@ -67,7 +67,7 @@ export function ChatList() {
             className="rounded p-1.5 text-text-secondary hover:bg-white hover:text-primary transition-colors shrink-0"
             title="Collapse conversation list"
           >
-            <PanelLeftClose className="h-5 w-5" />
+            <SquareChevronLeft className="h-5 w-5" />
           </button>
         )}
         <input

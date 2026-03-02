@@ -4,14 +4,14 @@ import { ChatList } from '@/components/chat/chat-list';
 import { ChatWindow } from '@/components/chat/chat-window';
 import { ContextPanel } from '@/components/chat/context-panel';
 import { InboxPanelsProvider, useInboxPanels } from '@/contexts/InboxPanelsContext';
-import { PanelLeftOpen, Menu, Plus, Search } from 'lucide-react';
+import { PanelRightOpen, SquareChevronRight, Search } from 'lucide-react';
 
 function AgentInboxContent() {
   const { chatListCollapsed, contextCollapsed, setChatListCollapsed, setContextCollapsed } = useInboxPanels();
 
   return (
     <div className="flex h-full">
-      {/* Left panel: conversation list or collapsed strip (menu, plus, search) */}
+      {/* Left panel: conversation list or collapsed strip */}
       {chatListCollapsed ? (
         <div className="hidden md:flex w-14 shrink-0 flex-col items-center gap-1 border-r border-border bg-panel py-4">
           <button
@@ -20,14 +20,7 @@ function AgentInboxContent() {
             className="rounded p-2.5 text-text-secondary hover:bg-white hover:text-primary transition-colors"
             title="Expand conversations"
           >
-            <Menu className="h-5 w-5" />
-          </button>
-          <button
-            type="button"
-            className="rounded p-2.5 text-text-secondary hover:bg-white hover:text-primary transition-colors"
-            title="New chat"
-          >
-            <Plus className="h-5 w-5" />
+            <SquareChevronRight className="h-5 w-5" />
           </button>
           <button
             type="button"
@@ -57,7 +50,7 @@ function AgentInboxContent() {
             className="rounded p-2 text-text-secondary hover:bg-white hover:text-primary transition-colors"
             title="Expand context"
           >
-            <PanelLeftOpen className="h-5 w-5" />
+            <PanelRightOpen className="h-5 w-5" />
           </button>
         </div>
       ) : (

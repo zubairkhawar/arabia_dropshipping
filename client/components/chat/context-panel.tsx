@@ -1,7 +1,7 @@
 'use client';
 
 import { useInboxPanels } from '@/contexts/InboxPanelsContext';
-import { PanelRightClose } from 'lucide-react';
+import { PanelRight } from 'lucide-react';
 
 export function ContextPanel() {
   const inboxPanels = useInboxPanels();
@@ -19,7 +19,7 @@ export function ContextPanel() {
                 className="rounded p-1.5 text-text-secondary hover:bg-panel hover:text-primary transition-colors"
                 title="Collapse context"
               >
-                <PanelRightClose className="h-5 w-5" />
+                <PanelRight className="h-5 w-5" />
               </button>
             )}
           </div>
