@@ -12,9 +12,9 @@ const config: Config = {
         // Koru CRM Color Scheme - Light Theme
         primary: {
           DEFAULT: '#EF1D1D', // Primary color
-          light: '#1A7BC4',
-          dark: '#0E4A7A',
-          gradient: 'linear-gradient(135deg, #1E3A8A 0%, #1E40AF 50%, #3B82F6 100%)',
+          light: '#F97373',
+          dark: '#B91C1C',
+          gradient: 'linear-gradient(135deg, #EF1D1D 0%, #F97373 50%, #B91C1C 100%)',
         },
         secondary: {
           DEFAULT: '#1E40AF', // Blue gradient

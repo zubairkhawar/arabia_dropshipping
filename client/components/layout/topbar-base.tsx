@@ -86,7 +86,7 @@ export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopB
                   ))}
                 </div>
                 <div className="p-4 border-t border-border">
-                  <button className="text-sm text-primary hover:text-primary-light">
+                  <button className="text-sm text-primary hover:text-primary-dark">
                     View all notifications
                   </button>
                 </div>
