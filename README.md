@@ -9,9 +9,8 @@ Arabia Dropshipping/
 ├── client/                 # Next.js Frontend
 │   ├── app/               # App Router
 │   │   ├── (auth)/        # Authentication routes
-│   │   ├── user/          # User Panel (Client Portal)
-│   │   ├── agent/         # Agent Panel (Support Agents)
-│   │   └── admin/         # Admin Panel (System Administrators)
+│   │   ├── agent/         # Agent Portal (Support Agents)
+│   │   └── admin/         # Admin Portal (System Administrators)
 │   ├── components/        # React Components
 │   │   ├── layout/        # Layout components
 │   │   ├── chat/          # Chat components
@@ -33,20 +32,20 @@ Arabia Dropshipping/
     └── config.py          # Configuration
 ```
 
-## Three Panel System
+## Portal & Channel Structure
 
-### 1. User Panel (`/user/*`)
-- **Role**: Ecommerce Store Owners
-- **Features**: Store management, analytics, integrations, chat monitoring
-
-### 2. Agent Panel (`/agent/*`)
+### 1. Agent Portal (`/agent/*`)
 - **Role**: Customer Support Agents
 - **Features**: Live chat handling, conversation management, customer context
 - **Layout**: respond.io-style 3-column layout
 
-### 3. Admin Panel (`/admin/*`)
+### 2. Admin Portal (`/admin/*`)
 - **Role**: System Administrators
 - **Features**: System monitoring, agent management, tenant management, AI analytics
+
+### 3. Customer Channel (WhatsApp)
+- **Role**: End customers
+- **Features**: Interact only through WhatsApp; store/customer data is fetched from client APIs and used by the AI bot and agents, not exposed via a separate web user portal
 
 ## Tech Stack
 

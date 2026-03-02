@@ -1,11 +1,13 @@
 'use client';
 
+import type { ReactNode } from 'react';
+
 interface KPICardProps {
   title: string;
   value: string | number;
   change?: string;
   changeType?: 'positive' | 'negative' | 'neutral';
-  icon?: string;
+  icon?: ReactNode;
 }
 
 export function KPICard({ title, value, change, changeType = 'neutral', icon }: KPICardProps) {
