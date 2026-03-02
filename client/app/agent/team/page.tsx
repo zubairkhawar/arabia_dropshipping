@@ -1,10 +1,15 @@
 'use client';
 
 import { ChatWindow } from '@/components/chat/chat-window';
+import { useTeams } from '@/contexts/TeamsContext';
 
-const TEAM_MEMBERS = ['Ali', 'Hamza', 'Sarah'];
+const TEAM_A_ID = 'team-a';
 
 export default function AgentTeamChannel() {
+  const { getTeam, getEventsForTeam } = useTeams();
+  const team = getTeam(TEAM_A_ID);
+  const teamEvents = getEventsForTeam(TEAM_A_ID);
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 flex flex-col min-h-0">
@@ -12,8 +17,9 @@ export default function AgentTeamChannel() {
           isInternalChat
           title="# Team Channel"
           subtitle="Team coordination chat"
-          teamName="Team A"
-          teamMemberNames={TEAM_MEMBERS}
+          teamName={team?.name ?? 'Team A'}
+          teamMemberNames={team?.members ?? []}
+          teamEvents={teamEvents}
         />
       </div>
     </div>

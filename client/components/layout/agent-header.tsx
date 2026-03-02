@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose, MessageSquarePlus } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
-import Image from 'next/image';
+import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { usePathname } from 'next/navigation';
 
 type AgentStatus = 'online' | 'busy' | 'offline';
@@ -18,13 +19,15 @@ interface AgentHeaderProps {
   userName?: string;
 }
 
-export function AgentHeader({ userName = 'Support Agent' }: AgentHeaderProps) {
+export function AgentHeader({ userName }: AgentHeaderProps) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('online');
   const { isCollapsed, toggleSidebar } = useSidebar();
+  const { avatarUrl, fullName } = useAgentProfile();
   const pathname = usePathname();
+  const displayName = fullName || userName || 'Support Agent';
   const isInternalDmArea = pathname?.startsWith('/agent/dm') || pathname?.startsWith('/agent/team');
 
   const notifications = [
@@ -136,10 +139,15 @@ export function AgentHeader({ userName = 'Support Agent' }: AgentHeaderProps) {
             onClick={() => setShowUserMenu(!showUserMenu)}
             className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-panel transition-colors"
           >
-            <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
-              <User className="w-5 h-5 text-white" />
+            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center overflow-hidden flex-shrink-0">
+              {avatarUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <User className="w-5 h-5 text-primary" />
+              )}
             </div>
-            <span className="text-text-primary font-medium text-sm">{userName}</span>
+            <span className="text-text-primary font-medium text-sm">{displayName}</span>
             <ChevronDown className="w-4 h-4 text-text-muted" />
           </button>
           {showUserMenu && (
@@ -147,10 +155,14 @@ export function AgentHeader({ userName = 'Support Agent' }: AgentHeaderProps) {
               <div className="fixed inset-0 z-10" onClick={() => setShowUserMenu(false)} />
               <div className="absolute right-0 mt-2 w-48 bg-white border border-border rounded-lg shadow-xl z-20">
                 <div className="p-2">
-                  <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2 text-sm">
+                  <Link
+                    href="/agent/profile"
+                    className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2 text-sm block"
+                    onClick={() => setShowUserMenu(false)}
+                  >
                     <User className="w-4 h-4" />
                     Profile
-                  </button>
+                  </Link>
                   <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2 text-sm">
                     <Settings className="w-4 h-4" />
                     Settings

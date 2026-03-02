@@ -25,9 +25,9 @@ interface SidebarLink {
 const aiBotSection: SidebarLink[] = [{ icon: Bot, label: 'AI Bot', path: '/admin/inbox' }];
 
 const teamsSection: SidebarLink[] = [
-  { icon: Users, label: 'Team A', path: '/admin/teams/a' },
-  { icon: Users, label: 'Team B', path: '/admin/teams/b' },
-  { icon: Users, label: 'Team C', path: '/admin/teams/c' },
+  { icon: Users, label: 'Team A', path: '/admin/teams/team-a' },
+  { icon: Users, label: 'Team B', path: '/admin/teams/team-b' },
+  { icon: Users, label: 'Team C', path: '/admin/teams/team-c' },
 ];
 
 const agentsSection: SidebarLink[] = [

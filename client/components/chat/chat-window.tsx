@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -20,7 +20,28 @@ import {
   Copy,
   Trash2,
   ChevronDown,
+  Plus,
+  Mic,
+  Square,
+  Play,
+  Pause,
 } from 'lucide-react';
+import { useAgentProfile } from '@/contexts/AgentProfileContext';
+import type { TeamEvent } from '@/contexts/TeamsContext';
+
+interface MessageAttachment {
+  type: 'file' | 'photo' | 'voice';
+  name: string;
+  url: string;
+  durationSeconds?: number;
+}
+
+interface MessageReaction {
+  emoji: string;
+  userId: string;
+  userName: string;
+  reactedAt: string;
+}
 
 interface Message {
   id: number;
@@ -28,8 +49,11 @@ interface Message {
   sender: 'customer' | 'agent' | 'ai';
   senderName: string;
   timestamp: string;
-  reactions?: string[];
+  /** ISO date string for actual time and date grouping */
+  sentAt?: string;
+  reactions?: MessageReaction[];
   replyTo?: { id: number; senderName: string; content: string };
+  attachment?: MessageAttachment;
 }
 
 export interface ChatWindowProps {
@@ -41,6 +65,8 @@ export interface ChatWindowProps {
   teamName?: string;
   /** For team channel: names shown in header subtitle, e.g. "Ali, Hamza, Sarah". */
   teamMemberNames?: string[];
+  /** For team channel: soft system messages (member added/removed/transferred). */
+  teamEvents?: TeamEvent[];
 }
 
 const defaultCustomerMessages: Message[] = [
@@ -49,21 +75,24 @@ const defaultCustomerMessages: Message[] = [
     content: 'Hello! How can I help you today?',
     sender: 'ai',
     senderName: 'AI Assistant',
-    timestamp: '2 minutes ago',
+    timestamp: '2:24 PM',
+    sentAt: new Date(Date.now() - 86400 * 1000).toISOString(),
   },
   {
     id: 2,
     content: 'I need help with my order #12345',
     sender: 'customer',
     senderName: 'Ahmed Ali',
-    timestamp: '2 minutes ago',
+    timestamp: '2:25 PM',
+    sentAt: new Date(Date.now() - 86400 * 1000 + 60000).toISOString(),
   },
   {
     id: 3,
     content: 'I can help you with that. Let me check your order status.',
     sender: 'ai',
     senderName: 'AI Assistant',
-    timestamp: '1 minute ago',
+    timestamp: '2:26 PM',
+    sentAt: new Date(Date.now() - 86400 * 1000 + 120000).toISOString(),
   },
   {
     id: 4,
@@ -71,7 +100,8 @@ const defaultCustomerMessages: Message[] = [
       'Your order is currently in transit and will be delivered within 2-3 business days.',
     sender: 'ai',
     senderName: 'AI Assistant',
-    timestamp: '1 minute ago',
+    timestamp: '2:27 PM',
+    sentAt: new Date(Date.now() - 86400 * 1000 + 180000).toISOString(),
   },
 ];
 
@@ -81,21 +111,29 @@ const defaultInternalMessages: Message[] = [
     content: 'Hey team, customer on order #12345 is asking about delivery ETA.',
     sender: 'agent',
     senderName: 'You',
-    timestamp: 'Just now',
+    timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    sentAt: new Date().toISOString(),
   },
   {
     id: 2,
     content: "I'll keep an eye on logistics updates for this one.",
     sender: 'agent',
     senderName: 'Hamza',
-    timestamp: '1 min ago',
+    timestamp: new Date(Date.now() - 60000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    sentAt: new Date(Date.now() - 60000).toISOString(),
+    reactions: [
+      { emoji: '👍', userId: 'hamza', userName: 'Hamza', reactedAt: new Date(Date.now() - 120000).toISOString() },
+      { emoji: '❤️', userId: 'sarah', userName: 'Sarah', reactedAt: new Date(Date.now() - 60000).toISOString() },
+      { emoji: '❤️', userId: 'ali', userName: 'Ali', reactedAt: new Date(Date.now() - 30000).toISOString() },
+    ],
   },
   {
     id: 3,
     content: 'If it escalates, feel free to transfer to me.',
     sender: 'agent',
     senderName: 'Sarah',
-    timestamp: '2 min ago',
+    timestamp: new Date(Date.now() - 120000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    sentAt: new Date(Date.now() - 120000).toISOString(),
   },
 ];
 
@@ -118,8 +156,10 @@ export function ChatWindow({
   showTransferControls = false,
   teamName,
   teamMemberNames = [],
+  teamEvents = [],
 }: ChatWindowProps = {}) {
   const pathname = usePathname();
+  const { avatarUrl: agentAvatarUrl, fullName: agentFullName } = useAgentProfile();
   const isTeamChannel = pathname?.startsWith('/agent/team');
   const isDmPage = pathname?.startsWith('/agent/dm');
 
@@ -136,9 +176,25 @@ export function ChatWindow({
   const [activeReactionPickerId, setActiveReactionPickerId] = useState<number | null>(null);
   const [deletedForMeIds, setDeletedForMeIds] = useState<number[]>([]);
   const [replyingTo, setReplyingTo] = useState<{ id: number; senderName: string; content: string } | null>(null);
-  const [myReactions, setMyReactions] = useState<Record<number, string>>({});
   const [messageInfoId, setMessageInfoId] = useState<number | null>(null);
+  const [reactionDetailMessageId, setReactionDetailMessageId] = useState<number | null>(null);
   const [dropdownPlaceAbove, setDropdownPlaceAbove] = useState(true);
+  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
+  const [playingVoiceId, setPlayingVoiceId] = useState<number | null>(null);
+  const [voiceProgress, setVoiceProgress] = useState<Record<number, number>>({});
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStartRef = useRef<number>(0);
+  const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
+  const voiceMessageIdRef = useRef<number | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [stickyDate, setStickyDate] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const DROPDOWN_APPROX_HEIGHT = 320;
 
@@ -168,6 +224,7 @@ export function ChatWindow({
     message.sender === 'customer' || message.senderName === 'You';
 
   const addSystemNote = (content: string) => {
+    const now = new Date();
     setMessages((prev) => [
       ...prev,
       {
@@ -175,7 +232,8 @@ export function ChatWindow({
         content,
         sender: 'ai' as const,
         senderName: 'System',
-        timestamp: 'Just now',
+        timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        sentAt: now.toISOString(),
       },
     ]);
   };
@@ -200,18 +258,156 @@ export function ChatWindow({
   };
 
   const addReaction = (id: number, emoji: string) => {
-    setMyReactions((prev) => {
-      const current = prev[id];
-      if (current === emoji) {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      }
-      return { ...prev, [id]: emoji };
-    });
+    const currentUserId = 'me';
+    const currentUserName = 'You';
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== id) return m;
+        const list = m.reactions ?? [];
+        const withoutMe = list.filter((r) => r.userId !== currentUserId);
+        const existing = list.find((r) => r.userId === currentUserId);
+        if (existing?.emoji === emoji) {
+          return { ...m, reactions: withoutMe.length > 0 ? withoutMe : undefined };
+        }
+        return {
+          ...m,
+          reactions: [
+            ...withoutMe,
+            { emoji, userId: currentUserId, userName: currentUserName, reactedAt: new Date().toISOString() },
+          ],
+        };
+      }),
+    );
     setActiveReactionPickerId(null);
     setActiveMessageMenuId(null);
   };
+
+  const formatReactionTime = (iso: string) => {
+    const d = new Date(iso);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+    if (diff < 86400) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  };
+
+  const formatMessageTime = (sentAt?: string, fallbackTimestamp?: string) => {
+    if (sentAt) return new Date(sentAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return fallbackTimestamp ?? '';
+  };
+
+  const formatDateLabel = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  };
+
+  const getMessageDateKey = (m: Message) => {
+    if (m.sentAt) return m.sentAt.slice(0, 10);
+    return new Date().toISOString().slice(0, 10);
+  };
+
+  const isEmojiOnly = (text: string) => {
+    const t = text.trim();
+    if (!t) return false;
+    return /^[\p{Emoji_Presentation}\p{Emoji}\s\uFE0F]+$/u.test(t) && t.length <= 20;
+  };
+
+  const formatVoiceDuration = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const toggleVoicePlayback = (messageId: number, url: string, durationSeconds: number) => {
+    const id = messageId;
+    if (playingVoiceId === id) {
+      voiceAudioRef.current?.pause();
+      setPlayingVoiceId(null);
+      return;
+    }
+    if (voiceAudioRef.current) {
+      voiceAudioRef.current.pause();
+      voiceAudioRef.current = null;
+    }
+    const audio = new Audio(url);
+    voiceAudioRef.current = audio;
+    voiceMessageIdRef.current = id;
+    setPlayingVoiceId(id);
+    const updateProgress = () => {
+      if (voiceMessageIdRef.current === id && audio.duration && isFinite(audio.duration)) {
+        setVoiceProgress((prev) => ({ ...prev, [id]: audio.currentTime / audio.duration }));
+      }
+    };
+    audio.addEventListener('timeupdate', updateProgress);
+    audio.addEventListener('ended', () => {
+      setVoiceProgress((prev) => ({ ...prev, [id]: 1 }));
+      setPlayingVoiceId(null);
+      voiceAudioRef.current = null;
+      voiceMessageIdRef.current = null;
+    });
+    audio.play().catch(() => {
+      setPlayingVoiceId(null);
+      voiceAudioRef.current = null;
+    });
+  };
+
+  const VOICE_WAVEFORM_BARS = [40, 70, 45, 85, 55, 65, 50, 90, 60, 75, 48, 82, 52, 68];
+
+  const filteredMessages = messages.filter((m) => !deletedForMeIds.includes(m.id));
+  const messageGroups = (() => {
+    const list: { dateKey: string; label: string; messages: Message[] }[] = [];
+    let currentKey: string | null = null;
+    for (const m of filteredMessages) {
+      const key = getMessageDateKey(m);
+      const label = formatDateLabel(m.sentAt ?? new Date().toISOString());
+      if (key !== currentKey) {
+        list.push({ dateKey: key, label, messages: [] });
+        currentKey = key;
+      }
+      list[list.length - 1].messages.push(m);
+    }
+    return list;
+  })();
+
+  const allDateKeys = [
+    ...new Set([
+      ...messageGroups.map((g) => g.dateKey),
+      ...teamEvents.map((e) => e.sentAt.slice(0, 10)),
+    ]),
+  ].sort();
+
+  const unifiedGroups = allDateKeys.map((dateKey) => {
+    const msgGroup = messageGroups.find((g) => g.dateKey === dateKey);
+    const label = msgGroup?.label ?? formatDateLabel(dateKey + 'T12:00:00');
+    const eventsForDate = teamEvents.filter((e) => e.sentAt.slice(0, 10) === dateKey);
+    return {
+      dateKey,
+      label,
+      messages: msgGroup?.messages ?? [],
+      events: eventsForDate,
+    };
+  });
+
+  const handleScrollStickyDate = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const top = el.getBoundingClientRect().top + 72;
+    const dateEls = el.querySelectorAll('[data-date-key]');
+    let current: string | null = null;
+    dateEls.forEach((node) => {
+      const rect = (node as HTMLElement).getBoundingClientRect();
+      if (rect.top <= top) current = (node as HTMLElement).getAttribute('data-date-key');
+    });
+    setStickyDate(current);
+  };
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    handleScrollStickyDate();
+    el.addEventListener('scroll', handleScrollStickyDate);
+    return () => el.removeEventListener('scroll', handleScrollStickyDate);
+  }, [filteredMessages.length, teamEvents.length]);
 
   const deleteMessage = (id: number) => {
     setMessages((prev) => prev.filter((m) => m.id !== id));
@@ -228,22 +424,103 @@ export function ChatWindow({
 
   const sendMessage = () => {
     const text = inputValue.trim();
-    if (!text) return;
+    const hasContent = text.length > 0 || pendingAttachment;
+    if (!hasContent) return;
     const nextId = Math.max(0, ...messages.map((m) => m.id)) + 1;
+    const now = new Date();
     setMessages((prev) => [
       ...prev,
       {
         id: nextId,
-        content: text,
+        content: text || (pendingAttachment?.type === 'voice' ? 'Voice message' : pendingAttachment?.name || 'Attachment'),
         sender: 'agent' as const,
         senderName: 'You',
-        timestamp: 'Just now',
+        timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        sentAt: now.toISOString(),
         replyTo: replyingTo ?? undefined,
+        attachment: pendingAttachment ?? undefined,
       },
     ]);
     setInputValue('');
     setReplyingTo(null);
+    setPendingAttachment(null);
   };
+
+  const startVoiceRecording = () => {
+    if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      const recorder = new MediaRecorder(stream);
+      recordingChunksRef.current = [];
+      recordingStartRef.current = Date.now();
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordingChunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(recordingChunksRef.current, { type: 'audio/webm' });
+        const url = URL.createObjectURL(blob);
+        const durationSeconds = Math.round((Date.now() - recordingStartRef.current) / 1000);
+        setPendingAttachment({
+          type: 'voice',
+          name: 'Voice message',
+          url,
+          durationSeconds: durationSeconds || 1,
+        });
+        setShowAttachmentMenu(false);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+    });
+  };
+
+  const stopVoiceRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current = null;
+    }
+    setIsRecording(false);
+  };
+
+  const ALLOWED_FILE_EXTENSIONS = ['.pdf', '.csv', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.ppt', '.pptx'];
+  const ALLOWED_FILE_TYPES = [
+    'application/pdf',
+    'text/csv',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/plain',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ];
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>, type: 'file' | 'photo') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (type === 'photo') {
+      if (!file.type.startsWith('image/')) {
+        return;
+      }
+    } else {
+      const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+      const allowed =
+        ALLOWED_FILE_EXTENSIONS.includes(ext) || ALLOWED_FILE_TYPES.includes(file.type);
+      if (!allowed) {
+        return;
+      }
+    }
+    const url = URL.createObjectURL(file);
+    setPendingAttachment({
+      type,
+      name: file.name,
+      url,
+    });
+    setShowAttachmentMenu(false);
+    e.target.value = '';
+  };
+
+  const EMOJI_LIST = ['😀', '😂', '❤️', '👍', '👋', '🎉', '🔥', '✨', '😊', '🥳', '🙏', '💯', '😍', '🤔', '👏', '😎', '💪', '🌸', '⭐', '📷'];
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -362,25 +639,78 @@ export function ChatWindow({
         </div>
       </div>
       
-      <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-panel">
-        {messages
-          .filter((m) => !deletedForMeIds.includes(m.id))
-          .map((message) => {
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto p-6 space-y-4 bg-panel relative"
+      >
+        {stickyDate && (
+          <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
+            <span className="bg-white/95 border border-border rounded-full px-3 py-1.5 text-xs font-medium text-text-secondary shadow-sm">
+              {formatDateLabel(stickyDate + 'T12:00:00')}
+            </span>
+          </div>
+        )}
+        {unifiedGroups.map((group) => (
+          <div key={group.dateKey} className="space-y-4">
+            <div
+              data-date-key={group.dateKey}
+              className="flex justify-center py-2"
+            >
+              <span className="bg-white border border-border rounded-full px-3 py-1.5 text-xs font-medium text-text-muted shadow-sm">
+                {group.label}
+              </span>
+            </div>
+            {group.events.map((ev) => {
+              const text =
+                ev.type === 'member_removed'
+                  ? `${ev.memberName} removed from the Team`
+                  : ev.type === 'member_transferred' && ev.targetTeamName
+                    ? `${ev.memberName} transferred to ${ev.targetTeamName}`
+                    : ev.type === 'member_added'
+                      ? `${ev.memberName} added to the Team`
+                      : '';
+              if (!text) return null;
+              return (
+                <div key={ev.id} className="flex justify-center py-1">
+                  <span className="text-xs text-text-muted bg-panel/80 rounded-full px-3 py-1.5">
+                    {text}
+                  </span>
+                </div>
+              );
+            })}
+            {group.messages.map((message) => {
           const outgoing = isOutgoingMessage(message);
           const isStarred = starredIds.includes(message.id);
           const showMenu = activeMessageMenuId === message.id;
           const showReactions = activeReactionPickerId === message.id;
           const reactionEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏', '👏', '😁'];
-
-          const myReaction = myReactions[message.id];
-          const displayReactions = myReaction ? [myReaction] : [];
+          const reactionList = message.reactions ?? [];
+          const myReaction = reactionList.find((r) => r.userId === 'me')?.emoji;
+          const aggregated = Object.entries(
+            reactionList.reduce<Record<string, number>>((acc, r) => {
+              acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
+              return acc;
+            }, {}),
+          ).map(([emoji, count]) => ({ emoji, count }));
+          const showReactionDetail = reactionDetailMessageId === message.id;
+          const emojiOnly = !message.attachment && isEmojiOnly(message.content);
 
           return (
             <div
               key={message.id}
               id={`message-${message.id}`}
-              className={`flex w-full ${outgoing ? 'justify-end' : 'justify-start'}`}
+              className={`flex w-full items-start gap-2 ${outgoing ? 'justify-end' : 'justify-start'}`}
             >
+              {isTeamChannel && !outgoing && (
+                <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
+                  {message.senderName === 'You' && agentAvatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    message.senderName.charAt(0)
+                  )}
+                </div>
+              )}
               <div className={`relative group max-w-[85%] ${outgoing ? 'flex flex-col items-end' : ''}`}>
                 <div
                   className={`relative max-w-message-bubble min-w-[8rem] rounded-lg px-3 py-3.5 pl-3 pr-10 ${getMessageStyle(
@@ -424,7 +754,80 @@ export function ChatWindow({
                   {!outgoing && (
                     <p className="text-xs font-medium mb-1 opacity-75">{message.senderName}</p>
                   )}
-                  <p className={`text-sm leading-relaxed break-words whitespace-pre-wrap ${outgoing ? 'text-white' : 'text-text-primary'}`}>
+                  {message.attachment && (
+                    <div className={`mb-2 rounded-lg overflow-hidden ${outgoing ? 'bg-white/20' : 'bg-black/5'}`}>
+                      {message.attachment.type === 'photo' && (
+                        <a href={message.attachment.url} target="_blank" rel="noopener noreferrer" className="block max-w-full">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={message.attachment.url}
+                            alt={message.attachment.name}
+                            className="max-w-full max-h-48 object-cover rounded-lg"
+                          />
+                        </a>
+                      )}
+                      {message.attachment.type === 'file' && (
+                        <a
+                          href={message.attachment.url}
+                          download={message.attachment.name}
+                          className={`flex items-center gap-2 px-2 py-2 rounded-lg ${outgoing ? 'text-white hover:bg-white/10' : 'text-text-primary hover:bg-black/5'}`}
+                        >
+                          <FileText className="w-5 h-5 flex-shrink-0" />
+                          <span className="text-sm truncate">{message.attachment.name}</span>
+                        </a>
+                      )}
+                      {message.attachment.type === 'voice' && (
+                        <div className={`flex items-center gap-2 py-1 ${outgoing ? 'text-white' : 'text-text-primary'}`}>
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <div className="relative flex-shrink-0">
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${outgoing ? 'bg-white/20' : 'bg-black/10'}`}>
+                                <Mic className={`w-4 h-4 ${outgoing ? 'text-blue-200' : 'text-status-info'}`} />
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                toggleVoicePlayback(
+                                  message.id,
+                                  message.attachment!.url,
+                                  message.attachment!.durationSeconds ?? 0,
+                                )
+                              }
+                              className={`p-1 rounded-full flex-shrink-0 ${outgoing ? 'text-white/90 hover:bg-white/20' : 'text-text-primary hover:bg-black/10'}`}
+                              aria-label={playingVoiceId === message.id ? 'Pause' : 'Play voice message'}
+                            >
+                              {playingVoiceId === message.id ? (
+                                <Pause className="w-5 h-5" fill="currentColor" />
+                              ) : (
+                                <Play className="w-5 h-5" fill="currentColor" />
+                              )}
+                            </button>
+                            <div className="flex-1 min-w-0 flex items-center gap-1.5">
+                              <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-black/15 min-w-[4rem]">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-150 ${outgoing ? 'bg-blue-200' : 'bg-status-info/70'}`}
+                                  style={{ width: `${((voiceProgress[message.id] ?? 0) * 100).toFixed(1)}%` }}
+                                />
+                              </div>
+                              <div className="flex gap-0.5 flex-shrink-0">
+                                {VOICE_WAVEFORM_BARS.map((h, i) => (
+                                  <div
+                                    key={i}
+                                    className={`w-0.5 rounded-full ${outgoing ? 'bg-white/50' : 'bg-text-muted'}`}
+                                    style={{ height: `${(h / 100) * 12}px`, minHeight: 4 }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                          <span className={`text-xs flex-shrink-0 ${outgoing ? 'text-white/80' : 'text-text-muted'}`}>
+                            {formatVoiceDuration(message.attachment.durationSeconds ?? 0)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <p className={`leading-relaxed break-words whitespace-pre-wrap ${emojiOnly ? 'text-5xl' : 'text-sm'} ${outgoing ? 'text-white' : 'text-text-primary'}`}>
                     {message.content}
                   </p>
                   <div className="mt-2 flex items-center justify-between gap-2">
@@ -433,40 +836,93 @@ export function ChatWindow({
                         outgoing ? 'text-white/75' : 'text-text-muted'
                       }`}
                     >
-                      {message.timestamp}
+                      {formatMessageTime(message.sentAt, message.timestamp)}
                     </span>
-                    {isTeamChannel && isStarred && (
-                      <Star className={`w-3 h-3 flex-shrink-0 ${outgoing ? 'text-white' : 'text-primary'}`} />
-                    )}
+                    <span className="flex items-center gap-1">
+                      {isTeamChannel && isStarred && (
+                        <Star className={`w-3 h-3 flex-shrink-0 ${outgoing ? 'text-white' : 'text-primary'}`} />
+                      )}
+                    </span>
                   </div>
                   </div>
                 </div>
 
-                {/* React button / reaction: always visible below bubble */}
+                {/* Reaction summary and react button: below bubble */}
                 <div
                   className={`mt-1 flex gap-1 items-center ${
                     outgoing ? 'justify-end' : 'justify-start'
                   }`}
                 >
-                  {myReaction ? (
+                  {aggregated.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setActiveReactionPickerId(message.id)}
-                      className="inline-flex items-center justify-center rounded-full border-2 border-primary bg-primary/20 px-2 py-0.5 text-base transition-colors hover:bg-primary/30"
+                      onClick={() => setReactionDetailMessageId((id) => (id === message.id ? null : message.id))}
+                      className="inline-flex items-center gap-1 rounded-full border border-border bg-white shadow-sm px-2 py-1 text-sm hover:bg-panel"
                     >
-                      {myReaction}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setActiveReactionPickerId(message.id)}
-                      className="p-1 rounded-full bg-white/80 border border-border shadow-sm text-text-muted hover:text-primary hover:border-primary transition-colors"
-                      aria-label="React"
-                    >
-                      <Smile className="w-4 h-4" />
+                      {aggregated.map(({ emoji, count }) => (
+                        <span key={emoji} className="inline-flex items-center gap-0.5">
+                          {emoji}
+                          {count > 1 && <span className="text-xs text-text-muted">{count}</span>}
+                        </span>
+                      ))}
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => setActiveReactionPickerId(message.id)}
+                    className={`p-1 rounded-full border transition-colors flex-shrink-0 ${
+                      myReaction
+                        ? 'bg-primary/20 border-primary text-primary'
+                        : 'bg-white/80 border-border shadow-sm text-text-muted hover:text-primary hover:border-primary'
+                    }`}
+                    aria-label="React"
+                  >
+                    {myReaction ? <span className="text-base">{myReaction}</span> : <Smile className="w-4 h-4" />}
+                  </button>
                 </div>
+
+                {/* Who reacted detail popover */}
+                {showReactionDetail && reactionList.length > 0 && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setReactionDetailMessageId(null)} aria-hidden />
+                    <div
+                      className={`absolute z-20 w-64 bg-white border border-border rounded-xl shadow-xl overflow-hidden ${
+                        outgoing ? 'right-0' : 'left-0'
+                      } bottom-full mb-1`}
+                    >
+                      <div className="px-3 py-2 border-b border-border flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-text-primary">All {reactionList.length}</span>
+                        {aggregated.map(({ emoji, count }) => (
+                          <span key={emoji} className="text-sm text-text-muted">
+                            {emoji} {count}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="max-h-48 overflow-y-auto">
+                        {reactionList.map((r, i) => (
+                          <div
+                            key={`${r.userId}-${r.emoji}-${i}`}
+                            className="flex items-center gap-3 px-3 py-2 hover:bg-panel border-b border-border last:border-b-0"
+                          >
+                            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
+                              {r.userName === 'You' && agentAvatarUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                r.userName.charAt(0)
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-text-primary truncate">{r.userName}</p>
+                              <p className="text-xs text-text-muted">{formatReactionTime(r.reactedAt)}</p>
+                            </div>
+                            <span className="text-lg flex-shrink-0">{r.emoji}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 {showMenu && (
                   <div
@@ -605,9 +1061,21 @@ export function ChatWindow({
                   </div>
                 )}
               </div>
+              {isTeamChannel && outgoing && (
+                <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
+                  {agentAvatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    (agentFullName || 'You').charAt(0)
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
+          </div>
+        ))}
       </div>
 
       {isInternalChat && isDmPage && (
@@ -659,30 +1127,158 @@ export function ChatWindow({
             </button>
           </div>
         )}
+        {/* Pending attachment preview */}
+        {pendingAttachment && (
+          <div className="px-4 py-2 bg-panel border-b border-border flex items-center justify-between gap-2">
+            <span className="text-xs text-text-secondary truncate">
+              {pendingAttachment.type === 'photo' && (
+                <>
+                  <ImageIcon className="w-4 h-4 inline-block mr-1 align-middle" />
+                  {pendingAttachment.name}
+                </>
+              )}
+              {pendingAttachment.type === 'file' && (
+                <>
+                  <FileText className="w-4 h-4 inline-block mr-1 align-middle" />
+                  {pendingAttachment.name}
+                </>
+              )}
+              {pendingAttachment.type === 'voice' && (
+                <>
+                  <Mic className="w-4 h-4 inline-block mr-1 align-middle" />
+                  Voice message {pendingAttachment.durationSeconds != null && `(${pendingAttachment.durationSeconds}s)`}
+                </>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPendingAttachment(null)}
+              className="p-1 rounded-full hover:bg-white text-text-muted"
+              aria-label="Remove attachment"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         {/* Input row */}
-        <div className="flex items-center gap-3 px-4 py-3 min-h-[56px]">
-          <button
-            type="button"
-            className="text-text-secondary hover:text-text-primary flex-shrink-0"
-            aria-label="Attach"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-            </svg>
-          </button>
-          <input
-            type="text"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder={replyingTo ? `Reply to ${replyingTo.senderName}...` : 'Type a message...'}
-            className="flex-1 min-w-0 px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-              }
-            }}
-          />
+        <div className="flex items-center gap-2 px-4 py-3 min-h-[56px]">
+          <div className="relative flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => { setShowAttachmentMenu((v) => !v); setShowEmojiPicker(false); }}
+              className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors"
+              aria-label="Attach"
+            >
+              <Plus className="w-6 h-6" />
+            </button>
+            {showAttachmentMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowAttachmentMenu(false)} aria-hidden />
+                <div className="absolute left-0 bottom-full mb-1 w-52 bg-white border border-border rounded-xl shadow-xl z-20 py-1">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-panel text-left text-sm text-text-primary"
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                      <FileText className="w-5 h-5 text-primary" />
+                    </div>
+                    File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => photoInputRef.current?.click()}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-panel text-left text-sm text-text-primary"
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                      <ImageIcon className="w-5 h-5 text-primary" />
+                    </div>
+                    Photos
+                  </button>
+                </div>
+              </>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.csv,.doc,.docx,.xls,.xlsx,.txt,.ppt,.pptx,application/pdf,text/csv,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+              className="hidden"
+              onChange={(e) => handleFileSelect(e, 'file')}
+            />
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => handleFileSelect(e, 'photo')}
+            />
+          </div>
+          <div className="flex-1 min-w-0 relative flex items-center gap-2 border border-border rounded-lg bg-white focus-within:ring-2 focus-within:ring-primary">
+            <input
+              ref={inputRef}
+              type="text"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder={replyingTo ? `Reply to ${replyingTo.senderName}...` : 'Type a message...'}
+              className="flex-1 min-w-0 px-4 py-2.5 focus:outline-none text-sm bg-transparent"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => { setShowEmojiPicker((v) => !v); setShowAttachmentMenu(false); }}
+              className="p-2 text-text-muted hover:text-primary rounded-full transition-colors flex-shrink-0"
+              aria-label="Emoji"
+            >
+              <Smile className="w-5 h-5" />
+            </button>
+            {showEmojiPicker && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)} aria-hidden />
+                <div className="absolute right-0 bottom-full mb-1 w-64 bg-white border border-border rounded-xl shadow-xl z-20 p-3">
+                  <p className="text-xs font-medium text-text-muted mb-2">Emoji</p>
+                  <div className="grid grid-cols-5 gap-1">
+                    {EMOJI_LIST.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        className="w-9 h-9 flex items-center justify-center text-xl rounded-lg hover:bg-panel"
+                        onClick={() => {
+                          setInputValue((prev) => prev + emoji);
+                          inputRef.current?.focus();
+                        }}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          {isRecording ? (
+            <button
+              type="button"
+              onClick={stopVoiceRecording}
+              className="p-2.5 rounded-full bg-status-error text-white hover:bg-status-error/90 flex-shrink-0"
+              aria-label="Stop recording"
+            >
+              <Square className="w-5 h-5" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => { setShowAttachmentMenu(false); setShowEmojiPicker(false); startVoiceRecording(); }}
+              className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors flex-shrink-0"
+              aria-label="Voice message"
+            >
+              <Mic className="w-6 h-6" />
+            </button>
+          )}
           <button
             type="button"
             className="bg-primary text-white px-5 py-2.5 rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium flex-shrink-0"
@@ -735,20 +1331,28 @@ export function ChatWindow({
                 </button>
               </div>
               <div className="max-h-80 overflow-y-auto">
-                {readByList.map((reader, idx) => (
+                {readByList.map((reader, idx) => {
+                  const isYou = reader.name === 'You' || reader.name === agentFullName;
+                  return (
                   <div
                     key={reader.name}
                     className={`flex items-center gap-3 px-4 py-3 ${idx > 0 ? 'border-t border-border' : ''}`}
                   >
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold flex-shrink-0">
-                      {reader.name.charAt(0)}
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold flex-shrink-0 overflow-hidden">
+                      {isYou && agentAvatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        reader.name.charAt(0)
+                      )}
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-text-primary truncate">{reader.name}</p>
                       <p className="text-xs text-text-muted">{formatReadAt(reader.readAt)}</p>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -854,17 +1458,25 @@ export function ChatWindow({
 
                 {activeGroupTab === 'members' && (
                   <div className="space-y-3">
-                    {teamMemberNames.map((name) => (
+                    {teamMemberNames.map((name) => {
+                      const isYou = name === 'You' || name === agentFullName;
+                      return (
                       <div
                         key={name}
                         className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-panel"
                       >
-                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold">
-                          {name[0]}
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold overflow-hidden flex-shrink-0">
+                          {isYou && agentAvatarUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            name[0]
+                          )}
                         </div>
                         <span className="text-sm text-text-primary">{name}</span>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 

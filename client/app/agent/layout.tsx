@@ -3,6 +3,7 @@
 import { AgentSidebar } from '@/components/layout/agent-sidebar';
 import { AgentHeader } from '@/components/layout/agent-header';
 import { SidebarProvider } from '@/contexts/SidebarContext';
+import { AgentProfileProvider } from '@/contexts/AgentProfileContext';
 import { useSidebar } from '@/contexts/SidebarContext';
 
 function AgentLayoutContent({ children }: { children: React.ReactNode }) {
@@ -29,7 +30,9 @@ export default function AgentLayout({
 }) {
   return (
     <SidebarProvider>
-      <AgentLayoutContent>{children}</AgentLayoutContent>
+      <AgentProfileProvider>
+        <AgentLayoutContent>{children}</AgentLayoutContent>
+      </AgentProfileProvider>
     </SidebarProvider>
   );
 }
