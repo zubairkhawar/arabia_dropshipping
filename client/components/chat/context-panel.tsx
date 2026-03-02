@@ -1,11 +1,28 @@
 'use client';
 
+import { useInboxPanels } from '@/contexts/InboxPanelsContext';
+import { PanelRightClose } from 'lucide-react';
+
 export function ContextPanel() {
+  const inboxPanels = useInboxPanels();
+
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="space-y-6">
         <div>
-          <h3 className="text-sm font-semibold text-text-primary mb-4">Customer Info</h3>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-text-primary">Customer Info</h3>
+            {inboxPanels && (
+              <button
+                type="button"
+                onClick={inboxPanels.toggleContext}
+                className="rounded p-1.5 text-text-secondary hover:bg-panel hover:text-primary transition-colors"
+                title="Collapse context"
+              >
+                <PanelRightClose className="h-5 w-5" />
+              </button>
+            )}
+          </div>
           <div className="space-y-3">
             <div>
               <p className="text-xs text-text-secondary mb-1">Name</p>
@@ -25,7 +42,7 @@ export function ContextPanel() {
             </div>
           </div>
         </div>
-        
+
         <div className="border-t border-border pt-6">
           <h3 className="text-sm font-semibold text-text-primary mb-4">Store Details</h3>
           <div className="space-y-3">
@@ -43,7 +60,7 @@ export function ContextPanel() {
             </div>
           </div>
         </div>
-        
+
         <div className="border-t border-border pt-6">
           <h3 className="text-sm font-semibold text-text-primary mb-4">Current Order</h3>
           <div className="p-3 bg-panel rounded-lg border border-border">

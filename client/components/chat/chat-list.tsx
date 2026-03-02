@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { useInboxPanels } from '@/contexts/InboxPanelsContext';
+import { PanelLeftClose } from 'lucide-react';
 
 interface Conversation {
   id: number;
@@ -14,6 +16,7 @@ interface Conversation {
 }
 
 export function ChatList() {
+  const inboxPanels = useInboxPanels();
   const [selectedId, setSelectedId] = useState<number | null>(1);
   const [conversations] = useState<Conversation[]>([
     {
@@ -56,11 +59,21 @@ export function ChatList() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b border-border">
+      <div className="p-4 border-b border-border flex items-center gap-2">
+        {inboxPanels && (
+          <button
+            type="button"
+            onClick={inboxPanels.toggleChatList}
+            className="rounded p-1.5 text-text-secondary hover:bg-white hover:text-primary transition-colors shrink-0"
+            title="Collapse conversation list"
+          >
+            <PanelLeftClose className="h-5 w-5" />
+          </button>
+        )}
         <input
           type="text"
           placeholder="Search conversations..."
-          className="w-full px-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+          className="flex-1 min-w-0 px-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
         />
       </div>
       <div className="flex-1 overflow-y-auto">
