@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { ArrowRightLeft, Bot, AlertCircle } from 'lucide-react';
 
 interface Message {
   id: number;
@@ -10,37 +11,27 @@ interface Message {
   timestamp: string;
 }
 
-export function ChatWindow() {
-  const [messages] = useState<Message[]>([
-    {
-      id: 1,
-      content: 'Hello! How can I help you today?',
-      sender: 'ai',
-      senderName: 'AI Assistant',
-      timestamp: '2 minutes ago',
-    },
-    {
-      id: 2,
-      content: 'I need help with my order #12345',
-      sender: 'customer',
-      senderName: 'Ahmed Ali',
-      timestamp: '2 minutes ago',
-    },
-    {
-      id: 3,
-      content: 'I can help you with that. Let me check your order status.',
-      sender: 'ai',
-      senderName: 'AI Assistant',
-      timestamp: '1 minute ago',
-    },
-    {
-      id: 4,
-      content: 'Your order is currently in transit and will be delivered within 2-3 business days.',
-      sender: 'ai',
-      senderName: 'AI Assistant',
-      timestamp: '1 minute ago',
-    },
-  ]);
+export interface ChatWindowProps {
+  isInternalChat?: boolean;
+  title?: string;
+  subtitle?: string;
+  showTransferControls?: boolean;
+}
+
+const defaultCustomerMessages: Message[] = [
+  { id: 1, content: 'Hello! How can I help you today?', sender: 'ai', senderName: 'AI Assistant', timestamp: '2 minutes ago' },
+  { id: 2, content: 'I need help with my order #12345', sender: 'customer', senderName: 'Ahmed Ali', timestamp: '2 minutes ago' },
+  { id: 3, content: 'I can help you with that. Let me check your order status.', sender: 'ai', senderName: 'AI Assistant', timestamp: '1 minute ago' },
+  { id: 4, content: 'Your order is currently in transit and will be delivered within 2-3 business days.', sender: 'ai', senderName: 'AI Assistant', timestamp: '1 minute ago' },
+];
+
+export function ChatWindow({
+  isInternalChat = false,
+  title = 'Ahmed Ali',
+  subtitle = 'Store: My Shopify Store • Order #12345',
+  showTransferControls = false,
+}: ChatWindowProps = {}) {
+  const [messages] = useState<Message[]>(defaultCustomerMessages);
 
   const [inputValue, setInputValue] = useState('');
 
@@ -56,14 +47,49 @@ export function ChatWindow() {
 
   return (
     <div className="flex flex-col h-full bg-white">
-      <div className="h-chat-header border-b border-border px-6 flex items-center justify-between bg-white">
+      <div className="h-chat-header border-b border-border px-6 flex items-center justify-between bg-white shrink-0">
         <div>
-          <h3 className="font-medium text-text-primary">Ahmed Ali</h3>
-          <p className="text-xs text-text-secondary">Store: My Shopify Store • Order #12345</p>
+          {isInternalChat && (
+            <span className="inline-block text-[10px] font-semibold uppercase tracking-wider text-primary border border-primary rounded px-2 py-0.5 mb-1.5">
+              Internal Chat
+            </span>
+          )}
+          <h3 className="font-medium text-text-primary">{title}</h3>
+          <p className="text-xs text-text-secondary">{subtitle}</p>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs px-2 py-1 bg-status-success text-white rounded">WhatsApp</span>
-          <button className="text-text-secondary hover:text-text-primary">
+          {!isInternalChat && (
+            <span className="text-xs px-2 py-1 bg-status-success text-white rounded">WhatsApp</span>
+          )}
+          {showTransferControls && (
+            <>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-white hover:bg-panel text-text-secondary hover:text-primary text-xs font-medium transition-colors"
+                title="Transfer to another agent or team"
+              >
+                <ArrowRightLeft className="w-4 h-4" />
+                Transfer
+              </button>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-white hover:bg-panel text-text-secondary hover:text-primary text-xs font-medium transition-colors"
+                title="Send conversation back to AI bot"
+              >
+                <Bot className="w-4 h-4" />
+                Send to AI
+              </button>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-white hover:bg-panel text-status-warning hover:bg-status-warning/10 text-xs font-medium transition-colors"
+                title="Escalate to supervisor"
+              >
+                <AlertCircle className="w-4 h-4" />
+                Escalate
+              </button>
+            </>
+          )}
+          <button className="text-text-secondary hover:text-text-primary p-1.5 rounded">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
             </svg>

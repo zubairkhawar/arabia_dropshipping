@@ -59,7 +59,7 @@ export function ChatList() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b border-border flex items-center gap-2">
+      <div className="h-chat-header border-b border-border px-4 flex items-center gap-2 shrink-0">
         {inboxPanels && (
           <button
             type="button"

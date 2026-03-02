@@ -38,7 +38,7 @@ function AgentInboxContent() {
 
       {/* Middle panel: chat window (always visible) */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <ChatWindow />
+        <ChatWindow showTransferControls />
       </div>
 
       {/* Right panel: context or expand strip */}
