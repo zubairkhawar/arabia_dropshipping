@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Inbox, MessageCircle, Users, User, Settings, LucideIcon } from 'lucide-react';
+import { Inbox, Users, User, Settings, LucideIcon } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
 
@@ -21,14 +21,6 @@ const sections: SidebarSection[] = [
   {
     title: 'My Inbox',
     items: [{ icon: Inbox, label: 'My Chats', path: '/agent/inbox' }],
-  },
-  {
-    title: 'Direct Messages',
-    items: [
-      { icon: MessageCircle, label: '@ Ali', path: '/agent/dm/ali' },
-      { icon: MessageCircle, label: '@ Sarah', path: '/agent/dm/sarah' },
-      { icon: MessageCircle, label: '@ Hamza', path: '/agent/dm/hamza' },
-    ],
   },
   {
     title: 'My Team',

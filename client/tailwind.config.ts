@@ -66,7 +66,7 @@ const config: Config = {
         'kpi-card': '120px',
       },
       maxWidth: {
-        'message-bubble': '70%',
+        'message-bubble': '85%',
         'modal-sm': '360px',
         'modal-md': '520px',
         'modal-lg': '720px',

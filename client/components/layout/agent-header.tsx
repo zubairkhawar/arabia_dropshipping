@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose } from 'lucide-react';
+import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose, MessageSquarePlus } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
+import { usePathname } from 'next/navigation';
 
 type AgentStatus = 'online' | 'busy' | 'offline';
 
@@ -23,6 +24,8 @@ export function AgentHeader({ userName = 'Support Agent' }: AgentHeaderProps) {
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('online');
   const { isCollapsed, toggleSidebar } = useSidebar();
+  const pathname = usePathname();
+  const isInternalDmArea = pathname?.startsWith('/agent/dm') || pathname?.startsWith('/agent/team');
 
   const notifications = [
     { id: 1, message: 'New conversation assigned', time: '2 min ago' },
@@ -44,13 +47,24 @@ export function AgentHeader({ userName = 'Support Agent' }: AgentHeaderProps) {
           )}
         </button>
         <div className="flex-1 max-w-md">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-muted" />
-            <input
-              type="text"
-              placeholder="Search my chats..."
-              className="w-full pl-10 pr-4 py-2 bg-panel border border-border rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-primary focus:bg-white text-sm"
-            />
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-muted" />
+              <input
+                type="text"
+                placeholder="Search my chats..."
+                className="w-full pl-10 pr-4 py-2 bg-panel border border-border rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-primary focus:bg-white text-sm"
+              />
+            </div>
+            {isInternalDmArea && (
+              <button
+                type="button"
+                className="p-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors"
+                aria-label="New direct message"
+              >
+                <MessageSquarePlus className="w-5 h-5 text-text-secondary" />
+              </button>
+            )}
           </div>
         </div>
       </div>

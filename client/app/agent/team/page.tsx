@@ -1,19 +1,19 @@
 'use client';
 
 import { ChatWindow } from '@/components/chat/chat-window';
-import { useParams } from 'next/navigation';
+
+const TEAM_MEMBERS = ['Ali', 'Hamza', 'Sarah'];
 
 export default function AgentTeamChannel() {
-  const params = useParams();
-  const channel = (params?.channel as string) || 'team';
-
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 flex flex-col min-h-0">
         <ChatWindow
           isInternalChat
-          title={`# ${channel === 'team' ? 'Team Channel' : channel}`}
+          title="# Team Channel"
           subtitle="Team coordination chat"
+          teamName="Team A"
+          teamMemberNames={TEAM_MEMBERS}
         />
       </div>
     </div>
