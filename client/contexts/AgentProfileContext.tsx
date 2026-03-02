@@ -1,9 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
-
-const STORAGE_AVATAR = 'agent-profile-avatar';
-const STORAGE_NAME = 'agent-profile-name';
+import React, { createContext, useContext, ReactNode } from 'react';
+import { useAgents } from '@/contexts/AgentsContext';
 
 interface AgentProfileContextType {
   avatarUrl: string | null;
@@ -15,44 +13,19 @@ interface AgentProfileContextType {
 const AgentProfileContext = createContext<AgentProfileContextType | undefined>(undefined);
 
 export function AgentProfileProvider({ children }: { children: ReactNode }) {
-  const [avatarUrl, setAvatarUrlState] = useState<string | null>(null);
-  const [fullName, setFullNameState] = useState<string>('');
+  const { getCurrentAgent, updateAgent, currentAgentId } = useAgents();
+  const agent = getCurrentAgent();
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const stored = localStorage.getItem(STORAGE_AVATAR);
-      if (stored) setAvatarUrlState(stored);
-      const name = localStorage.getItem(STORAGE_NAME);
-      if (name) setFullNameState(name);
-    } catch {
-      // ignore
-    }
-  }, []);
+  const fullName = agent?.name ?? '';
+  const avatarUrl = agent?.avatarUrl ?? null;
 
-  const setAvatarUrl = useCallback((url: string | null) => {
-    setAvatarUrlState(url);
-    try {
-      if (typeof window !== 'undefined') {
-        if (url) localStorage.setItem(STORAGE_AVATAR, url);
-        else localStorage.removeItem(STORAGE_AVATAR);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
+  const setFullName = (name: string) => {
+    if (currentAgentId) updateAgent(currentAgentId, { name });
+  };
 
-  const setFullName = useCallback((name: string) => {
-    setFullNameState(name);
-    try {
-      if (typeof window !== 'undefined') {
-        if (name) localStorage.setItem(STORAGE_NAME, name);
-        else localStorage.removeItem(STORAGE_NAME);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
+  const setAvatarUrl = (url: string | null) => {
+    if (currentAgentId) updateAgent(currentAgentId, { avatarUrl: url });
+  };
 
   return (
     <AgentProfileContext.Provider

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Inbox, Users, User, Settings, LucideIcon } from 'lucide-react';
+import { Inbox, Users, Settings, LucideIcon } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
 
@@ -29,7 +29,6 @@ const sections: SidebarSection[] = [
 ];
 
 const footerItems: SidebarLink[] = [
-  { icon: User, label: 'Profile', path: '/agent/profile' },
   { icon: Settings, label: 'Settings', path: '/agent/settings' },
 ];
 

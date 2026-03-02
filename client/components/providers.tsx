@@ -1,7 +1,12 @@
 'use client';
 
 import { TeamsProvider } from '@/contexts/TeamsContext';
+import { AgentsProvider } from '@/contexts/AgentsContext';
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  return <TeamsProvider>{children}</TeamsProvider>;
+  return (
+    <TeamsProvider>
+      <AgentsProvider>{children}</AgentsProvider>
+    </TeamsProvider>
+  );
 }
