@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Inbox, Users, Settings, LucideIcon } from 'lucide-react';
+import { Inbox, Users, Settings, MessageCircle, LucideIcon } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
 
@@ -25,6 +25,10 @@ const sections: SidebarSection[] = [
   {
     title: 'My Team',
     items: [{ icon: Users, label: '# Team Channel', path: '/agent/team' }],
+  },
+  {
+    title: 'Direct Messages',
+    items: [{ icon: MessageCircle, label: 'Internal Chat', path: '/agent/dm' }],
   },
 ];
 
@@ -98,12 +102,6 @@ export function AgentSidebar() {
             })}
           </div>
         </nav>
-
-        {!isCollapsed && (
-          <div className="p-4 border-t border-border">
-            <p className="text-xs text-text-muted">© 2024 Arabia Dropshipping</p>
-          </div>
-        )}
       </div>
     </div>
   );

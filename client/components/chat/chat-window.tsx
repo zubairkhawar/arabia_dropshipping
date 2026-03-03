@@ -170,6 +170,7 @@ export function ChatWindow({
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showTransferMenu, setShowTransferMenu] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [showAgentProfile, setShowAgentProfile] = useState(false);
   const [activeGroupTab, setActiveGroupTab] = useState<'info' | 'media' | 'starred' | 'members'>('info');
   const [starredIds, setStarredIds] = useState<number[]>([]);
   const [activeMessageMenuId, setActiveMessageMenuId] = useState<number | null>(null);
@@ -526,10 +527,10 @@ export function ChatWindow({
     <div className="flex flex-col h-full bg-white">
       <div className="h-chat-header border-b border-border px-6 flex items-center justify-between bg-white shrink-0">
         <div
-          className={isTeamChannel ? 'cursor-pointer' : undefined}
-          onClick={isTeamChannel ? () => setShowGroupInfo(true) : undefined}
+          className={isTeamChannel ? 'cursor-pointer' : isDmPage ? 'cursor-pointer' : undefined}
+          onClick={isTeamChannel ? () => setShowGroupInfo(true) : isDmPage ? () => setShowAgentProfile(true) : undefined}
         >
-          {isInternalChat && !isTeamChannel && (
+          {isInternalChat && !isTeamChannel && !isDmPage && (
             <span className="inline-block text-[10px] font-semibold uppercase tracking-wider text-primary border border-primary rounded px-2 py-0.5 mb-1.5">
               Internal Chat
             </span>
@@ -547,7 +548,7 @@ export function ChatWindow({
           {!isInternalChat && (
             <span className="text-xs px-2 py-1 bg-status-success text-white rounded">WhatsApp</span>
           )}
-          {!isTeamChannel && (
+          {!isTeamChannel && !isDmPage && (
             <>
           <button
             type="button"
@@ -1078,35 +1079,6 @@ export function ChatWindow({
         ))}
       </div>
 
-      {isInternalChat && isDmPage && (
-        <div className="border-t border-border px-6 py-2 flex items-center justify-between bg-panel">
-          <span className="text-xs text-text-muted">Direct messages</span>
-          <div className="flex flex-wrap gap-2 justify-end">
-            {internalTeamMembers.map((member) => {
-              const isActive = pathname?.startsWith(`/agent/dm/${member.id}`);
-              return (
-                <Link
-                  key={member.id}
-                  href={`/agent/dm/${member.id}`}
-                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
-                    isActive
-                      ? 'bg-primary text-white border-primary'
-                      : 'bg-white text-text-secondary border-border hover:bg-panel'
-                  }`}
-                >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full ${
-                      isActive ? 'bg-status-success' : 'bg-text-muted'
-                    }`}
-                  />
-                  {member.name}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       <div className="flex-shrink-0 border-t border-border bg-white">
         {/* Reply bar when active */}
         {replyingTo && (
@@ -1160,8 +1132,8 @@ export function ChatWindow({
             </button>
           </div>
         )}
-        {/* Input row */}
-        <div className="flex items-center gap-2 px-4 py-3 min-h-[56px]">
+        {/* Input row - fixed height to align bottom separator with 2nd bar (80px) */}
+        <div className="flex items-center gap-2 px-4 h-[80px]">
           <div className="relative flex-shrink-0">
             <button
               type="button"
@@ -1565,6 +1537,34 @@ export function ChatWindow({
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isDmPage && showAgentProfile && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+          onClick={() => setShowAgentProfile(false)}
+        >
+          <div
+            className="relative bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4 flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setShowAgentProfile(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-panel text-text-secondary"
+              aria-label="Close profile"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="w-40 h-40 rounded-full bg-primary/10 flex items-center justify-center text-primary text-5xl font-semibold flex-shrink-0 mb-4">
+              {title ? title.charAt(0) : '?'}
+            </div>
+            <h2 className="text-xl font-semibold text-text-primary text-center">
+              {title || 'Agent'}
+            </h2>
+            <p className="text-sm text-text-muted mt-1">Direct message</p>
           </div>
         </div>
       )}

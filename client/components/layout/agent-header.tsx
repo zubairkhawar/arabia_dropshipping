@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose, MessageSquarePlus, Camera, ImagePlus, Trash2, X } from 'lucide-react';
+import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose, Camera, ImagePlus, Trash2, X } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useAgents } from '@/contexts/AgentsContext';
@@ -35,7 +35,6 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const [passwordMessage, setPasswordMessage] = useState<'success' | 'error' | null>(null);
   const pathname = usePathname();
   const displayName = fullName || userName || 'Support Agent';
-  const isInternalDmArea = pathname?.startsWith('/agent/dm') || pathname?.startsWith('/agent/team');
 
   const notifications = [
     { id: 1, message: 'New conversation assigned', time: '2 min ago' },
@@ -118,15 +117,6 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                 className="w-full pl-10 pr-4 py-2 bg-panel border border-border rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-primary focus:bg-white text-sm"
               />
             </div>
-            {isInternalDmArea && (
-              <button
-                type="button"
-                className="p-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors"
-                aria-label="New direct message"
-              >
-                <MessageSquarePlus className="w-5 h-5 text-text-secondary" />
-              </button>
-            )}
           </div>
         </div>
       </div>
