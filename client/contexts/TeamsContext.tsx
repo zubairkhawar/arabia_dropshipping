@@ -65,6 +65,7 @@ interface TeamsContextType {
   removeMemberFromTeam: (teamId: string, memberName: string) => void;
   transferMember: (fromTeamId: string, memberName: string, toTeamId: string) => void;
   addTeam: (name: string) => void;
+  removeTeam: (teamId: string) => void;
 }
 
 const TeamsContext = createContext<TeamsContextType | undefined>(undefined);
@@ -168,6 +169,15 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
     [data, persist],
   );
 
+  const removeTeam = useCallback(
+    (teamId: string) => {
+      const nextTeams = data.teams.filter((t) => t.id !== teamId);
+      const nextEvents = data.events.filter((e) => e.teamId !== teamId);
+      persist({ teams: nextTeams, events: nextEvents });
+    },
+    [data, persist],
+  );
+
   return (
     <TeamsContext.Provider
       value={{
@@ -180,6 +190,7 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
         removeMemberFromTeam,
         transferMember,
         addTeam,
+        removeTeam,
       }}
     >
       {children}
@@ -200,6 +211,7 @@ export function useTeams() {
       removeMemberFromTeam: () => {},
       transferMember: () => {},
       addTeam: () => {},
+      removeTeam: () => {},
     };
   }
   return context;

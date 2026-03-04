@@ -10,8 +10,10 @@ import {
   FileText,
   Settings,
   LayoutDashboard,
-  Inbox,
   LucideIcon,
+  MessageCircle,
+  FolderCog,
+  ShieldAlert,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
@@ -22,24 +24,22 @@ interface SidebarLink {
   path: string;
 }
 
-const aiBotSection: SidebarLink[] = [{ icon: Bot, label: 'AI Bot', path: '/admin/inbox' }];
+const aiBotSection: SidebarLink[] = [{ icon: Bot, label: 'AI Bot', path: '/admin/dashboard' }];
 
-const teamsSection: SidebarLink[] = [
-  { icon: Users, label: 'Team A', path: '/admin/teams/team-a' },
-  { icon: Users, label: 'Team B', path: '/admin/teams/team-b' },
-  { icon: Users, label: 'Team C', path: '/admin/teams/team-c' },
-];
+const teamsSection: SidebarLink[] = [{ icon: Users, label: 'Teams', path: '/admin/teams' }];
 
-const agentsSection: SidebarLink[] = [
-  { icon: User, label: 'Ali', path: '/admin/agents/ali' },
-  { icon: User, label: 'Hamza', path: '/admin/agents/hamza' },
-  { icon: User, label: 'Sarah', path: '/admin/agents/sarah' },
+const agentsSection: SidebarLink[] = [{ icon: User, label: 'Agents', path: '/admin/agents' }];
+
+const conversationsSection: SidebarLink[] = [
+  { icon: MessageCircle, label: 'All Conversations', path: '/admin/inbox' },
+  { icon: MessageCircle, label: 'Live Now', path: '/admin/inbox/live' },
+  { icon: MessageCircle, label: 'Escalated', path: '/admin/inbox/escalated' },
+  { icon: MessageCircle, label: 'Closed', path: '/admin/inbox/closed' },
 ];
 
 const bottomSection: SidebarLink[] = [
-  { icon: LayoutDashboard, label: 'Dashboard', path: '/admin/dashboard' },
+  { icon: FolderCog, label: 'Knowledge Base', path: '/admin/knowledge-base' },
   { icon: TrendingUp, label: 'Analytics', path: '/admin/analytics' },
-  { icon: FileText, label: 'System Logs', path: '/admin/logs' },
   { icon: Settings, label: 'Settings', path: '/admin/settings' },
 ];
 
@@ -94,10 +94,11 @@ export function AdminSidebar() {
         </div>
 
         <nav className="flex-1 p-3 overflow-y-auto">
-          {renderSection('', aiBotSection)}
+          {renderSection('AI Bot', aiBotSection)}
           {!isCollapsed && <div className="border-t border-border my-3" />}
           {renderSection('Teams', teamsSection)}
           {renderSection('Agents', agentsSection)}
+          {renderSection('Conversations', conversationsSection)}
           {!isCollapsed && <div className="border-t border-border my-3" />}
           {renderSection('', bottomSection)}
         </nav>

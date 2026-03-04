@@ -55,6 +55,7 @@ interface AgentsContextType {
   getCurrentAgent: () => AgentRecord | null;
   addAgent: (email: string, name: string, password: string) => void;
   updateAgent: (id: string, updates: Partial<Pick<AgentRecord, 'name' | 'password' | 'avatarUrl'>>) => void;
+  removeAgent: (id: string) => void;
 }
 
 const AgentsContext = createContext<AgentsContextType | undefined>(undefined);
@@ -100,6 +101,16 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
     [data, persist],
   );
 
+  const removeAgent = useCallback(
+    (id: string) => {
+      const nextAgents = data.agents.filter((a) => a.id !== id);
+      const nextCurrentId =
+        data.currentAgentId === id ? (nextAgents[0]?.id ?? null) : data.currentAgentId;
+      persist({ agents: nextAgents, currentAgentId: nextCurrentId });
+    },
+    [data, persist],
+  );
+
   return (
     <AgentsContext.Provider
       value={{
@@ -109,6 +120,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         getCurrentAgent,
         addAgent,
         updateAgent,
+        removeAgent,
       }}
     >
       {children}
@@ -126,6 +138,7 @@ export function useAgents() {
       getCurrentAgent: () => defaultAgents[0] ?? null,
       addAgent: () => {},
       updateAgent: () => {},
+      removeAgent: () => {},
     };
   }
   return context;

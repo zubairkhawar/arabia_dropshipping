@@ -67,6 +67,8 @@ export interface ChatWindowProps {
   teamMemberNames?: string[];
   /** For team channel: soft system messages (member added/removed/transferred). */
   teamEvents?: TeamEvent[];
+  /** When true, chat is read-only (monitor mode: no replies/reactions/menus). */
+  readOnly?: boolean;
 }
 
 const defaultCustomerMessages: Message[] = [
@@ -157,6 +159,7 @@ export function ChatWindow({
   teamName,
   teamMemberNames = [],
   teamEvents = [],
+  readOnly = false,
 }: ChatWindowProps = {}) {
   const pathname = usePathname();
   const { avatarUrl: agentAvatarUrl, fullName: agentFullName } = useAgentProfile();
@@ -719,18 +722,20 @@ export function ChatWindow({
                     message.senderName,
                   )}`}
                 >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setActiveMessageMenuId((current) =>
-                        current === message.id ? null : message.id,
-                      )
-                    }
-                    className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-full bg-white/30 hover:bg-white/50 text-current opacity-80 hover:opacity-100 transition-opacity flex-shrink-0"
-                    aria-label="Message options"
-                  >
-                    <ChevronDown className="w-4 h-4" />
-                  </button>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveMessageMenuId((current) =>
+                          current === message.id ? null : message.id,
+                        )
+                      }
+                      className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-full bg-white/30 hover:bg-white/50 text-current opacity-80 hover:opacity-100 transition-opacity flex-shrink-0"
+                      aria-label="Message options"
+                    >
+                      <ChevronDown className="w-4 h-4" />
+                    </button>
+                  )}
 
                   <div className="pr-1 min-w-0 space-y-1">
                   {message.replyTo && (
@@ -857,29 +862,41 @@ export function ChatWindow({
                   {aggregated.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setReactionDetailMessageId((id) => (id === message.id ? null : message.id))}
+                      onClick={() =>
+                        setReactionDetailMessageId((id) =>
+                          id === message.id ? null : message.id,
+                        )
+                      }
                       className="inline-flex items-center gap-1 rounded-full border border-border bg-white shadow-sm px-2 py-1 text-sm hover:bg-panel"
                     >
                       {aggregated.map(({ emoji, count }) => (
                         <span key={emoji} className="inline-flex items-center gap-0.5">
                           {emoji}
-                          {count > 1 && <span className="text-xs text-text-muted">{count}</span>}
+                          {count > 1 && (
+                            <span className="text-xs text-text-muted">{count}</span>
+                          )}
                         </span>
                       ))}
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => setActiveReactionPickerId(message.id)}
-                    className={`p-1 rounded-full border transition-colors flex-shrink-0 ${
-                      myReaction
-                        ? 'bg-primary/20 border-primary text-primary'
-                        : 'bg-white/80 border-border shadow-sm text-text-muted hover:text-primary hover:border-primary'
-                    }`}
-                    aria-label="React"
-                  >
-                    {myReaction ? <span className="text-base">{myReaction}</span> : <Smile className="w-4 h-4" />}
-                  </button>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveReactionPickerId(message.id)}
+                      className={`p-1 rounded-full border transition-colors flex-shrink-0 ${
+                        myReaction
+                          ? 'bg-primary/20 border-primary text-primary'
+                          : 'bg-white/80 border-border shadow-sm text-text-muted hover:text-primary hover:border-primary'
+                      }`}
+                      aria-label="React"
+                    >
+                      {myReaction ? (
+                        <span className="text-base">{myReaction}</span>
+                      ) : (
+                        <Smile className="w-4 h-4" />
+                      )}
+                    </button>
+                  )}
                 </div>
 
                 {/* Who reacted detail popover */}
@@ -925,7 +942,7 @@ export function ChatWindow({
                   </>
                 )}
 
-                {showMenu && (
+                {!readOnly && showMenu && (
                   <div
                     className={`absolute w-48 bg-white border border-border rounded-lg shadow-xl z-20 py-1 text-sm ${
                       outgoing
@@ -1033,7 +1050,7 @@ export function ChatWindow({
                   </div>
                 )}
 
-                {showReactions && (
+                {!readOnly && showReactions && (
                   <div
                     className={`absolute ${
                       outgoing ? 'right-0' : 'left-0'
@@ -1080,8 +1097,8 @@ export function ChatWindow({
       </div>
 
       <div className="flex-shrink-0 border-t border-border bg-white">
-        {/* Reply bar when active */}
-        {replyingTo && (
+        {/* Reply bar when active (hidden in read-only) */}
+        {!readOnly && replyingTo && (
           <div className="flex items-center justify-between gap-3 px-4 py-2 bg-panel border-b border-border">
             <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold text-primary">Replying to {replyingTo.senderName}</p>
@@ -1099,8 +1116,8 @@ export function ChatWindow({
             </button>
           </div>
         )}
-        {/* Pending attachment preview */}
-        {pendingAttachment && (
+        {/* Pending attachment preview (hidden in read-only) */}
+        {!readOnly && pendingAttachment && (
           <div className="px-4 py-2 bg-panel border-b border-border flex items-center justify-between gap-2">
             <span className="text-xs text-text-secondary truncate">
               {pendingAttachment.type === 'photo' && (
@@ -1133,6 +1150,7 @@ export function ChatWindow({
           </div>
         )}
         {/* Input row - fixed height to align bottom separator with 2nd bar (80px) */}
+        {!readOnly && (
         <div className="flex items-center gap-2 px-4 h-[80px]">
           <div className="relative flex-shrink-0">
             <button
@@ -1259,6 +1277,7 @@ export function ChatWindow({
             Send
           </button>
         </div>
+        )}
       </div>
 
       {(activeMessageMenuId !== null || activeReactionPickerId !== null) && (

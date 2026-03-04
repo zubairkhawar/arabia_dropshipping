@@ -51,9 +51,9 @@ export default function AdminTeamManagePage() {
   return (
     <div className="space-y-6">
       <div>
-        <Link href="/admin/agents" className="inline-flex items-center gap-2 text-sm text-primary hover:underline mb-2">
+        <Link href="/admin/teams" className="inline-flex items-center gap-2 text-sm text-primary hover:underline mb-2">
           <ChevronLeft className="w-4 h-4" />
-          Back to Agents
+          Back to Teams
         </Link>
         <h1 className="text-2xl font-bold text-text-primary">{team.name}</h1>
         <p className="text-text-secondary mt-1">Manage members. Changes appear as soft messages in the team channel chat.</p>

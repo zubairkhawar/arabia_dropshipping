@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose } from 'lucide-react';
+import { Search, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
 
@@ -11,15 +11,8 @@ interface TopBarBaseProps {
 }
 
 export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopBarBaseProps) {
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const { isCollapsed, toggleSidebar } = useSidebar();
-
-  const notifications = [
-    { id: 1, message: 'New order #1234 received', time: '2 min ago' },
-    { id: 2, message: 'Order #1230 delivered successfully', time: '1 hour ago' },
-    { id: 3, message: 'New conversation assigned', time: '3 hours ago' },
-  ];
 
   return (
     <div 
@@ -53,47 +46,6 @@ export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopB
 
       {/* Right Side */}
       <div className="flex items-center gap-4">
-        {/* Notifications */}
-        <div className="relative">
-          <button
-            onClick={() => setShowNotifications(!showNotifications)}
-            className="relative p-2 rounded-lg hover:bg-panel transition-colors"
-          >
-            <Bell className="w-5 h-5 text-text-primary" />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-primary rounded-full"></span>
-          </button>
-
-          {showNotifications && (
-            <>
-              <div
-                className="fixed inset-0 z-10"
-                onClick={() => setShowNotifications(false)}
-              ></div>
-              <div className="absolute right-0 mt-2 w-80 bg-white border border-border rounded-lg shadow-xl z-20">
-                <div className="p-4 border-b border-border">
-                  <h3 className="font-semibold text-text-primary">Notifications</h3>
-                </div>
-                <div className="max-h-96 overflow-y-auto">
-                  {notifications.map((notif) => (
-                    <div
-                      key={notif.id}
-                      className="p-4 border-b border-border hover:bg-panel cursor-pointer"
-                    >
-                      <p className="text-sm text-text-primary">{notif.message}</p>
-                      <p className="text-xs text-text-muted mt-1">{notif.time}</p>
-                    </div>
-                  ))}
-                </div>
-                <div className="p-4 border-t border-border">
-                  <button className="text-sm text-primary hover:text-primary-dark">
-                    View all notifications
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-
         {/* User Menu */}
         <div className="relative">
           <button
