@@ -24,6 +24,8 @@ export default function AdminTeams() {
   const [showMemberManager, setShowMemberManager] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
   const [transferTarget, setTransferTarget] = useState<Record<string, string>>({});
+  const [teamDescription, setTeamDescription] = useState('');
+  const [activeMemberMenu, setActiveMemberMenu] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selectedId && teams.length > 0) {
@@ -43,9 +45,11 @@ export default function AdminTeams() {
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = teamName.trim();
+    const desc = teamDescription.trim();
     if (!trimmed) return;
-    addTeam(trimmed);
+    addTeam(trimmed, desc);
     setTeamName('');
+    setTeamDescription('');
     setShowCreateModal(false);
   };
 
@@ -299,7 +303,8 @@ export default function AdminTeams() {
                       No members yet. Switch to “Manage members” to add agents into this team.
                     </p>
                   ) : (
-                    <ul className="space-y-1.5 text-sm">
+                      <div className="max-h-64 overflow-y-auto pr-1">
+                      <ul className="space-y-1.5 text-sm">
                       {selectedTeam.members.map((name) => (
                         <li
                           key={name}
@@ -312,6 +317,7 @@ export default function AdminTeams() {
                         </li>
                       ))}
                     </ul>
+                      </div>
                   )}
                 </div>
               )}
@@ -355,63 +361,93 @@ export default function AdminTeams() {
                         No members yet. Add the first member above.
                       </p>
                     ) : (
-                      <ul className="space-y-2 text-sm">
-                        {selectedTeam.members.map((name) => (
-                          <li
-                            key={name}
-                            className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-panel border border-border"
-                          >
-                            <div className="flex items-center gap-3 min-w-0">
-                              <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-semibold flex-shrink-0">
-                                {name.charAt(0)}
-                              </div>
-                              <span className="text-text-primary truncate">{name}</span>
-                            </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                              {otherTeams.length > 0 && (
-                                <>
-                                  <select
-                                    value={transferTarget[name] ?? ''}
-                                    onChange={(e) =>
-                                      setTransferTarget((prev) => ({
-                                        ...prev,
-                                        [name]: e.target.value,
-                                      }))
-                                    }
-                                    className="px-2 py-1.5 border border-border rounded-lg text-[11px] focus:outline-none focus:ring-2 focus:ring-primary"
-                                  >
-                                    <option value="">Transfer to…</option>
-                                    {otherTeams.map((t) => (
-                                      <option key={t.id} value={t.id}>
-                                        {t.name}
-                                      </option>
-                                    ))}
-                                  </select>
+                      <div className="max-h-64 overflow-y-auto pr-1">
+                        <ul className="space-y-2 text-sm">
+                          {selectedTeam.members.map((name) => {
+                            const menuOpen = activeMemberMenu === name;
+                            return (
+                              <li
+                                key={name}
+                                className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-panel border border-border"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-semibold flex-shrink-0">
+                                    {name.charAt(0)}
+                                  </div>
+                                  <span className="text-text-primary truncate">{name}</span>
+                                </div>
+                                <div className="relative flex-shrink-0">
                                   <button
                                     type="button"
-                                    onClick={() => handleTransferMember(name)}
-                                    disabled={!transferTarget[name]}
-                                    className="inline-flex items-center gap-1 px-2 py-1.5 text-[11px] rounded-lg border border-border hover:bg-panel disabled:opacity-50 disabled:cursor-not-allowed text-text-secondary"
-                                    title="Transfer to another team"
+                                    onClick={() =>
+                                      setActiveMemberMenu((current) =>
+                                        current === name ? null : name,
+                                      )
+                                    }
+                                    className="p-1.5 rounded-lg text-text-secondary hover:bg-white transition-colors"
+                                    aria-label="Member options"
                                   >
-                                    <ArrowRightLeft className="w-3.5 h-3.5" />
-                                    Transfer
+                                    <MoreVertical className="w-4 h-4" />
                                   </button>
-                                </>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveMember(name)}
-                                className="inline-flex items-center gap-1 px-2 py-1.5 text-[11px] rounded-lg border border-status-error/50 text-status-error hover:bg-status-error/10"
-                                title="Remove from team"
-                              >
-                                <UserMinus className="w-3.5 h-3.5" />
-                                Remove
-                              </button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
+                                  {menuOpen && (
+                                    <div className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-border bg-card shadow-lg z-30 py-1 text-[11px]">
+                                      {otherTeams.length > 0 && (
+                                        <div className="px-3 py-2 border-b border-border space-y-1">
+                                          <p className="text-text-muted">
+                                            Transfer to another team
+                                          </p>
+                                          <div className="flex items-center gap-2">
+                                            <select
+                                              value={transferTarget[name] ?? ''}
+                                              onChange={(e) =>
+                                                setTransferTarget((prev) => ({
+                                                  ...prev,
+                                                  [name]: e.target.value,
+                                                }))
+                                              }
+                                              className="flex-1 px-2 py-1.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                                            >
+                                              <option value="">Select team…</option>
+                                              {otherTeams.map((t) => (
+                                                <option key={t.id} value={t.id}>
+                                                  {t.name}
+                                                </option>
+                                              ))}
+                                            </select>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                handleTransferMember(name);
+                                                setActiveMemberMenu(null);
+                                              }}
+                                              disabled={!transferTarget[name]}
+                                              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-border hover:bg-panel disabled:opacity-50 disabled:cursor-not-allowed text-text-secondary"
+                                            >
+                                              <ArrowRightLeft className="w-3.5 h-3.5" />
+                                              Transfer
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          handleRemoveMember(name);
+                                          setActiveMemberMenu(null);
+                                        }}
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-panel"
+                                      >
+                                        <UserMinus className="w-3.5 h-3.5" />
+                                        Remove from team
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -430,7 +466,7 @@ export default function AdminTeams() {
             className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-4">
+              <div className="mb-4">
               <p className="text-sm font-semibold text-text-primary">Create team</p>
               <p className="text-xs text-text-secondary mt-1">
                 Give your team a clear name, like “UAE WhatsApp Support” or “Escalations”.
@@ -448,6 +484,18 @@ export default function AdminTeams() {
                   placeholder="Team A"
                   className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
                   required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-text-primary mb-1">
+                  Team description
+                </label>
+                <textarea
+                  value={teamDescription}
+                  onChange={(e) => setTeamDescription(e.target.value)}
+                  placeholder="Short description of what this team handles (e.g. UAE WhatsApp support, escalations)."
+                  rows={3}
+                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm resize-none"
                 />
               </div>
               <div className="flex items-center justify-end gap-2 pt-2">

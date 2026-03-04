@@ -18,6 +18,7 @@ export interface TeamEvent {
 export interface Team {
   id: string;
   name: string;
+  description: string;
   members: string[];
 }
 
@@ -27,9 +28,14 @@ interface TeamsData {
 }
 
 const defaultTeams: Team[] = [
-  { id: 'team-a', name: 'Team A', members: ['Ali', 'Hamza', 'Sarah'] },
-  { id: 'team-b', name: 'Team B', members: [] },
-  { id: 'team-c', name: 'Team C', members: [] },
+  {
+    id: 'team-a',
+    name: 'Team A',
+    description: 'Primary WhatsApp support team.',
+    members: ['Ali', 'Hamza', 'Sarah'],
+  },
+  { id: 'team-b', name: 'Team B', description: '', members: [] },
+  { id: 'team-c', name: 'Team C', description: '', members: [] },
 ];
 
 function loadFromStorage(): TeamsData {
@@ -38,8 +44,14 @@ function loadFromStorage(): TeamsData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { teams: defaultTeams, events: [] };
     const parsed = JSON.parse(raw) as TeamsData;
+    const teams: Team[] =
+      Array.isArray(parsed.teams) && parsed.teams.length > 0 ? parsed.teams : defaultTeams;
+    const normalisedTeams = teams.map((t) => ({
+      description: '',
+      ...t,
+    }));
     return {
-      teams: Array.isArray(parsed.teams) && parsed.teams.length > 0 ? parsed.teams : defaultTeams,
+      teams: normalisedTeams,
       events: Array.isArray(parsed.events) ? parsed.events : [],
     };
   } catch {
@@ -64,7 +76,7 @@ interface TeamsContextType {
   addMemberToTeam: (teamId: string, memberName: string) => void;
   removeMemberFromTeam: (teamId: string, memberName: string) => void;
   transferMember: (fromTeamId: string, memberName: string, toTeamId: string) => void;
-  addTeam: (name: string) => void;
+  addTeam: (name: string, description: string) => void;
   removeTeam: (teamId: string) => void;
 }
 
@@ -161,10 +173,11 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
   );
 
   const addTeam = useCallback(
-    (name: string) => {
+    (name: string, description: string) => {
       const id = `team-${name.toLowerCase().replace(/\s+/g, '-')}`;
       if (data.teams.some((t) => t.id === id)) return;
-      persist({ teams: [...data.teams, { id, name, members: [] }], events: data.events });
+      const team: Team = { id, name, description, members: [] };
+      persist({ teams: [...data.teams, team], events: data.events });
     },
     [data, persist],
   );
