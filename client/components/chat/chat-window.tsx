@@ -533,7 +533,7 @@ export function ChatWindow({
           className={isTeamChannel ? 'cursor-pointer' : isDmPage ? 'cursor-pointer' : undefined}
           onClick={isTeamChannel ? () => setShowGroupInfo(true) : isDmPage ? () => setShowAgentProfile(true) : undefined}
         >
-          {isInternalChat && !isTeamChannel && !isDmPage && (
+          {isInternalChat && !isTeamChannel && !isDmPage && !readOnly && (
             <span className="inline-block text-[10px] font-semibold uppercase tracking-wider text-primary border border-primary rounded px-2 py-0.5 mb-1.5">
               Internal Chat
             </span>
