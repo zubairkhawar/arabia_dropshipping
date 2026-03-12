@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # Application
     environment: str = "development"
     debug: bool = True
+    frontend_base_url: str = "http://localhost:3000"
     
     class Config:
         env_file = ".env"
