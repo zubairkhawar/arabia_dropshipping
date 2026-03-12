@@ -1,98 +1,77 @@
 'use client';
 
-import { useState } from 'react';
 import { ChatList } from '@/components/chat/chat-list';
 import { ChatWindow } from '@/components/chat/chat-window';
 import { InboxPanelsProvider, useInboxPanels } from '@/contexts/InboxPanelsContext';
-import { PanelRightOpen, SquareChevronRight, Search, Filter } from 'lucide-react';
+import { PanelRightOpen, SquareChevronRight } from 'lucide-react';
 
-type MonitoringMode = 'passive' | 'assisted' | 'intervene';
-
-function FilterPanel() {
+function ContextPanel() {
   return (
-    <div className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border bg-panel p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-text-primary">Filters</h3>
-        <Filter className="h-4 w-4 text-text-muted" />
-      </div>
-      <div className="space-y-2 text-xs">
-        <p className="text-text-muted uppercase tracking-wide">Handler</p>
-        <div className="space-y-1">
-          <label className="flex items-center gap-2 text-text-secondary">
-            <input type="checkbox" className="h-3.5 w-3.5 rounded border-border" defaultChecked />
-            AI Active
-          </label>
-          <label className="flex items-center gap-2 text-text-secondary">
-            <input type="checkbox" className="h-3.5 w-3.5 rounded border-border" defaultChecked />
-            Human Active
-          </label>
-        </div>
-      </div>
-      <div className="space-y-2 text-xs">
-        <p className="text-text-muted uppercase tracking-wide">Routing</p>
-        <div className="space-y-1">
-          <label className="flex items-center gap-2 text-text-secondary">
-            <input type="checkbox" className="h-3.5 w-3.5 rounded border-border" />
-            Team A
-          </label>
-          <label className="flex items-center gap-2 text-text-secondary">
-            <input type="checkbox" className="h-3.5 w-3.5 rounded border-border" />
-            Team B
-          </label>
-          <label className="flex items-center gap-2 text-text-secondary">
-            <input type="checkbox" className="h-3.5 w-3.5 rounded border-border" />
-            Unassigned
-          </label>
-        </div>
-      </div>
-      <div className="space-y-2 text-xs">
-        <p className="text-text-muted uppercase tracking-wide">Priority</p>
-        <div className="space-y-1">
-          <label className="flex items-center gap-2 text-text-secondary">
-            <input type="checkbox" className="h-3.5 w-3.5 rounded border-border" />
-            Escalated
-          </label>
-          <label className="flex items-center gap-2 text-text-secondary">
-            <input type="checkbox" className="h-3.5 w-3.5 rounded border-border" />
-            High Value
-          </label>
-          <label className="flex items-center gap-2 text-text-secondary">
-            <input type="checkbox" className="h-3.5 w-3.5 rounded border-border" />
-            Flagged
-          </label>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AnalyticsPanel() {
-  return (
-    <div className="hidden xl:block w-80 2xl:w-96 shrink-0 border-l border-border bg-panel p-4">
-      <h3 className="text-sm font-semibold text-text-primary mb-3">Live Analytics</h3>
+    <div className="hidden xl:block w-80 2xl:w-96 shrink-0 border-l border-border bg-panel p-4 transition-all duration-300">
+      <h3 className="text-sm font-semibold text-text-primary mb-3">Conversation Context</h3>
       <div className="space-y-3 text-xs">
         <div className="flex items-center justify-between">
-          <span className="text-text-secondary">AI Resolution Rate</span>
-          <span className="font-semibold text-text-primary">87.5%</span>
+          <span className="text-text-secondary">Customer</span>
+          <span className="font-semibold text-text-primary">Ahmed Ali</span>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-text-secondary">Human Load (now)</span>
-          <span className="font-semibold text-text-primary">34 agents</span>
+          <span className="text-text-secondary">Store</span>
+          <span className="font-semibold text-text-primary">My Shopify Store</span>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-text-secondary">Escalated</span>
-          <span className="font-semibold text-status-warning">12</span>
+          <span className="text-text-secondary">Channel</span>
+          <span className="font-semibold text-text-primary">WhatsApp</span>
         </div>
-        <div className="flex items-center justify-between">
-          <span className="text-text-secondary">At Risk (SLA)</span>
-          <span className="font-semibold text-status-error">5</span>
+      </div>
+      <div className="mt-4 border-t border-border pt-4 space-y-3 text-xs">
+        <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+          Assignment
+        </p>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">Assigned agent</span>
+            <span className="font-semibold text-text-primary">Hamza</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">Status</span>
+            <span className="font-semibold text-status-success">Live</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">Closed at</span>
+            <span className="font-semibold text-text-primary">—</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">Resolved by</span>
+            <span className="font-semibold text-text-primary">—</span>
+          </div>
         </div>
       </div>
       <div className="mt-4 border-t border-border pt-4 space-y-3">
         <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
-          Routing Snapshot
+          Live Analytics
         </p>
-        <div className="space-y-2">
+        <div className="space-y-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">AI Resolution Rate</span>
+            <span className="font-semibold text-text-primary">87.5%</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">Human Agent Load</span>
+            <span className="font-semibold text-text-primary">34 active</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">Conversations Live</span>
+            <span className="font-semibold text-status-info">126</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">At Risk (SLA)</span>
+            <span className="font-semibold text-status-error">5</span>
+          </div>
+        </div>
+        <div className="space-y-2 pt-2">
+          <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+            Routing Snapshot
+          </p>
           <div>
             <div className="flex items-center justify-between text-xs mb-1">
               <span className="text-text-secondary">AI</span>
@@ -118,84 +97,30 @@ function AnalyticsPanel() {
 }
 
 function AdminInboxContent() {
-  const { chatListCollapsed, contextCollapsed, setChatListCollapsed, setContextCollapsed } = useInboxPanels();
-  const [mode, setMode] = useState<MonitoringMode>('passive');
+  const { contextCollapsed, setContextCollapsed } = useInboxPanels();
 
   return (
     <div className="flex h-full">
-      <FilterPanel />
-
-      {chatListCollapsed ? (
-        <div className="hidden md:flex w-14 shrink-0 flex-col items-center gap-1 border-r border-border bg-panel py-4">
-          <button
-            type="button"
-            onClick={() => setChatListCollapsed(false)}
-            className="rounded p-2.5 text-text-secondary hover:bg-white hover:text-primary transition-colors"
-            title="Expand conversations"
-          >
-            <SquareChevronRight className="h-5 w-5" />
-          </button>
-          <button
-            type="button"
-            className="rounded p-2.5 text-text-secondary hover:bg-white hover:text-primary transition-colors"
-            title="Search"
-          >
-            <Search className="h-5 w-5" />
-          </button>
-        </div>
-      ) : (
-        <div className="hidden md:block w-chatlist-tablet lg:w-chatlist-laptop xl:w-chatlist-desktop 2xl:w-chatlist-ultrawide border-r border-border bg-panel shrink-0">
-          <ChatList />
-        </div>
-      )}
+      <div className="hidden md:block w-chatlist-tablet lg:w-chatlist-laptop xl:w-chatlist-desktop 2xl:w-chatlist-ultrawide border-r border-border bg-panel shrink-0">
+        <ChatList />
+      </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-white">
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-text-muted uppercase tracking-wide">Monitoring Mode</span>
-            <div className="inline-flex rounded-full border border-border bg-panel p-0.5">
-              {(['passive', 'assisted', 'intervene'] as MonitoringMode[]).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setMode(value)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                    mode === value
-                      ? value === 'intervene'
-                        ? 'bg-status-error text-white'
-                        : 'bg-primary text-white'
-                      : 'text-text-secondary'
-                  }`}
-                >
-                  {value === 'passive' && 'Passive'}
-                  {value === 'assisted' && 'Assisted'}
-                  {value === 'intervene' && 'Intervene'}
-                </button>
-              ))}
-            </div>
+          <div className="flex flex-col">
+            <span className="text-xs font-semibold text-text-primary">Monitoring</span>
+            <span className="text-[11px] text-text-secondary">
+              Read-only view of live and historical conversations.
+            </span>
           </div>
-          <p className="text-[11px] text-text-secondary">
-            {mode === 'passive' && 'View-only. Admin cannot intervene.'}
-            {mode === 'assisted' && 'Assisted mode. Use notes & routing without replying as agent.'}
-            {mode === 'intervene' && 'Intervene mode. You are temporarily acting as the agent.'}
-          </p>
         </div>
         <div className="relative flex-1">
-          <ChatWindow />
-          {mode !== 'intervene' && (
-            <div className="pointer-events-auto absolute inset-0 bg-white/60 flex items-center justify-center">
-              <div className="px-6 py-3 rounded-full border border-border bg-white shadow-sm text-xs text-text-secondary">
-                {mode === 'passive'
-                  ? 'Passive Monitor — live view only. Switch to Intervene to take over this conversation.'
-                  : 'Assisted Mode — add routing decisions and notes from side panels. Switch to Intervene to reply as the agent.'}
-              </div>
-            </div>
-          )}
+          <ChatWindow readOnly />
         </div>
       </div>
 
       {contextCollapsed ? (
-        <div className="hidden lg:flex w-12 shrink-0 flex-col items-center border-l border-border bg-panel pt-4">
+        <div className="hidden lg:flex w-8 shrink-0 flex-col items-center border-l border-border bg-panel pt-4 transition-all duration-300">
           <button
             type="button"
             onClick={() => setContextCollapsed(false)}
@@ -206,7 +131,7 @@ function AdminInboxContent() {
           </button>
         </div>
       ) : (
-        <AnalyticsPanel />
+        <ContextPanel />
       )}
     </div>
   );

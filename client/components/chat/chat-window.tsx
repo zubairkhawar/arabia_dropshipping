@@ -154,7 +154,7 @@ const transferTargets = [
 export function ChatWindow({
   isInternalChat = false,
   title = 'Ahmed Ali',
-  subtitle = 'Store: My Shopify Store • Order #12345',
+  subtitle = 'Store: My Shopify Store',
   showTransferControls = false,
   teamName,
   teamMemberNames = [],

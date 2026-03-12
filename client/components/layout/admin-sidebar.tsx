@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -14,6 +15,7 @@ import {
   MessageCircle,
   FolderCog,
   ShieldAlert,
+  ChevronDown,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
@@ -30,10 +32,9 @@ const teamsSection: SidebarLink[] = [{ icon: Users, label: 'Teams', path: '/admi
 
 const agentsSection: SidebarLink[] = [{ icon: User, label: 'Agents', path: '/admin/agents' }];
 
-const conversationsSection: SidebarLink[] = [
+const conversationsViews: SidebarLink[] = [
   { icon: MessageCircle, label: 'All Conversations', path: '/admin/inbox' },
   { icon: MessageCircle, label: 'Live Now', path: '/admin/inbox/live' },
-  { icon: MessageCircle, label: 'Escalated', path: '/admin/inbox/escalated' },
   { icon: MessageCircle, label: 'Closed', path: '/admin/inbox/closed' },
 ];
 
@@ -46,6 +47,7 @@ const bottomSection: SidebarLink[] = [
 export function AdminSidebar() {
   const pathname = usePathname();
   const { isCollapsed } = useSidebar();
+  const [conversationsOpen, setConversationsOpen] = useState(true);
 
   const linkClass = (path: string) => {
     const isActive = pathname === path || pathname?.startsWith(path + '/');
@@ -56,7 +58,7 @@ export function AdminSidebar() {
 
   const renderSection = (title: string, items: SidebarLink[]) => (
     <div key={title} className="mb-4">
-      {!isCollapsed && (
+      {!isCollapsed && title && (
         <p className="px-4 mb-1.5 text-xs font-semibold text-text-muted uppercase tracking-wider">{title}</p>
       )}
       <div className="space-y-0.5">
@@ -72,6 +74,9 @@ export function AdminSidebar() {
       </div>
     </div>
   );
+
+  const activeConversationLabel =
+    conversationsViews.find((view) => pathname?.startsWith(view.path))?.label ?? 'Conversations';
 
   return (
     <div
@@ -98,7 +103,59 @@ export function AdminSidebar() {
           {!isCollapsed && <div className="border-t border-border my-3" />}
           {renderSection('Teams', teamsSection)}
           {renderSection('Agents', agentsSection)}
-          {renderSection('Conversations', conversationsSection)}
+
+          {/* Conversations dropdown behaves like Slack/Notion section */}
+          <div className="mb-4">
+            {!isCollapsed && (
+              <p className="px-4 mb-1.5 text-xs font-semibold text-text-muted uppercase tracking-wider">
+                Conversations
+              </p>
+            )}
+            {isCollapsed ? (
+              <div className="space-y-0.5">
+                {conversationsViews.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <Link key={item.path} href={item.path} className={linkClass(item.path)}>
+                      <Icon className="w-5 h-5 flex-shrink-0" />
+                    </Link>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="space-y-0.5">
+                <button
+                  type="button"
+                  onClick={() => setConversationsOpen((open) => !open)}
+                  className="w-full flex items-center justify-between px-4 py-2.5 rounded-lg text-sm font-medium text-text-secondary hover:bg-panel hover:text-text-primary transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <MessageCircle className="w-5 h-5 flex-shrink-0" />
+                    <span>{activeConversationLabel}</span>
+                  </span>
+                  <ChevronDown
+                    className={`w-4 h-4 text-text-muted transition-transform ${
+                      conversationsOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+                {conversationsOpen && (
+                  <div className="pl-4 space-y-0.5">
+                    {conversationsViews.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <Link key={item.path} href={item.path} className={linkClass(item.path)}>
+                          <Icon className="w-4 h-4 flex-shrink-0" />
+                          <span className="font-medium text-sm">{item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {!isCollapsed && <div className="border-t border-border my-3" />}
           {renderSection('', bottomSection)}
         </nav>
