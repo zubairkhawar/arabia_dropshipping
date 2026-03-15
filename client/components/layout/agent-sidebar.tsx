@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Inbox, Users, Settings, MessageCircle, LucideIcon } from 'lucide-react';
+import { Inbox, Bell, Users, MessageCircle, LucideIcon } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
 
@@ -33,7 +33,7 @@ const sections: SidebarSection[] = [
 ];
 
 const footerItems: SidebarLink[] = [
-  { icon: Settings, label: 'Settings', path: '/agent/settings' },
+  { icon: Bell, label: 'Notifications', path: '/agent/settings' },
 ];
 
 export function AgentSidebar() {

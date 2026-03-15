@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import Link from 'next/link';
 import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose, Camera, ImagePlus, Trash2, X, Copy } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { useAgentPresence, getSlugByName } from '@/contexts/AgentPresenceContext';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
+import { useNotifications } from '@/contexts/NotificationsContext';
 import { usePathname } from 'next/navigation';
 
 type AgentStatus = 'active' | 'offline';
@@ -42,11 +44,21 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const [passwordMessage, setPasswordMessage] = useState<'success' | 'error' | null>(null);
   const pathname = usePathname();
   const displayName = fullName || userName || 'Support Agent';
+  const {
+    getNotificationsForCurrentAgent,
+    unreadCount,
+    markAsRead,
+  } = useNotifications();
+  const notificationList = getNotificationsForCurrentAgent();
 
-  const notifications = [
-    { id: 1, message: 'New conversation assigned', time: '2 min ago' },
-    { id: 2, message: 'Customer requested callback', time: '1 hour ago' },
-  ];
+  const formatNotifTime = (iso: string) => {
+    const d = new Date(iso);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+    if (diff < 86400) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
 
   useEffect(() => {
     if (!showAvatarMenu) return;
@@ -178,24 +190,51 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
             className="relative p-2 rounded-lg hover:bg-panel transition-colors"
           >
             <Bell className="w-5 h-5 text-text-primary" />
-            {notifications.length > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-primary rounded-full" />
+            {unreadCount > 0 && (
+              <span className="absolute top-1 right-1 min-w-[0.5rem] h-2 px-1 flex items-center justify-center bg-primary rounded-full text-[10px] font-semibold text-white">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
             )}
           </button>
           {showNotifications && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setShowNotifications(false)} />
-              <div className="absolute right-0 mt-2 w-80 bg-white border border-border rounded-lg shadow-xl z-20">
-                <div className="p-4 border-b border-border">
+              <div className="absolute right-0 mt-2 w-80 bg-white border border-border rounded-lg shadow-xl z-20 flex flex-col max-h-[28rem]">
+                <div className="p-4 border-b border-border shrink-0">
                   <h3 className="font-semibold text-text-primary">Notifications</h3>
                 </div>
-                <div className="max-h-96 overflow-y-auto">
-                  {notifications.map((n) => (
-                    <div key={n.id} className="p-4 border-b border-border hover:bg-panel cursor-pointer">
-                      <p className="text-sm text-text-primary">{n.message}</p>
-                      <p className="text-xs text-text-muted mt-1">{n.time}</p>
-                    </div>
-                  ))}
+                <div className="overflow-y-auto flex-1 min-h-0">
+                  {notificationList.length === 0 ? (
+                    <div className="p-4 text-sm text-text-muted">No notifications yet.</div>
+                  ) : (
+                    notificationList.slice(0, 10).map((n) => (
+                      <div
+                        key={n.id}
+                        onClick={() => markAsRead(n.id)}
+                        className={`p-4 border-b border-border hover:bg-panel cursor-pointer ${!n.read ? 'bg-primary/5' : ''}`}
+                      >
+                        <p className="text-sm text-text-primary">{n.message}</p>
+                        {n.type === 'chat_transfer' && n.description && n.fromAgentName ? (
+                          <p className="text-xs text-text-muted mt-0.5">
+                            <span className="font-medium text-text-primary">Note from {n.fromAgentName}:</span>{' '}
+                            {n.description}
+                          </p>
+                        ) : (
+                          n.description && <p className="text-xs text-text-muted mt-0.5">{n.description}</p>
+                        )}
+                        <p className="text-xs text-text-muted mt-1">{formatNotifTime(n.createdAt)}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="p-2 border-t border-border shrink-0">
+                  <Link
+                    href="/agent/settings"
+                    onClick={() => setShowNotifications(false)}
+                    className="block w-full text-center py-2 text-sm font-medium text-primary hover:underline rounded-lg hover:bg-panel"
+                  >
+                    Show all notifications
+                  </Link>
                 </div>
               </div>
             </>

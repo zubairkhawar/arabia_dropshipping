@@ -41,6 +41,7 @@ interface InboxConversationsContextType {
   markAgentReplied: (convId: number) => void;
   closeConversation: (convId: number) => void;
   reopenConversation: (convId: number) => void;
+  transferConversation: (convId: number, toAgentId: string, toAgentName: string, description?: string) => void;
   getMessages: (convId: number) => InboxMessage[];
   setMessages: (convId: number, messages: InboxMessage[]) => void;
   appendMessage: (convId: number, message: InboxMessage) => void;
@@ -134,6 +135,23 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     );
   }, []);
 
+  const transferConversation = useCallback((convId: number, toAgentId: string, toAgentName: string) => {
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              handlerType: 'agent' as const,
+              handlerAgentId: toAgentId,
+              handlerName: toAgentName,
+              lastMessage: 'Conversation transferred.',
+              lastActivityAt: 'Just now',
+            }
+          : c
+      )
+    );
+  }, []);
+
   const getMessages = useCallback(
     (convId: number) => messagesByConvId[convId] ?? [],
     [messagesByConvId]
@@ -160,6 +178,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         markAgentReplied,
         closeConversation,
         reopenConversation,
+        transferConversation,
         getMessages,
         setMessages,
         appendMessage,

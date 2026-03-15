@@ -6,6 +6,7 @@ import { SidebarProvider } from '@/contexts/SidebarContext';
 import { AgentProfileProvider } from '@/contexts/AgentProfileContext';
 import { AgentPresenceProvider } from '@/contexts/AgentPresenceContext';
 import { DmChatsProvider } from '@/contexts/DmChatsContext';
+import { NotificationsProvider } from '@/contexts/NotificationsContext';
 import { useSidebar } from '@/contexts/SidebarContext';
 
 function AgentLayoutContent({ children }: { children: React.ReactNode }) {
@@ -35,7 +36,9 @@ export default function AgentLayout({
       <AgentProfileProvider>
         <AgentPresenceProvider>
           <DmChatsProvider>
-            <AgentLayoutContent>{children}</AgentLayoutContent>
+            <NotificationsProvider>
+              <AgentLayoutContent>{children}</AgentLayoutContent>
+            </NotificationsProvider>
           </DmChatsProvider>
         </AgentPresenceProvider>
       </AgentProfileProvider>

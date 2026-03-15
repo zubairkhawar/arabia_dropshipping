@@ -25,11 +25,15 @@ import {
   Square,
   Play,
   Pause,
+  UserPlus,
 } from 'lucide-react';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useInboxConversations } from '@/contexts/InboxConversationsContext';
 import type { InboxMessage } from '@/contexts/InboxConversationsContext';
 import type { TeamEvent } from '@/contexts/TeamsContext';
+import { useTeams } from '@/contexts/TeamsContext';
+import { useAgents } from '@/contexts/AgentsContext';
+import { useNotifications } from '@/contexts/NotificationsContext';
 
 interface MessageAttachment {
   type: 'file' | 'photo' | 'voice';
@@ -163,6 +167,22 @@ export function ChatWindow({
   const pathname = usePathname();
   const { avatarUrl: agentAvatarUrl, fullName: agentFullName } = useAgentProfile();
   const inboxConv = useInboxConversations();
+  const { teams } = useTeams();
+  const { agents, getCurrentAgent } = useAgents();
+  const notifications = useNotifications();
+
+  const transferTargetOptions = (() => {
+    const currentName = agentFullName || getCurrentAgent()?.name || '';
+    const team = teams.find((t) => t.members.some((m) => m === currentName));
+    if (!team) return [];
+    const otherNames = team.members.filter((m) => m !== currentName);
+    return otherNames
+      .map((name) => {
+        const agent = agents.find((a) => a.name === name);
+        return agent ? { id: agent.id, name: agent.name } : null;
+      })
+      .filter((a): a is { id: string; name: string } => a != null);
+  })();
   const isTeamChannel = pathname?.startsWith('/agent/team') || (pathname?.startsWith('/admin/teams') && !!teamName);
   const isDmPage = pathname?.startsWith('/agent/dm');
   const showBroadcastInput = broadcastMode && isInternalChat && !!teamName;
@@ -208,6 +228,10 @@ export function ChatWindow({
   const [playingVoiceId, setPlayingVoiceId] = useState<number | null>(null);
   const [voiceProgress, setVoiceProgress] = useState<Record<number, number>>({});
   const [showTransferMenu, setShowTransferMenu] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferTargetId, setTransferTargetId] = useState<string | null>(null);
+  const [transferTargetName, setTransferTargetName] = useState<string>('');
+  const [transferDescription, setTransferDescription] = useState('');
   const recordingChunksRef = useRef<Blob[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStartRef = useRef<number>(0);
@@ -672,7 +696,22 @@ export function ChatWindow({
                     <button
                       type="button"
                       onClick={() => {
-                        addSystemNote('Conversation sent back to AI bot.');
+                        const content = 'Conversation sent back to AI bot.';
+                        if (inboxConv?.selectedId != null) {
+                          const now = new Date();
+                          const systemMsg: Message = {
+                            id: Math.max(0, ...messages.map((m) => m.id)) + 1,
+                            content,
+                            sender: 'ai',
+                            senderName: 'System',
+                            timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                            sentAt: now.toISOString(),
+                          };
+                          inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
+                          setMessages((prev) => [...prev, systemMsg]);
+                        } else {
+                          addSystemNote(content);
+                        }
                         closeMenus();
                       }}
                       className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary"
@@ -680,6 +719,22 @@ export function ChatWindow({
                       <Bot className="w-4 h-4" />
                       Send back to AI
                     </button>
+                    {showTransferControls && inboxConv?.selectedId != null && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeMenus();
+                          setTransferTargetId(null);
+                          setTransferTargetName('');
+                          setTransferDescription('');
+                          setShowTransferModal(true);
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        Transfer
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -713,7 +768,123 @@ export function ChatWindow({
           )}
         </div>
       </div>
-      
+
+      {/* Transfer chat modal */}
+      {showTransferModal && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/40"
+            onClick={() => setShowTransferModal(false)}
+            aria-hidden
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div
+              className="bg-white rounded-xl border border-border shadow-xl w-full max-w-md pointer-events-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+                <h2 className="text-lg font-semibold text-text-primary">Transfer chat</h2>
+                <button
+                  type="button"
+                  onClick={() => setShowTransferModal(false)}
+                  className="p-1.5 rounded-lg hover:bg-panel text-text-muted"
+                  aria-label="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-text-primary mb-1.5">Transfer to</label>
+                  <select
+                    value={transferTargetId ?? ''}
+                    onChange={(e) => {
+                      const id = e.target.value || null;
+                      setTransferTargetId(id);
+                      const opt = transferTargetOptions.find((o) => o.id === id);
+                      setTransferTargetName(opt?.name ?? '');
+                    }}
+                    className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-text-primary bg-white"
+                  >
+                    <option value="">Select a team member</option>
+                    {transferTargetOptions.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.name}
+                      </option>
+                    ))}
+                  </select>
+                  {transferTargetOptions.length === 0 && (
+                    <p className="text-xs text-text-muted mt-1">No other team members found. Add members in Admin → Teams.</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-text-primary mb-1.5">Note (optional)</label>
+                  <textarea
+                    value={transferDescription}
+                    onChange={(e) => setTransferDescription(e.target.value)}
+                    placeholder="e.g. Customer asked for a callback, please follow up."
+                    rows={3}
+                    className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-text-primary placeholder-text-muted resize-none"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowTransferModal(false)}
+                    className="px-4 py-2 rounded-lg border border-border text-text-primary hover:bg-panel"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!transferTargetId}
+                    onClick={() => {
+                      if (!transferTargetId || !transferTargetName || !inboxConv?.selectedId) return;
+                      const convId = inboxConv.selectedId;
+                      const conv = selectedConv;
+                      const customerName = conv?.customerName ?? 'Customer';
+                      const now = new Date();
+                      const noteText = transferDescription.trim()
+                        ? `Conversation transferred to ${transferTargetName} by ${agentFullName}. ${transferDescription}`
+                        : `Conversation transferred to ${transferTargetName} by ${agentFullName}.`;
+                      const systemMsg: Message = {
+                        id: Math.max(0, ...messages.map((m) => m.id)) + 1,
+                        content: noteText,
+                        sender: 'ai',
+                        senderName: 'System',
+                        timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                        sentAt: now.toISOString(),
+                      };
+                      inboxConv.appendMessage(convId, systemMsg as InboxMessage);
+                      setMessages((prev) => [...prev, systemMsg]);
+                      inboxConv.transferConversation(convId, transferTargetId, transferTargetName);
+                      notifications.addNotification({
+                        type: 'chat_transfer',
+                        message: `Chat transferred to you by ${agentFullName}`,
+                        description: transferDescription.trim() || undefined,
+                        fromAgentId: getCurrentAgent()?.id,
+                        fromAgentName: agentFullName,
+                        toAgentId: transferTargetId,
+                        toAgentName: transferTargetName,
+                        conversationId: convId,
+                        conversationCustomerName: customerName,
+                      });
+                      setShowTransferModal(false);
+                      setTransferTargetId(null);
+                      setTransferTargetName('');
+                      setTransferDescription('');
+                    }}
+                    className="px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Transfer
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Messages Container */}
       <div
         ref={scrollContainerRef}
@@ -760,6 +931,21 @@ export function ChatWindow({
               );
             })}
             {group.messages.map((message) => {
+              const isSystemMessage =
+                message.senderName === 'System' ||
+                message.content.startsWith('Conversation sent back to AI') ||
+                message.content.startsWith('Conversation closed by agent') ||
+                message.content.includes('Conversation transferred to');
+              if (isSystemMessage) {
+                return (
+                  <div key={message.id} id={`message-${message.id}`} className="flex justify-center py-2">
+                    <span className="text-xs text-text-muted italic max-w-[85%] text-center">
+                      {message.content}
+                    </span>
+                  </div>
+                );
+              }
+
               const outgoing = isOutgoingMessage(message);
               const isStarred = starredIds.includes(message.id);
               const showMenu = activeMessageMenuId === message.id;

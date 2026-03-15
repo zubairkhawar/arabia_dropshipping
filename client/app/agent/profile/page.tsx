@@ -131,6 +131,22 @@ export default function AgentProfile() {
                 onChange={(e) => setFullName(e.target.value)}
               />
             </div>
+            {currentAgent?.email && (
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Email</label>
+                <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-panel max-w-md">
+                  <span className="text-sm text-text-primary">{currentAgent.email}</span>
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard?.writeText(currentAgent.email)}
+                    className="p-1.5 rounded-lg hover:bg-white text-text-muted transition-colors"
+                    aria-label="Copy email"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
             {currentAgent?.id && (
               <div>
                 <label className="block text-sm font-semibold text-text-primary mb-2">Agent ID</label>
