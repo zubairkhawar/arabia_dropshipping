@@ -229,6 +229,7 @@ export default function AdminTeams() {
               teamMemberNames={selectedTeam.members}
               teamEvents={teamEvents}
               readOnly
+              broadcastMode
             />
           ) : (
             <div className="flex-1 flex items-center justify-center px-6">

@@ -30,7 +30,7 @@ function ContextPanel() {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-text-secondary">Assigned agent</span>
-            <span className="font-semibold text-text-primary">Hamza</span>
+            <span className="font-semibold text-text-primary">Hamza (ID: 1002)</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-text-secondary">Status</span>

@@ -69,6 +69,8 @@ export interface ChatWindowProps {
   teamEvents?: TeamEvent[];
   /** When true, chat is read-only (monitor mode: no replies/reactions/menus). */
   readOnly?: boolean;
+  /** When true, show broadcast input so admin can send messages and tag agents with @. */
+  broadcastMode?: boolean;
 }
 
 const defaultCustomerMessages: Message[] = [
@@ -145,12 +147,6 @@ const internalTeamMembers = [
   { id: 'hamza', name: 'Hamza' },
 ];
 
-const transferTargets = [
-  { team: 'Team A', members: ['Ali'] },
-  { team: 'Team B', members: ['Hamza'] },
-  { team: 'Team C', members: ['Sarah'] },
-];
-
 export function ChatWindow({
   isInternalChat = false,
   title = 'Ahmed Ali',
@@ -160,18 +156,19 @@ export function ChatWindow({
   teamMemberNames = [],
   teamEvents = [],
   readOnly = false,
+  broadcastMode = false,
 }: ChatWindowProps = {}) {
   const pathname = usePathname();
   const { avatarUrl: agentAvatarUrl, fullName: agentFullName } = useAgentProfile();
-  const isTeamChannel = pathname?.startsWith('/agent/team');
+  const isTeamChannel = pathname?.startsWith('/agent/team') || (pathname?.startsWith('/admin/teams') && !!teamName);
   const isDmPage = pathname?.startsWith('/agent/dm');
+  const showBroadcastInput = broadcastMode && isInternalChat && !!teamName && !!teamMemberNames?.length;
 
   const [messages, setMessages] = useState<Message[]>(
     isInternalChat ? defaultInternalMessages : defaultCustomerMessages,
   );
   const [inputValue, setInputValue] = useState('');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
-  const [showTransferMenu, setShowTransferMenu] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const [showAgentProfile, setShowAgentProfile] = useState(false);
   const [activeGroupTab, setActiveGroupTab] = useState<'info' | 'media' | 'starred' | 'members'>('info');
@@ -199,8 +196,15 @@ export function ChatWindow({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [showMentionDropdown, setShowMentionDropdown] = useState(false);
+  const [mentionFilter, setMentionFilter] = useState('');
+  const mentionAnchorRef = useRef<number>(0);
+  const [mentionIndex, setMentionIndex] = useState(0);
 
   const DROPDOWN_APPROX_HEIGHT = 320;
+  const mentionCandidates = teamMemberNames
+    ? teamMemberNames.filter((n) => n.toLowerCase().includes((mentionFilter || '').toLowerCase()))
+    : [];
 
   useEffect(() => {
     if (activeMessageMenuId === null) return;
@@ -220,6 +224,7 @@ export function ChatWindow({
   const getMessageStyle = (sender: string, senderName: string) => {
     if (sender === 'customer') return 'bg-chat-user text-white';
     if (senderName === 'You') return 'bg-chat-user text-white';
+    if (senderName === 'Admin') return 'bg-primary/15 text-primary border border-primary/30';
     if (sender === 'agent') return 'bg-chat-agent text-text-primary';
     return 'bg-chat-ai text-text-primary';
   };
@@ -244,7 +249,6 @@ export function ChatWindow({
 
   const closeMenus = () => {
     setShowMoreMenu(false);
-    setShowTransferMenu(false);
   };
 
   const toggleStar = (id: number) => {
@@ -438,7 +442,7 @@ export function ChatWindow({
         id: nextId,
         content: text || (pendingAttachment?.type === 'voice' ? 'Voice message' : pendingAttachment?.name || 'Attachment'),
         sender: 'agent' as const,
-        senderName: 'You',
+        senderName: showBroadcastInput ? 'Admin' : 'You',
         timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
         sentAt: now.toISOString(),
         replyTo: replyingTo ?? undefined,
@@ -448,6 +452,7 @@ export function ChatWindow({
     setInputValue('');
     setReplyingTo(null);
     setPendingAttachment(null);
+    setShowMentionDropdown(false);
   };
 
   const startVoiceRecording = () => {
@@ -526,6 +531,69 @@ export function ChatWindow({
 
   const EMOJI_LIST = ['😀', '😂', '❤️', '👍', '👋', '🎉', '🔥', '✨', '😊', '🥳', '🙏', '💯', '😍', '🤔', '👏', '😎', '💪', '🌸', '⭐', '📷'];
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value;
+    setInputValue(v);
+    if (!showBroadcastInput || !teamMemberNames?.length) return;
+    const start = e.target.selectionStart ?? v.length;
+    const textToCursor = v.slice(0, start);
+    const lastAt = textToCursor.lastIndexOf('@');
+    if (lastAt >= 0) {
+      const afterAt = textToCursor.slice(lastAt + 1);
+      if (!/\s/.test(afterAt)) {
+        setMentionFilter(afterAt);
+        mentionAnchorRef.current = lastAt;
+        setShowMentionDropdown(true);
+        setMentionIndex(0);
+        return;
+      }
+    }
+    setShowMentionDropdown(false);
+  };
+
+  const insertMention = (name: string) => {
+    const start = mentionAnchorRef.current;
+    const cursor = inputRef.current?.selectionStart ?? inputValue.length;
+    const newValue =
+      inputValue.slice(0, start) + `@${name} ` + inputValue.slice(cursor);
+    setInputValue(newValue);
+    setShowMentionDropdown(false);
+    setTimeout(() => {
+      inputRef.current?.focus();
+      const pos = start + name.length + 2;
+      inputRef.current?.setSelectionRange(pos, pos);
+    }, 0);
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (showMentionDropdown && mentionCandidates.length > 0) {
+      if (e.key === 'Escape') {
+        setShowMentionDropdown(false);
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        setMentionIndex((i) => (i + 1) % mentionCandidates.length);
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        setMentionIndex((i) => (i - 1 + mentionCandidates.length) % mentionCandidates.length);
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Enter' && mentionCandidates.length > 0) {
+        insertMention(mentionCandidates[mentionIndex]);
+        e.preventDefault();
+        return;
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-white">
       <div className="h-chat-header border-b border-border px-6 flex items-center justify-between bg-white shrink-0">
@@ -553,91 +621,53 @@ export function ChatWindow({
           )}
           {!isTeamChannel && !isDmPage && (
             <>
-          <button
-            type="button"
-            onClick={() => {
-              setShowMoreMenu((v) => !v);
-              setShowTransferMenu(false);
-            }}
-            className="text-text-secondary hover:text-text-primary p-1.5 rounded"
-            aria-label="More options"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-            </svg>
-          </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMoreMenu((v) => !v);
+                }}
+                className="text-text-secondary hover:text-text-primary p-1.5 rounded"
+                aria-label="More options"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"
+                  />
+                </svg>
+              </button>
 
-          {showMoreMenu && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={closeMenus} aria-hidden />
-              <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-border rounded-lg shadow-xl z-20 py-1">
-                <button
-                  type="button"
-                  onClick={() => setShowTransferMenu((v) => !v)}
-                  className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-panel text-text-primary"
-                >
-                  <span className="flex items-center gap-2">
-                    <Users className="w-4 h-4" />
-                    Transfer chat…
-                  </span>
-                  <ChevronRight className="w-4 h-4 text-text-muted" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    addSystemNote('Conversation sent back to AI bot.');
-                    closeMenus();
-                  }}
-                  className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary"
-                >
-                  <Bot className="w-4 h-4" />
-                  Send back to AI
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    addSystemNote('Conversation closed by agent.');
-                    closeMenus();
-                  }}
-                  className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-status-error"
-                >
-                  <AlertCircle className="w-4 h-4" />
-                  Close chat
-                </button>
-              </div>
-
-              {showTransferMenu && (
-                <div className="absolute right-full top-0 mr-1 w-56 bg-white border border-border rounded-lg shadow-xl z-30 py-1 max-h-64 overflow-y-auto">
-                  {transferTargets.map((group) => (
-                    <div key={group.team} className="px-4 py-2">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Users className="w-4 h-4 text-text-muted" />
-                        <span className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                          {group.team}
-                        </span>
-                      </div>
-                      <div className="space-y-1">
-                        {group.members.map((name) => (
-                          <button
-                            key={name}
-                            type="button"
-                            onClick={() => {
-                              addSystemNote(`Conversation transferred to ${name} (${group.team}).`);
-                              closeMenus();
-                            }}
-                            className="w-full flex items-center gap-2 px-2 py-1 text-sm rounded hover:bg-panel text-text-primary"
-                          >
-                            <User className="w-4 h-4 text-text-muted" />
-                            {name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              {showMoreMenu && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={closeMenus} aria-hidden />
+                  <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-border rounded-lg shadow-xl z-20 py-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        addSystemNote('Conversation sent back to AI bot.');
+                        closeMenus();
+                      }}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary"
+                    >
+                      <Bot className="w-4 h-4" />
+                      Send back to AI
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        addSystemNote('Conversation closed by agent.');
+                        closeMenus();
+                      }}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-status-error"
+                    >
+                      <AlertCircle className="w-4 h-4" />
+                      Close chat
+                    </button>
+                  </div>
+                </>
               )}
-            </>
-          )}
             </>
           )}
         </div>
@@ -1150,8 +1180,9 @@ export function ChatWindow({
           </div>
         )}
         {/* Input row - fixed height to align bottom separator with 2nd bar (80px) */}
-        {!readOnly && (
-        <div className="flex items-center gap-2 px-4 h-[80px]">
+        {(!readOnly || showBroadcastInput) && (
+          <div className="flex items-center gap-2 px-4 h-[80px]">
+          {!showBroadcastInput && (
           <div className="relative flex-shrink-0">
             <button
               type="button"
@@ -1203,54 +1234,82 @@ export function ChatWindow({
               onChange={(e) => handleFileSelect(e, 'photo')}
             />
           </div>
+          )}
           <div className="flex-1 min-w-0 relative flex items-center gap-2 border border-border rounded-lg bg-white focus-within:ring-2 focus-within:ring-primary">
             <input
               ref={inputRef}
               type="text"
               value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              placeholder={replyingTo ? `Reply to ${replyingTo.senderName}...` : 'Type a message...'}
+              onChange={handleInputChange}
+              placeholder={
+                showBroadcastInput
+                  ? 'Type a message... Use @ to tag an agent'
+                  : replyingTo
+                    ? `Reply to ${replyingTo.senderName}...`
+                    : 'Type a message...'
+              }
               className="flex-1 min-w-0 px-4 py-2.5 focus:outline-none text-sm bg-transparent"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
+              onKeyDown={handleInputKeyDown}
             />
-            <button
-              type="button"
-              onClick={() => { setShowEmojiPicker((v) => !v); setShowAttachmentMenu(false); }}
-              className="p-2 text-text-muted hover:text-primary rounded-full transition-colors flex-shrink-0"
-              aria-label="Emoji"
-            >
-              <Smile className="w-5 h-5" />
-            </button>
-            {showEmojiPicker && (
+            {showBroadcastInput && showMentionDropdown && mentionCandidates.length > 0 && (
               <>
-                <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)} aria-hidden />
-                <div className="absolute right-0 bottom-full mb-1 w-64 bg-white border border-border rounded-xl shadow-xl z-20 p-3">
-                  <p className="text-xs font-medium text-text-muted mb-2">Emoji</p>
-                  <div className="grid grid-cols-5 gap-1">
-                    {EMOJI_LIST.map((emoji) => (
-                      <button
-                        key={emoji}
-                        type="button"
-                        className="w-9 h-9 flex items-center justify-center text-xl rounded-lg hover:bg-panel"
-                        onClick={() => {
-                          setInputValue((prev) => prev + emoji);
-                          inputRef.current?.focus();
-                        }}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => setShowMentionDropdown(false)}
+                  aria-hidden
+                />
+                <div className="absolute left-0 right-0 bottom-full mb-1 max-h-48 overflow-y-auto bg-white border border-border rounded-lg shadow-xl z-20 py-1">
+                  {mentionCandidates.map((name, i) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className={`w-full px-3 py-2 text-left text-sm hover:bg-panel text-text-primary flex items-center gap-2 ${i === mentionIndex ? 'bg-panel' : ''}`}
+                      onClick={() => insertMention(name)}
+                    >
+                      <User className="w-4 h-4 text-text-muted flex-shrink-0" />
+                      {name}
+                    </button>
+                  ))}
                 </div>
               </>
             )}
+            {!showBroadcastInput && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setShowEmojiPicker((v) => !v); setShowAttachmentMenu(false); }}
+                  className="p-2 text-text-muted hover:text-primary rounded-full transition-colors flex-shrink-0"
+                  aria-label="Emoji"
+                >
+                  <Smile className="w-5 h-5" />
+                </button>
+                {showEmojiPicker && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)} aria-hidden />
+                    <div className="absolute right-0 bottom-full mb-1 w-64 bg-white border border-border rounded-xl shadow-xl z-20 p-3">
+                      <p className="text-xs font-medium text-text-muted mb-2">Emoji</p>
+                      <div className="grid grid-cols-5 gap-1">
+                        {EMOJI_LIST.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            className="w-9 h-9 flex items-center justify-center text-xl rounded-lg hover:bg-panel"
+                            onClick={() => {
+                              setInputValue((prev) => prev + emoji);
+                              inputRef.current?.focus();
+                            }}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
           </div>
-          {isRecording ? (
+          {!showBroadcastInput && (isRecording ? (
             <button
               type="button"
               onClick={stopVoiceRecording}
@@ -1268,7 +1327,7 @@ export function ChatWindow({
             >
               <Mic className="w-6 h-6" />
             </button>
-          )}
+          ))}
           <button
             type="button"
             className="bg-primary text-white px-5 py-2.5 rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium flex-shrink-0"
@@ -1276,7 +1335,7 @@ export function ChatWindow({
           >
             Send
           </button>
-        </div>
+          </div>
         )}
       </div>
 

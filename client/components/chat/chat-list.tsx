@@ -18,11 +18,14 @@ interface Conversation {
   status: ConversationStatus;
   handlerType: 'ai' | 'agent';
   handlerName?: string;
+  /** Backend-generated agent ID when handler is an agent. */
+  handlerAgentId?: string;
   closedAt?: string;
 }
 
 interface AgentAvatar {
   id: string;
+  agentId: string;
   name: string;
   initials: string;
   online: boolean;
@@ -58,6 +61,7 @@ export function ChatList() {
       status: 'active',
       handlerType: 'agent',
       handlerName: 'Hamza',
+      handlerAgentId: '1002',
     },
     {
       id: 3,
@@ -70,6 +74,7 @@ export function ChatList() {
       status: 'resolved',
       handlerType: 'agent',
       handlerName: 'Sarah',
+      handlerAgentId: '1003',
       closedAt: '1h ago',
     },
   ]);
@@ -83,11 +88,11 @@ export function ChatList() {
   const agents: AgentAvatar[] = useMemo(() => {
     const uniqueAgents = new Map<string, AgentAvatar>();
     conversations.forEach((conv) => {
-      if (conv.handlerType === 'agent' && conv.handlerName) {
-        const id = conv.handlerName.toLowerCase();
-        if (!uniqueAgents.has(id)) {
-          uniqueAgents.set(id, {
-            id,
+      if (conv.handlerType === 'agent' && conv.handlerName && conv.handlerAgentId) {
+        if (!uniqueAgents.has(conv.handlerAgentId)) {
+          uniqueAgents.set(conv.handlerAgentId, {
+            id: conv.handlerAgentId,
+            agentId: conv.handlerAgentId,
             name: conv.handlerName,
             initials: conv.handlerName
               .split(' ')
@@ -114,10 +119,7 @@ export function ChatList() {
 
     if (selectedAgentId) {
       list = list.filter(
-        (c) =>
-          c.handlerType === 'agent' &&
-          c.handlerName &&
-          c.handlerName.toLowerCase() === selectedAgentId,
+        (c) => c.handlerType === 'agent' && c.handlerAgentId === selectedAgentId,
       );
     }
 
@@ -127,35 +129,11 @@ export function ChatList() {
   const liveConversations = filteredConversations.filter((c) => c.status === 'active');
   const closedConversations = filteredConversations.filter((c) => c.status === 'resolved');
 
-  const viewDescription =
-    view === 'live'
-      ? 'Live conversations happening right now.'
-      : view === 'closed'
-        ? 'Historical conversations, sorted by closure time.'
-        : 'System-wide feed of live and closed conversations.';
-
-  const activeAgentLabel =
-    selectedAgentId && agents.find((a) => a.id === selectedAgentId)?.name;
-
   return (
     <div className="flex flex-col h-full">
-      <div className="h-chat-header border-b border-border px-4 flex flex-col gap-2 shrink-0 bg-panel">
-        <div className="flex items-center gap-2">
-          <div className="flex flex-col min-w-0">
-            <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">
-              Activity Feed
-            </p>
-            <p className="text-[11px] text-text-secondary truncate">
-              {activeAgentLabel
-                ? `Monitoring conversations for ${activeAgentLabel}.`
-                : viewDescription}
-            </p>
-          </div>
-        </div>
-      </div>
       <div className="flex flex-1 min-h-0">
         {/* Thin vertical agent avatar bar */}
-        <div className="w-12 border-r border-border bg-panel flex flex-col items-center py-3 gap-3">
+        <div className="w-12 border-r border-border bg-panel flex flex-col items-center pt-4 gap-3">
           {agents.map((agent) => {
             const isActive = agent.id === selectedAgentId;
             return (
@@ -186,6 +164,9 @@ export function ChatList() {
                     <div className="flex flex-col">
                       <span className="text-sm font-semibold text-text-primary truncate">
                         {agent.name}
+                      </span>
+                      <span className="text-[10px] font-mono text-text-muted">
+                        ID: {agent.agentId}
                       </span>
                       <span className="text-[11px] text-text-muted">
                         {agent.online ? 'Online' : 'Offline'}

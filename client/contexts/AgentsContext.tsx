@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect, Rea
 
 const STORAGE_KEY = 'agents-data';
 
+/** Agent unique ID is set by the backend when the admin creates a new agent. */
 export interface AgentRecord {
   id: string;
   email: string;
@@ -18,7 +19,9 @@ interface AgentsData {
 }
 
 const defaultAgents: AgentRecord[] = [
-  { id: 'agent-1', email: 'agent@example.com', name: 'Support Agent', password: 'changeme', avatarUrl: null },
+  { id: '1001', email: 'agent@example.com', name: 'Support Agent', password: 'changeme', avatarUrl: null },
+  { id: '1002', email: 'hamza@example.com', name: 'Hamza', password: 'changeme', avatarUrl: null },
+  { id: '1003', email: 'sarah@example.com', name: 'Sarah', password: 'changeme', avatarUrl: null },
 ];
 
 function loadFromStorage(): AgentsData {
@@ -86,7 +89,8 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
 
   const addAgent = useCallback(
     (email: string, name: string, password: string) => {
-      const id = `agent-${Date.now()}`;
+      // In production, the backend creates the agent and returns the generated id.
+      const id = String(Math.floor(1000 + Math.random() * 9000));
       const newAgent: AgentRecord = { id, email, name, password, avatarUrl: null };
       persist({ ...data, agents: [...data.agents, newAgent] });
     },

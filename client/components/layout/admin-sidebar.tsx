@@ -49,12 +49,17 @@ export function AdminSidebar() {
   const { isCollapsed } = useSidebar();
   const [conversationsOpen, setConversationsOpen] = useState(true);
 
-  const linkClass = (path: string) => {
-    const isActive = pathname === path || pathname?.startsWith(path + '/');
+  const linkClass = (path: string, exactOnly = false) => {
+    const isActive = exactOnly
+      ? pathname === path
+      : pathname === path || pathname?.startsWith(path + '/');
     return `flex items-center gap-3 px-4 py-2.5 rounded-lg transition-colors ${
       isActive ? 'bg-primary text-white' : 'text-text-secondary hover:bg-panel hover:text-text-primary'
     }`;
   };
+
+  /** Conversation views are siblings; only one should be active (exact path match). */
+  const conversationLinkClass = (path: string) => linkClass(path, true);
 
   const renderSection = (title: string, items: SidebarLink[]) => (
     <div key={title} className="mb-4">
@@ -74,9 +79,6 @@ export function AdminSidebar() {
       </div>
     </div>
   );
-
-  const activeConversationLabel =
-    conversationsViews.find((view) => pathname?.startsWith(view.path))?.label ?? 'Conversations';
 
   return (
     <div
@@ -116,7 +118,7 @@ export function AdminSidebar() {
                 {conversationsViews.map((item) => {
                   const Icon = item.icon;
                   return (
-                    <Link key={item.path} href={item.path} className={linkClass(item.path)}>
+                    <Link key={item.path} href={item.path} className={conversationLinkClass(item.path)}>
                       <Icon className="w-5 h-5 flex-shrink-0" />
                     </Link>
                   );
@@ -131,7 +133,7 @@ export function AdminSidebar() {
                 >
                   <span className="flex items-center gap-2">
                     <MessageCircle className="w-5 h-5 flex-shrink-0" />
-                    <span>{activeConversationLabel}</span>
+                    <span>Conversations</span>
                   </span>
                   <ChevronDown
                     className={`w-4 h-4 text-text-muted transition-transform ${
@@ -144,7 +146,7 @@ export function AdminSidebar() {
                     {conversationsViews.map((item) => {
                       const Icon = item.icon;
                       return (
-                        <Link key={item.path} href={item.path} className={linkClass(item.path)}>
+                        <Link key={item.path} href={item.path} className={conversationLinkClass(item.path)}>
                           <Icon className="w-4 h-4 flex-shrink-0" />
                           <span className="font-medium text-sm">{item.label}</span>
                         </Link>
