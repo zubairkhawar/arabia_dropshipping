@@ -1,6 +1,6 @@
 'use client';
 
-import { MessageCircle, Bot, Users, CircleDot, MessageSquare, Languages, Activity } from 'lucide-react';
+import { MessageCircle, Bot, Users, CircleDot, Languages, Activity } from 'lucide-react';
 import { KPICard } from '@/components/cards/kpi-card';
 import { LineChartComponent } from '@/components/charts/line-chart';
 import { PieChartComponent } from '@/components/charts/pie-chart';
@@ -85,44 +85,6 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-lg p-6 border border-border shadow-sm">
-          <h3 className="text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
-            <MessageSquare className="w-5 h-5 text-primary" />
-            Recent Activity
-          </h3>
-          <div className="space-y-4">
-            <div className="flex gap-3">
-              <div className="w-2 h-2 rounded-full bg-primary mt-1.5 shrink-0" />
-              <div>
-                <p className="text-sm text-text-primary">New conversation assigned to Hamza</p>
-                <p className="text-xs text-text-muted">5 minutes ago</p>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <div className="w-2 h-2 rounded-full bg-status-success mt-1.5 shrink-0" />
-              <div>
-                <p className="text-sm text-text-primary">Conversation resolved by AI</p>
-                <p className="text-xs text-text-muted">12 minutes ago</p>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <div className="w-2 h-2 rounded-full bg-status-info mt-1.5 shrink-0" />
-              <div>
-                <p className="text-sm text-text-primary">Agent Sarah went online</p>
-                <p className="text-xs text-text-muted">1 hour ago</p>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <div className="w-2 h-2 rounded-full bg-text-muted mt-1.5 shrink-0" />
-              <div>
-                <p className="text-sm text-text-primary">Daily report generated</p>
-                <p className="text-xs text-text-muted">2 hours ago</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

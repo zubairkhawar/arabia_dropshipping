@@ -52,9 +52,15 @@ export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopB
             onClick={() => setShowUserMenu(!showUserMenu)}
             className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-panel transition-colors"
           >
-            <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
-              <User className="w-5 h-5 text-white" />
-            </div>
+            {userRole === 'admin' ? (
+              <div className="w-8 h-8 rounded-full flex items-center justify-center border border-border bg-white">
+                <User className="w-5 h-5 text-black" />
+              </div>
+            ) : (
+              <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
+                <User className="w-5 h-5 text-white" />
+              </div>
+            )}
             <span className="text-text-primary font-medium">{userName}</span>
             <ChevronDown className="w-4 h-4 text-text-muted" />
           </button>
@@ -67,15 +73,19 @@ export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopB
               ></div>
               <div className="absolute right-0 mt-2 w-48 bg-white border border-border rounded-lg shadow-xl z-20">
                 <div className="p-2">
-                  <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2">
-                    <User className="w-4 h-4" />
-                    Profile
-                  </button>
-                  <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2">
-                    <Settings className="w-4 h-4" />
-                    Settings
-                  </button>
-                  <div className="border-t border-border my-2"></div>
+                  {userRole !== 'admin' && (
+                    <>
+                      <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2">
+                        <User className="w-4 h-4" />
+                        Profile
+                      </button>
+                      <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2">
+                        <Settings className="w-4 h-4" />
+                        Settings
+                      </button>
+                      <div className="border-t border-border my-2"></div>
+                    </>
+                  )}
                   <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-status-error flex items-center gap-2">
                     <LogOut className="w-4 h-4" />
                     Logout

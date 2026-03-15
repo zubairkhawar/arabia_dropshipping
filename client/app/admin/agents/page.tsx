@@ -2,10 +2,27 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
-import { UserPlus, MoreVertical, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy } from 'lucide-react';
+import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X } from 'lucide-react';
+import { AgentActivityBar } from '@/components/agents/activity-bar';
+
+/** Mock per-agent performance metrics (replace with API when available). */
+function getAgentMetrics(agentId: string, index: number): { uptimePercent: number; avgResponseTimeSeconds: number } {
+  const seed = agentId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  return {
+    uptimePercent: 96 + (seed % 5),
+    avgResponseTimeSeconds: 45 + (seed % 90),
+  };
+}
+
+function formatAvgResponse(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return s > 0 ? `${m}.${Math.round((s / 60) * 10)}m` : `${m}m`;
+}
 
 export default function AdminAgents() {
-  const { agents, addAgent, removeAgent } = useAgents();
+  const { agents, addAgent, removeAgent, updateAgent } = useAgents();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listCollapsed, setListCollapsed] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -13,7 +30,8 @@ export default function AdminAgents() {
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [menuAgentId, setMenuAgentId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
 
   useEffect(() => {
     if (!selectedId && agents.length > 0) {
@@ -22,6 +40,10 @@ export default function AdminAgents() {
       setSelectedId(agents[0]?.id ?? null);
     }
   }, [agents, selectedId]);
+
+  useEffect(() => {
+    setEditingName(false);
+  }, [selectedId]);
 
   const selectedAgent = useMemo(
     () => agents.find((a) => a.id === selectedId) ?? null,
@@ -44,7 +66,6 @@ export default function AdminAgents() {
   const handleDelete = (id: string, label: string) => {
     if (!confirm(`Delete agent "${label}" and remove their access to the agent portal?`)) return;
     removeAgent(id);
-    if (menuAgentId === id) setMenuAgentId(null);
   };
 
   const width = listCollapsed ? 64 : 280;
@@ -112,66 +133,33 @@ export default function AdminAgents() {
               <ul className="p-2 space-y-0.5">
                 {agents.map((agent) => {
                   const isActive = agent.id === selectedId;
-                  const menuOpen = menuAgentId === agent.id;
                   return (
                     <li
                       key={agent.id}
-                      className={`group rounded-lg ${isActive ? 'bg-primary/5' : ''}`}
+                      className={`rounded-lg ${isActive ? 'bg-primary/5' : ''}`}
                     >
-                      <div className="flex items-center min-w-0">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedId(agent.id)}
-                          className={`flex items-center gap-3 px-3 py-2 rounded-l-lg min-w-0 flex-1 text-left transition-colors ${
-                            isActive
-                              ? 'text-primary'
-                              : 'text-text-secondary hover:bg-panel hover:text-text-primary'
-                          }`}
-                        >
-                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0">
-                            {agent.name.charAt(0)}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium truncate">{agent.name}</p>
-                            <p className="text-[11px] text-text-muted truncate">
-                              {agent.email}
-                            </p>
-                            <p className="text-[10px] text-text-muted truncate font-mono">
-                              ID: {agent.id}
-                            </p>
-                          </div>
-                        </button>
-                        <div className="relative pr-1">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setMenuAgentId((current) =>
-                                current === agent.id ? null : agent.id,
-                              )
-                            }
-                            className={`p-1.5 rounded-lg transition-colors ${
-                              menuOpen
-                                ? 'bg-panel text-text-primary'
-                                : 'text-text-muted hover:bg-panel hover:text-text-primary opacity-0 group-hover:opacity-100'
-                            }`}
-                            aria-label="Agent options"
-                          >
-                            <MoreVertical className="w-4 h-4" />
-                          </button>
-                          {menuOpen && (
-                            <div className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-border bg-card shadow-lg z-20 py-1">
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(agent.id, agent.name)}
-                                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-status-error hover:bg-panel text-left"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                                Delete agent
-                              </button>
-                            </div>
-                          )}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(agent.id)}
+                        className={`flex items-center gap-3 px-3 py-2 rounded-lg w-full min-w-0 text-left transition-colors ${
+                          isActive
+                            ? 'text-primary'
+                            : 'text-text-secondary hover:bg-panel hover:text-text-primary'
+                        }`}
+                      >
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0">
+                          {agent.name.charAt(0)}
                         </div>
-                      </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">{agent.name}</p>
+                          <p className="text-[11px] text-text-muted truncate">
+                            {agent.email}
+                          </p>
+                          <p className="text-[10px] text-text-muted truncate font-mono">
+                            ID: {agent.id}
+                          </p>
+                        </div>
+                      </button>
                     </li>
                   );
                 })}
@@ -191,17 +179,82 @@ export default function AdminAgents() {
         </div>
 
         {selectedAgent ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-card rounded-xl border border-border shadow-sm p-6 space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            {/* Row 1: Agent info (col 1-2) + Access & Lifecycle (col 3-4) */}
+            <div className="lg:col-span-2 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary text-lg font-semibold">
-                  {selectedAgent.name.charAt(0)}
+                  {(editingName ? nameDraft : selectedAgent.name).charAt(0) || '?'}
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-text-primary">
-                    {selectedAgent.name}
-                  </p>
-                  <p className="text-xs text-text-secondary">Agent login identity</p>
+                <div className="min-w-0 flex-1">
+                  {editingName ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={nameDraft}
+                        onChange={(e) => setNameDraft(e.target.value)}
+                        className="flex-1 min-w-0 px-2 py-1.5 text-sm font-semibold border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-text-primary"
+                        placeholder="Agent name"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const v = nameDraft.trim();
+                            if (v) {
+                              updateAgent(selectedAgent.id, { name: v });
+                              setEditingName(false);
+                            }
+                          }
+                          if (e.key === 'Escape') {
+                            setNameDraft(selectedAgent.name);
+                            setEditingName(false);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const v = nameDraft.trim();
+                          if (v) {
+                            updateAgent(selectedAgent.id, { name: v });
+                            setEditingName(false);
+                          }
+                        }}
+                        className="p-1.5 rounded-lg bg-primary text-white hover:bg-primary-dark"
+                        aria-label="Save name"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNameDraft(selectedAgent.name);
+                          setEditingName(false);
+                        }}
+                        className="p-1.5 rounded-lg border border-border text-text-muted hover:bg-panel"
+                        aria-label="Cancel"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-text-primary">
+                        {selectedAgent.name}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNameDraft(selectedAgent.name);
+                          setEditingName(true);
+                        }}
+                        className="p-1 rounded-lg text-text-muted hover:bg-panel hover:text-primary transition-colors"
+                        aria-label="Rename agent"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                  <p className="text-xs text-text-secondary mt-0.5">Agent login identity</p>
                 </div>
               </div>
               <div className="space-y-3 text-sm">
@@ -266,7 +319,8 @@ export default function AdminAgents() {
               </div>
             </div>
 
-            <div className="bg-card rounded-xl border border-border shadow-sm p-6 space-y-4">
+            {/* Access & Lifecycle - same row as agent info */}
+            <div className="lg:col-span-2 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4">
               <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
                 Access & Lifecycle
               </p>
@@ -285,6 +339,51 @@ export default function AdminAgents() {
                 </button>
               </div>
             </div>
+
+            {/* Row 2: Attendance (3/4) + Performance (1/4) */}
+            {selectedAgent && (
+              <div className="lg:col-span-3 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4">
+                <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                  Attendance
+                </p>
+                <p className="text-xs text-text-secondary">
+                  Activity over the last 26 weeks (GitHub-style)
+                </p>
+                <AgentActivityBar agentId={selectedAgent.id} />
+              </div>
+            )}
+            {selectedAgent && (
+              <div className="lg:col-span-1 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4">
+                <p className="text-xs font-semibold text-text-muted uppercase tracking-wider flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4" />
+                  Performance
+                </p>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-panel">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                      <Clock className="w-5 h-5 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-text-muted">Uptime</p>
+                      <p className="text-lg font-semibold text-text-primary">
+                        {getAgentMetrics(selectedAgent.id, Math.max(0, agents.findIndex((a) => a.id === selectedAgent.id))).uptimePercent}%
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-panel">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                      <TrendingUp className="w-5 h-5 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-text-muted">Avg response</p>
+                      <p className="text-lg font-semibold text-text-primary">
+                        {formatAvgResponse(getAgentMetrics(selectedAgent.id, Math.max(0, agents.findIndex((a) => a.id === selectedAgent.id))).avgResponseTimeSeconds)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex-1 flex items-center justify-center">
