@@ -2,13 +2,14 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose, Camera, ImagePlus, Trash2, X, Copy } from 'lucide-react';
+import { Search, Bell, User, ChevronDown, LogOut, KeyRound, PanelRightOpen, PanelLeftClose, Camera, ImagePlus, Trash2, X, Copy, Eye, EyeOff } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { useAgentPresence, getSlugByName } from '@/contexts/AgentPresenceContext';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useNotifications } from '@/contexts/NotificationsContext';
+import { useToast } from '@/contexts/ToastContext';
 import { usePathname } from 'next/navigation';
 
 type AgentStatus = 'active' | 'offline';
@@ -27,6 +28,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [showProfilePopup, setShowProfilePopup] = useState(false);
+  const [showChangePasswordPopup, setShowChangePasswordPopup] = useState(false);
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
@@ -39,9 +41,13 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const slug = getSlugByName(fullName);
   const rawStatus = slug ? getPresence(slug) : 'offline';
   const agentStatus: AgentStatus = isWithinSchedule() ? rawStatus : 'offline';
+  const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordMessage, setPasswordMessage] = useState<'success' | 'error' | null>(null);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState<'success' | 'error' | 'wrong_old' | null>(null);
+  const { toast } = useToast();
   const pathname = usePathname();
   const displayName = fullName || userName || 'Support Agent';
   const {
@@ -99,6 +105,10 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const handleChangePassword = (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordMessage(null);
+    if (currentAgent?.password != null && oldPassword !== currentAgent.password) {
+      setPasswordMessage('wrong_old');
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setPasswordMessage('error');
       return;
@@ -106,9 +116,12 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
     if (!newPassword.trim()) return;
     if (currentAgentId) {
       updateAgent(currentAgentId, { password: newPassword });
+      setOldPassword('');
       setNewPassword('');
       setConfirmPassword('');
       setPasswordMessage('success');
+      setShowChangePasswordPopup(false);
+      toast('Password changed successfully');
     }
   };
 
@@ -260,13 +273,8 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
           {showUserMenu && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setShowUserMenu(false)} />
-              <div className="absolute right-0 mt-2 w-48 bg-white border border-border rounded-lg shadow-xl z-20">
+              <div className="absolute right-0 mt-2 w-52 min-w-[10rem] bg-white border border-border rounded-lg shadow-xl z-20">
                 <div className="p-2">
-                  {currentAgent?.id && (
-                    <p className="px-3 py-1.5 text-xs text-text-muted font-mono border-b border-border mb-2">
-                      Agent ID: {currentAgent.id}
-                    </p>
-                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -275,12 +283,19 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                     }}
                     className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2 text-sm"
                   >
-                    <User className="w-4 h-4" />
+                    <User className="w-4 h-4 flex-shrink-0" />
                     Profile
                   </button>
-                  <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2 text-sm">
-                    <Settings className="w-4 h-4" />
-                    Settings
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUserMenu(false);
+                      setShowChangePasswordPopup(true);
+                    }}
+                    className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-text-primary flex items-center gap-2 text-sm whitespace-nowrap"
+                  >
+                    <KeyRound className="w-4 h-4 flex-shrink-0" />
+                    Change password
                   </button>
                   <div className="border-t border-border my-2" />
                   <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-status-error flex items-center gap-2 text-sm">
@@ -306,7 +321,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
             <div
-              className="bg-white rounded-xl border border-border shadow-xl w-full max-w-md pointer-events-auto"
+              className="bg-white rounded-xl border border-border shadow-xl w-full max-w-md pointer-events-auto max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between px-6 py-4 border-b border-border">
@@ -321,80 +336,84 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                 </button>
               </div>
               <div className="p-6 space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center gap-6">
-                  <div className="relative flex-shrink-0" ref={avatarMenuRef}>
-                    <button
-                      type="button"
-                      data-avatar-trigger
-                      onClick={() => setShowAvatarMenu(!showAvatarMenu)}
-                      className="relative block w-24 h-24 rounded-full overflow-hidden bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
-                      aria-label="Change profile photo"
-                    >
-                      {avatarUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={avatarUrl} alt="Profile" className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="w-full h-full flex items-center justify-center text-2xl font-semibold text-primary">
-                          {(fullName || '?').charAt(0).toUpperCase()}
-                        </span>
-                      )}
-                      <span className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center shadow">
-                        <Camera className="w-4 h-4" />
+                {/* Big avatar centered */}
+                <div className="relative flex justify-center" ref={avatarMenuRef}>
+                  <button
+                    type="button"
+                    data-avatar-trigger
+                    onClick={() => setShowAvatarMenu(!showAvatarMenu)}
+                    className="relative block w-44 h-44 rounded-full overflow-hidden bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+                    aria-label="Change profile photo"
+                  >
+                    {avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={avatarUrl} alt="Profile" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="w-full h-full flex items-center justify-center text-5xl font-semibold text-primary">
+                        {(fullName || '?').charAt(0).toUpperCase()}
                       </span>
-                    </button>
-                    {showAvatarMenu && (
-                      <div className="absolute left-0 top-full mt-2 z-20 w-48 bg-white border border-border rounded-xl shadow-xl py-1">
-                        <button
-                          type="button"
-                          onClick={handleChoosePhoto}
-                          className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-text-primary hover:bg-panel"
-                        >
-                          <ImagePlus className="w-5 h-5 text-text-muted" />
-                          Choose photo
-                        </button>
-                        {avatarUrl && (
-                          <button
-                            type="button"
-                            onClick={handleDeletePhoto}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-status-error hover:bg-panel"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                            Delete photo
-                          </button>
-                        )}
-                        <div className="border-t border-border my-1" />
-                        <button
-                          type="button"
-                          onClick={() => setShowAvatarMenu(false)}
-                          className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-text-muted hover:bg-panel"
-                        >
-                          <X className="w-5 h-5" />
-                          Cancel
-                        </button>
-                      </div>
                     )}
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={handleFileChange}
-                    />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <label className="block text-sm font-semibold text-text-primary mb-2">Full Name</label>
-                    <input
-                      type="text"
-                      className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-text-primary placeholder-text-muted"
-                      placeholder="Enter your name"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                    />
+                    <span className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center shadow">
+                      <Camera className="w-4 h-4" />
+                    </span>
+                  </button>
+                  {showAvatarMenu && (
+                    <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 z-20 w-48 bg-white border border-border rounded-xl shadow-xl py-1">
+                      <button
+                        type="button"
+                        onClick={handleChoosePhoto}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-text-primary hover:bg-panel"
+                      >
+                        <ImagePlus className="w-5 h-5 text-text-muted" />
+                        Choose photo
+                      </button>
+                      {avatarUrl && (
+                        <button
+                          type="button"
+                          onClick={handleDeletePhoto}
+                          className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-status-error hover:bg-panel"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                          Delete photo
+                        </button>
+                      )}
+                      <div className="border-t border-border my-1" />
+                      <button
+                        type="button"
+                        onClick={() => setShowAvatarMenu(false)}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-text-muted hover:bg-panel"
+                      >
+                        <X className="w-5 h-5" />
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleFileChange}
+                  />
+                </div>
+                {/* Name and Agent ID on same row; below it Email */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <label className="block text-xs font-semibold text-text-muted mb-1">Name</label>
+                      <input
+                        type="text"
+                        className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-text-primary placeholder-text-muted text-sm"
+                        placeholder="Enter your name"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                      />
+                    </div>
                     {currentAgent?.id && (
-                      <div className="mt-3">
+                      <div className="flex-shrink-0">
                         <label className="block text-xs font-semibold text-text-muted mb-1">Agent ID</label>
-                        <div className="inline-flex items-center gap-2 px-2 py-1.5 rounded border border-border bg-panel">
-                          <code className="text-xs font-mono text-text-primary">{currentAgent.id}</code>
+                        <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-panel">
+                          <code className="text-sm font-mono text-text-primary">{currentAgent.id}</code>
                           <button
                             type="button"
                             onClick={() => navigator.clipboard?.writeText(currentAgent.id)}
@@ -407,47 +426,125 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                       </div>
                     )}
                   </div>
-                </div>
-                <div className="border-t border-border pt-4">
-                  <h3 className="text-sm font-semibold text-text-primary mb-3">Change password</h3>
-                  <p className="text-xs text-text-muted mb-3">
-                    Your new password will be reflected in the admin panel.
-                  </p>
-                  <form onSubmit={handleChangePassword} className="space-y-3">
+                  {currentAgent?.email && (
                     <div>
-                      <label className="block text-xs font-medium text-text-primary mb-1">New password</label>
+                      <label className="block text-xs font-semibold text-text-muted mb-1">Email</label>
+                      <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-border bg-panel">
+                        <span className="text-sm text-text-primary truncate">{currentAgent.email}</span>
+                        <button
+                          type="button"
+                          onClick={() => navigator.clipboard?.writeText(currentAgent.email)}
+                          className="p-1 rounded hover:bg-white text-text-muted flex-shrink-0"
+                          aria-label="Copy email"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {showChangePasswordPopup && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/40"
+            onClick={() => {
+              setShowChangePasswordPopup(false);
+              setPasswordMessage(null);
+              setOldPassword('');
+            }}
+            aria-hidden
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div
+              className="bg-white rounded-xl border border-border shadow-xl w-full max-w-lg pointer-events-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+                <h2 className="text-lg font-semibold text-text-primary">Change password</h2>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowChangePasswordPopup(false);
+                    setPasswordMessage(null);
+                    setOldPassword('');
+                  }}
+                  className="p-1.5 rounded-lg hover:bg-panel text-text-muted"
+                  aria-label="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6">
+                <form onSubmit={handleChangePassword} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-text-primary mb-1">Old password</label>
+                    <input
+                      type="text"
+                      value={oldPassword}
+                      onChange={(e) => { setOldPassword(e.target.value); setPasswordMessage(null); }}
+                      placeholder="Old password"
+                      className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-text-primary text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-text-primary mb-1">New password</label>
+                    <div className="relative">
                       <input
-                        type="password"
+                        type={showNewPassword ? 'text' : 'password'}
                         value={newPassword}
                         onChange={(e) => { setNewPassword(e.target.value); setPasswordMessage(null); }}
                         placeholder="New password"
-                        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-text-primary text-sm"
+                        className="w-full px-3 py-2 pr-10 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-text-primary text-sm"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPassword((v) => !v)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-text-muted hover:text-text-primary"
+                        aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-text-primary mb-1">Confirm new password</label>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-text-primary mb-1">Confirm new password</label>
+                    <div className="relative">
                       <input
-                        type="password"
+                        type={showConfirmPassword ? 'text' : 'password'}
                         value={confirmPassword}
                         onChange={(e) => { setConfirmPassword(e.target.value); setPasswordMessage(null); }}
                         placeholder="Confirm new password"
-                        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-text-primary text-sm"
+                        className="w-full px-3 py-2 pr-10 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-text-primary text-sm"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword((v) => !v)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-text-muted hover:text-text-primary"
+                        aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
                     </div>
-                    {passwordMessage === 'error' && (
-                      <p className="text-xs text-status-error">Passwords do not match.</p>
-                    )}
-                    {passwordMessage === 'success' && (
-                      <p className="text-xs text-status-success">Password updated. It will appear in the admin panel.</p>
-                    )}
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors text-sm"
-                    >
-                      Update password
-                    </button>
-                  </form>
-                </div>
+                  </div>
+                  {passwordMessage === 'wrong_old' && (
+                    <p className="text-xs text-status-error">Current password is incorrect.</p>
+                  )}
+                  {passwordMessage === 'error' && (
+                    <p className="text-xs text-status-error">Passwords do not match.</p>
+                  )}
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors text-sm"
+                  >
+                    Update password
+                  </button>
+                </form>
               </div>
             </div>
           </div>
