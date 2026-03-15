@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
 import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X } from 'lucide-react';
-import { AgentActivityBar } from '@/components/agents/activity-bar';
+import { AgentActivityBar, useAgentAttendanceData } from '@/components/agents/activity-bar';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useToast } from '@/contexts/ToastContext';
 
@@ -53,6 +53,7 @@ export default function AdminAgents() {
     () => agents.find((a) => a.id === selectedId) ?? null,
     [agents, selectedId],
   );
+  const { dayData: attendanceDayData } = useAgentAttendanceData(selectedAgent?.id, schedule.workingDays);
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -349,11 +350,22 @@ export default function AdminAgents() {
             {/* Row 2: Attendance (3/4) + Performance (1/4) */}
             {selectedAgent && (
               <div className="lg:col-span-3 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
-                <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                  Attendance
-                </p>
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                  <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                    Attendance
+                  </p>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
+                    <span>Hours worked:</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0]" /> None</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-200" /> &lt;2h</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-300" /> 2–4h</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-500" /> 4–6h</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-700" /> 6h+</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0] opacity-70" /> Off day</span>
+                  </div>
+                </div>
                 <div className="flex-1 min-h-0 min-w-0 flex flex-col">
-                  <AgentActivityBar agentId={selectedAgent.id} workingDays={schedule.workingDays} />
+                  <AgentActivityBar agentId={selectedAgent.id} workingDays={schedule.workingDays} dayData={attendanceDayData} />
                 </div>
               </div>
             )}
