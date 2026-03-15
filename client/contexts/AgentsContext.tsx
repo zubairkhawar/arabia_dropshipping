@@ -24,6 +24,26 @@ const defaultAgents: AgentRecord[] = [
   { id: '1003', email: 'sarah@example.com', name: 'Sarah', password: 'changeme', avatarUrl: null },
 ];
 
+/** 4-digit numeric ID (e.g. 1001). Old formats like agent01 are migrated to this. */
+function isNumericAgentId(id: string): boolean {
+  return /^\d{4}$/.test(id);
+}
+
+function migrateAgentsToNumericIds(agents: AgentRecord[]): AgentRecord[] {
+  const usedIds = new Set(agents.filter((a) => isNumericAgentId(a.id)).map((a) => a.id));
+  let nextId = 1001;
+  const nextNumericId = () => {
+    while (usedIds.has(String(nextId))) nextId++;
+    const id = String(nextId);
+    usedIds.add(id);
+    nextId++;
+    return id;
+  };
+  return agents.map((a) =>
+    isNumericAgentId(a.id) ? a : { ...a, id: nextNumericId() },
+  );
+}
+
 function loadFromStorage(): AgentsData {
   if (typeof window === 'undefined') {
     return { agents: defaultAgents, currentAgentId: defaultAgents[0]?.id ?? null };
@@ -32,8 +52,25 @@ function loadFromStorage(): AgentsData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { agents: defaultAgents, currentAgentId: defaultAgents[0]?.id ?? null };
     const parsed = JSON.parse(raw) as AgentsData;
+    let agents =
+      Array.isArray(parsed.agents) && parsed.agents.length > 0 ? parsed.agents : defaultAgents;
+    const hasLegacyIds = agents.some((a) => !isNumericAgentId(a.id));
+    if (hasLegacyIds) {
+      const idMap = new Map<string, string>();
+      const migrated = migrateAgentsToNumericIds(agents);
+      agents.forEach((a, i) => {
+        if (!isNumericAgentId(a.id)) idMap.set(a.id, migrated[i].id);
+      });
+      agents = migrated;
+      let currentAgentId = parsed.currentAgentId ?? parsed.agents?.[0]?.id ?? null;
+      if (currentAgentId && idMap.has(currentAgentId)) {
+        currentAgentId = idMap.get(currentAgentId) ?? currentAgentId;
+      }
+      saveToStorage({ agents, currentAgentId });
+      return { agents, currentAgentId };
+    }
     return {
-      agents: Array.isArray(parsed.agents) && parsed.agents.length > 0 ? parsed.agents : defaultAgents,
+      agents,
       currentAgentId: parsed.currentAgentId ?? parsed.agents?.[0]?.id ?? null,
     };
   } catch {

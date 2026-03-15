@@ -4,17 +4,13 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  Bot,
   Users,
   User,
-  TrendingUp,
-  FileText,
   Settings,
   LayoutDashboard,
   LucideIcon,
   MessageCircle,
   FolderCog,
-  ShieldAlert,
   ChevronDown,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -26,7 +22,7 @@ interface SidebarLink {
   path: string;
 }
 
-const aiBotSection: SidebarLink[] = [{ icon: Bot, label: 'AI Bot', path: '/admin/dashboard' }];
+const dashboardSection: SidebarLink[] = [{ icon: LayoutDashboard, label: 'Dashboard', path: '/admin/dashboard' }];
 
 const teamsSection: SidebarLink[] = [{ icon: Users, label: 'Teams', path: '/admin/teams' }];
 
@@ -40,7 +36,6 @@ const conversationsViews: SidebarLink[] = [
 
 const bottomSection: SidebarLink[] = [
   { icon: FolderCog, label: 'Knowledge Base', path: '/admin/knowledge-base' },
-  { icon: TrendingUp, label: 'Analytics', path: '/admin/analytics' },
   { icon: Settings, label: 'Settings', path: '/admin/settings' },
 ];
 
@@ -101,7 +96,7 @@ export function AdminSidebar() {
         </div>
 
         <nav className="flex-1 p-3 overflow-y-auto">
-          {renderSection('AI Bot', aiBotSection)}
+          {renderSection('Dashboard', dashboardSection)}
           {!isCollapsed && <div className="border-t border-border my-3" />}
           {renderSection('Teams', teamsSection)}
           {renderSection('Agents', agentsSection)}

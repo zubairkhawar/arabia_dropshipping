@@ -2,7 +2,6 @@
 
 import AdminInbox from '../page';
 
-export default function AdminInboxLive() {
+export default function AdminInboxView() {
   return <AdminInbox />;
 }
-

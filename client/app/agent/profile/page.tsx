@@ -1,11 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Camera, ImagePlus, Trash2, X } from 'lucide-react';
+import { Camera, ImagePlus, Trash2, X, Copy } from 'lucide-react';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
+import { useAgents } from '@/contexts/AgentsContext';
 
 export default function AgentProfile() {
   const { avatarUrl, fullName, setAvatarUrl, setFullName } = useAgentProfile();
+  const { getCurrentAgent } = useAgents();
+  const currentAgent = getCurrentAgent();
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -117,15 +120,33 @@ export default function AgentProfile() {
             />
           </div>
 
-          <div className="flex-1 min-w-0">
-            <label className="block text-sm font-semibold text-text-primary mb-2">Full Name</label>
-            <input
-              type="text"
-              className="w-full max-w-md px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-text-primary placeholder-text-muted"
-              placeholder="Enter your name"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-            />
+          <div className="flex-1 min-w-0 space-y-4">
+            <div>
+              <label className="block text-sm font-semibold text-text-primary mb-2">Full Name</label>
+              <input
+                type="text"
+                className="w-full max-w-md px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-text-primary placeholder-text-muted"
+                placeholder="Enter your name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+              />
+            </div>
+            {currentAgent?.id && (
+              <div>
+                <label className="block text-sm font-semibold text-text-primary mb-2">Agent ID</label>
+                <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-panel">
+                  <code className="text-sm font-mono text-text-primary">{currentAgent.id}</code>
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard?.writeText(currentAgent.id)}
+                    className="p-1.5 rounded-lg hover:bg-white text-text-muted transition-colors"
+                    aria-label="Copy agent ID"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

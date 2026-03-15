@@ -47,8 +47,8 @@ function loadFromStorage(): TeamsData {
     const teams: Team[] =
       Array.isArray(parsed.teams) && parsed.teams.length > 0 ? parsed.teams : defaultTeams;
     const normalisedTeams = teams.map((t) => ({
+      description: '',
       ...t,
-      description: t.description ?? '',
     }));
     return {
       teams: normalisedTeams,

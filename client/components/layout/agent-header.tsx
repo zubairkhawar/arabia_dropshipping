@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose, Camera, ImagePlus, Trash2, X } from 'lucide-react';
+import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose, Camera, ImagePlus, Trash2, X, Copy } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useAgents } from '@/contexts/AgentsContext';
@@ -29,7 +29,8 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('active');
   const { isCollapsed, toggleSidebar } = useSidebar();
   const { avatarUrl, fullName, setAvatarUrl, setFullName } = useAgentProfile();
-  const { currentAgentId, updateAgent } = useAgents();
+  const { currentAgentId, updateAgent, getCurrentAgent } = useAgents();
+  const currentAgent = getCurrentAgent();
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordMessage, setPasswordMessage] = useState<'success' | 'error' | null>(null);
@@ -204,6 +205,11 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
               <div className="fixed inset-0 z-10" onClick={() => setShowUserMenu(false)} />
               <div className="absolute right-0 mt-2 w-48 bg-white border border-border rounded-lg shadow-xl z-20">
                 <div className="p-2">
+                  {currentAgent?.id && (
+                    <p className="px-3 py-1.5 text-xs text-text-muted font-mono border-b border-border mb-2">
+                      Agent ID: {currentAgent.id}
+                    </p>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -327,6 +333,22 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
                     />
+                    {currentAgent?.id && (
+                      <div className="mt-3">
+                        <label className="block text-xs font-semibold text-text-muted mb-1">Agent ID</label>
+                        <div className="inline-flex items-center gap-2 px-2 py-1.5 rounded border border-border bg-panel">
+                          <code className="text-xs font-mono text-text-primary">{currentAgent.id}</code>
+                          <button
+                            type="button"
+                            onClick={() => navigator.clipboard?.writeText(currentAgent.id)}
+                            className="p-1 rounded hover:bg-white text-text-muted"
+                            aria-label="Copy agent ID"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="border-t border-border pt-4">

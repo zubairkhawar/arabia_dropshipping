@@ -229,8 +229,8 @@ export default function AdminAgents() {
                 </div>
                 <div>
                   <p className="text-xs text-text-muted mb-0.5">Password</p>
-                  <div className="inline-flex items-center gap-2 px-2 py-1.5 rounded border border-border bg-panel">
-                    <code className="text-xs font-mono">
+                  <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 rounded border border-border bg-panel">
+                    <code className="text-xs font-mono min-w-0 flex-1 truncate">
                       {showPassword ? selectedAgent.password : '••••••••'}
                     </code>
                     <button

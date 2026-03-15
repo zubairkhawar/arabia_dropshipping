@@ -157,12 +157,12 @@ export function ChatWindow({
   teamEvents = [],
   readOnly = false,
   broadcastMode = false,
-}: ChatWindowProps = {}) {
+}: ChatWindowProps) {
   const pathname = usePathname();
   const { avatarUrl: agentAvatarUrl, fullName: agentFullName } = useAgentProfile();
   const isTeamChannel = pathname?.startsWith('/agent/team') || (pathname?.startsWith('/admin/teams') && !!teamName);
   const isDmPage = pathname?.startsWith('/agent/dm');
-  const showBroadcastInput = broadcastMode && isInternalChat && !!teamName && !!teamMemberNames?.length;
+  const showBroadcastInput = broadcastMode && isInternalChat && !!teamName;
 
   const [messages, setMessages] = useState<Message[]>(
     isInternalChat ? defaultInternalMessages : defaultCustomerMessages,
@@ -186,6 +186,7 @@ export function ChatWindow({
   const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
   const [playingVoiceId, setPlayingVoiceId] = useState<number | null>(null);
   const [voiceProgress, setVoiceProgress] = useState<Record<number, number>>({});
+  const [showTransferMenu, setShowTransferMenu] = useState(false);
   const recordingChunksRef = useRef<Blob[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStartRef = useRef<number>(0);
@@ -249,6 +250,7 @@ export function ChatWindow({
 
   const closeMenus = () => {
     setShowMoreMenu(false);
+    setShowTransferMenu(false);
   };
 
   const toggleStar = (id: number) => {
@@ -596,6 +598,7 @@ export function ChatWindow({
 
   return (
     <div className="flex flex-col h-full bg-white">
+      {/* Header */}
       <div className="h-chat-header border-b border-border px-6 flex items-center justify-between bg-white shrink-0">
         <div
           className={isTeamChannel ? 'cursor-pointer' : isDmPage ? 'cursor-pointer' : undefined}
@@ -673,6 +676,7 @@ export function ChatWindow({
         </div>
       </div>
       
+      {/* Messages Container */}
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto p-6 space-y-4 bg-panel relative"
@@ -713,419 +717,420 @@ export function ChatWindow({
               );
             })}
             {group.messages.map((message) => {
-          const outgoing = isOutgoingMessage(message);
-          const isStarred = starredIds.includes(message.id);
-          const showMenu = activeMessageMenuId === message.id;
-          const showReactions = activeReactionPickerId === message.id;
-          const reactionEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏', '👏', '😁'];
-          const reactionList = message.reactions ?? [];
-          const myReaction = reactionList.find((r) => r.userId === 'me')?.emoji;
-          const aggregated = Object.entries(
-            reactionList.reduce<Record<string, number>>((acc, r) => {
-              acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
-              return acc;
-            }, {}),
-          ).map(([emoji, count]) => ({ emoji, count }));
-          const showReactionDetail = reactionDetailMessageId === message.id;
-          const emojiOnly = !message.attachment && isEmojiOnly(message.content);
+              const outgoing = isOutgoingMessage(message);
+              const isStarred = starredIds.includes(message.id);
+              const showMenu = activeMessageMenuId === message.id;
+              const showReactions = activeReactionPickerId === message.id;
+              const reactionEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏', '👏', '😁'];
+              const reactionList = message.reactions ?? [];
+              const myReaction = reactionList.find((r) => r.userId === 'me')?.emoji;
+              const aggregated = Object.entries(
+                reactionList.reduce<Record<string, number>>((acc, r) => {
+                  acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
+                  return acc;
+                }, {}),
+              ).map(([emoji, count]) => ({ emoji, count }));
+              const showReactionDetail = reactionDetailMessageId === message.id;
+              const emojiOnly = !message.attachment && isEmojiOnly(message.content);
 
-          return (
-            <div
-              key={message.id}
-              id={`message-${message.id}`}
-              className={`flex w-full items-start gap-2 ${outgoing ? 'justify-end' : 'justify-start'}`}
-            >
-              {isTeamChannel && !outgoing && (
-                <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
-                  {message.senderName === 'You' && agentAvatarUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    message.senderName.charAt(0)
-                  )}
-                </div>
-              )}
-              <div className={`relative group max-w-[85%] ${outgoing ? 'flex flex-col items-end' : ''}`}>
+              return (
                 <div
-                  className={`relative max-w-message-bubble min-w-[8rem] rounded-lg px-3 py-3.5 pl-3 pr-10 ${getMessageStyle(
-                    message.sender,
-                    message.senderName,
-                  )}`}
+                  key={message.id}
+                  id={`message-${message.id}`}
+                  className={`flex w-full items-start gap-2 ${outgoing ? 'justify-end' : 'justify-start'}`}
                 >
-                  {!readOnly && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setActiveMessageMenuId((current) =>
-                          current === message.id ? null : message.id,
-                        )
-                      }
-                      className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-full bg-white/30 hover:bg-white/50 text-current opacity-80 hover:opacity-100 transition-opacity flex-shrink-0"
-                      aria-label="Message options"
-                    >
-                      <ChevronDown className="w-4 h-4" />
-                    </button>
-                  )}
-
-                  <div className="pr-1 min-w-0 space-y-1">
-                  {message.replyTo && (
-                    <div
-                      className={`mb-2 pl-2 border-l-4 rounded border-primary ${
-                        outgoing ? 'bg-white/20' : 'bg-black/5'
-                      }`}
-                    >
-                      <p className={`text-xs font-semibold ${outgoing ? 'text-white' : 'text-primary'}`}>
-                        {message.replyTo.senderName}
-                      </p>
-                      <p
-                        className={`text-xs truncate max-w-full ${
-                          outgoing ? 'text-white/90' : 'text-text-secondary'
-                        }`}
-                        title={message.replyTo.content}
-                      >
-                        {message.replyTo.content}
-                      </p>
+                  {isTeamChannel && !outgoing && (
+                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
+                      {message.senderName === 'You' && agentAvatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        message.senderName.charAt(0)
+                      )}
                     </div>
                   )}
-                  {!outgoing && (
-                    <p className="text-xs font-medium mb-1 opacity-75">{message.senderName}</p>
-                  )}
-                  {message.attachment && (
-                    <div className={`mb-2 rounded-lg overflow-hidden ${outgoing ? 'bg-white/20' : 'bg-black/5'}`}>
-                      {message.attachment.type === 'photo' && (
-                        <a href={message.attachment.url} target="_blank" rel="noopener noreferrer" className="block max-w-full">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={message.attachment.url}
-                            alt={message.attachment.name}
-                            className="max-w-full max-h-48 object-cover rounded-lg"
-                          />
-                        </a>
-                      )}
-                      {message.attachment.type === 'file' && (
-                        <a
-                          href={message.attachment.url}
-                          download={message.attachment.name}
-                          className={`flex items-center gap-2 px-2 py-2 rounded-lg ${outgoing ? 'text-white hover:bg-white/10' : 'text-text-primary hover:bg-black/5'}`}
+                  <div className={`relative group max-w-[85%] ${outgoing ? 'flex flex-col items-end' : ''}`}>
+                    <div
+                      className={`relative max-w-message-bubble min-w-[8rem] rounded-lg px-3 py-3.5 pl-3 pr-10 ${getMessageStyle(
+                        message.sender,
+                        message.senderName,
+                      )}`}
+                    >
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setActiveMessageMenuId((current) =>
+                              current === message.id ? null : message.id,
+                            )
+                          }
+                          className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-full bg-white/30 hover:bg-white/50 text-current opacity-80 hover:opacity-100 transition-opacity flex-shrink-0"
+                          aria-label="Message options"
                         >
-                          <FileText className="w-5 h-5 flex-shrink-0" />
-                          <span className="text-sm truncate">{message.attachment.name}</span>
-                        </a>
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
                       )}
-                      {message.attachment.type === 'voice' && (
-                        <div className={`flex items-center gap-2 py-1 ${outgoing ? 'text-white' : 'text-text-primary'}`}>
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <div className="relative flex-shrink-0">
-                              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${outgoing ? 'bg-white/20' : 'bg-black/10'}`}>
-                                <Mic className={`w-4 h-4 ${outgoing ? 'text-blue-200' : 'text-status-info'}`} />
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                toggleVoicePlayback(
-                                  message.id,
-                                  message.attachment!.url,
-                                  message.attachment!.durationSeconds ?? 0,
-                                )
-                              }
-                              className={`p-1 rounded-full flex-shrink-0 ${outgoing ? 'text-white/90 hover:bg-white/20' : 'text-text-primary hover:bg-black/10'}`}
-                              aria-label={playingVoiceId === message.id ? 'Pause' : 'Play voice message'}
+
+                      <div className="pr-1 min-w-0 space-y-1">
+                        {message.replyTo && (
+                          <div
+                            className={`mb-2 pl-2 border-l-4 rounded border-primary ${
+                              outgoing ? 'bg-white/20' : 'bg-black/5'
+                            }`}
+                          >
+                            <p className={`text-xs font-semibold ${outgoing ? 'text-white' : 'text-primary'}`}>
+                              {message.replyTo.senderName}
+                            </p>
+                            <p
+                              className={`text-xs truncate max-w-full ${
+                                outgoing ? 'text-white/90' : 'text-text-secondary'
+                              }`}
+                              title={message.replyTo.content}
                             >
-                              {playingVoiceId === message.id ? (
-                                <Pause className="w-5 h-5" fill="currentColor" />
-                              ) : (
-                                <Play className="w-5 h-5" fill="currentColor" />
-                              )}
-                            </button>
-                            <div className="flex-1 min-w-0 flex items-center gap-1.5">
-                              <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-black/15 min-w-[4rem]">
-                                <div
-                                  className={`h-full rounded-full transition-all duration-150 ${outgoing ? 'bg-blue-200' : 'bg-status-info/70'}`}
-                                  style={{ width: `${((voiceProgress[message.id] ?? 0) * 100).toFixed(1)}%` }}
-                                />
-                              </div>
-                              <div className="flex gap-0.5 flex-shrink-0">
-                                {VOICE_WAVEFORM_BARS.map((h, i) => (
-                                  <div
-                                    key={i}
-                                    className={`w-0.5 rounded-full ${outgoing ? 'bg-white/50' : 'bg-text-muted'}`}
-                                    style={{ height: `${(h / 100) * 12}px`, minHeight: 4 }}
-                                  />
-                                ))}
-                              </div>
-                            </div>
+                              {message.replyTo.content}
+                            </p>
                           </div>
-                          <span className={`text-xs flex-shrink-0 ${outgoing ? 'text-white/80' : 'text-text-muted'}`}>
-                            {formatVoiceDuration(message.attachment.durationSeconds ?? 0)}
+                        )}
+                        {!outgoing && (
+                          <p className="text-xs font-medium mb-1 opacity-75">{message.senderName}</p>
+                        )}
+                        {message.attachment && (
+                          <div className={`mb-2 rounded-lg overflow-hidden ${outgoing ? 'bg-white/20' : 'bg-black/5'}`}>
+                            {message.attachment.type === 'photo' && (
+                              <a href={message.attachment.url} target="_blank" rel="noopener noreferrer" className="block max-w-full">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={message.attachment.url}
+                                  alt={message.attachment.name}
+                                  className="max-w-full max-h-48 object-cover rounded-lg"
+                                />
+                              </a>
+                            )}
+                            {message.attachment.type === 'file' && (
+                              <a
+                                href={message.attachment.url}
+                                download={message.attachment.name}
+                                className={`flex items-center gap-2 px-2 py-2 rounded-lg ${outgoing ? 'text-white hover:bg-white/10' : 'text-text-primary hover:bg-black/5'}`}
+                              >
+                                <FileText className="w-5 h-5 flex-shrink-0" />
+                                <span className="text-sm truncate">{message.attachment.name}</span>
+                              </a>
+                            )}
+                            {message.attachment.type === 'voice' && (
+                              <div className={`flex items-center gap-2 py-1 ${outgoing ? 'text-white' : 'text-text-primary'}`}>
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  <div className="relative flex-shrink-0">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${outgoing ? 'bg-white/20' : 'bg-black/10'}`}>
+                                      <Mic className={`w-4 h-4 ${outgoing ? 'text-blue-200' : 'text-status-info'}`} />
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      toggleVoicePlayback(
+                                        message.id,
+                                        message.attachment!.url,
+                                        message.attachment!.durationSeconds ?? 0,
+                                      )
+                                    }
+                                    className={`p-1 rounded-full flex-shrink-0 ${outgoing ? 'text-white/90 hover:bg-white/20' : 'text-text-primary hover:bg-black/10'}`}
+                                    aria-label={playingVoiceId === message.id ? 'Pause' : 'Play voice message'}
+                                  >
+                                    {playingVoiceId === message.id ? (
+                                      <Pause className="w-5 h-5" fill="currentColor" />
+                                    ) : (
+                                      <Play className="w-5 h-5" fill="currentColor" />
+                                    )}
+                                  </button>
+                                  <div className="flex-1 min-w-0 flex items-center gap-1.5">
+                                    <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-black/15 min-w-[4rem]">
+                                      <div
+                                        className={`h-full rounded-full transition-all duration-150 ${outgoing ? 'bg-blue-200' : 'bg-status-info/70'}`}
+                                        style={{ width: `${((voiceProgress[message.id] ?? 0) * 100).toFixed(1)}%` }}
+                                      />
+                                    </div>
+                                    <div className="flex gap-0.5 flex-shrink-0">
+                                      {VOICE_WAVEFORM_BARS.map((h, i) => (
+                                        <div
+                                          key={i}
+                                          className={`w-0.5 rounded-full ${outgoing ? 'bg-white/50' : 'bg-text-muted'}`}
+                                          style={{ height: `${(h / 100) * 12}px`, minHeight: 4 }}
+                                        />
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                                <span className={`text-xs flex-shrink-0 ${outgoing ? 'text-white/80' : 'text-text-muted'}`}>
+                                  {formatVoiceDuration(message.attachment.durationSeconds ?? 0)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <p className={`leading-relaxed break-words whitespace-pre-wrap ${emojiOnly ? 'text-5xl' : 'text-sm'} ${outgoing ? 'text-white' : 'text-text-primary'}`}>
+                          {message.content}
+                        </p>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <span
+                            className={`text-xs ${
+                              outgoing ? 'text-white/75' : 'text-text-muted'
+                            }`}
+                          >
+                            {formatMessageTime(message.sentAt, message.timestamp)}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            {isTeamChannel && isStarred && (
+                              <Star className={`w-3 h-3 flex-shrink-0 ${outgoing ? 'text-white' : 'text-primary'}`} />
+                            )}
                           </span>
                         </div>
-                      )}
+                      </div>
                     </div>
-                  )}
-                  <p className={`leading-relaxed break-words whitespace-pre-wrap ${emojiOnly ? 'text-5xl' : 'text-sm'} ${outgoing ? 'text-white' : 'text-text-primary'}`}>
-                    {message.content}
-                  </p>
-                  <div className="mt-2 flex items-center justify-between gap-2">
-                    <span
-                      className={`text-xs ${
-                        outgoing ? 'text-white/75' : 'text-text-muted'
-                      }`}
-                    >
-                      {formatMessageTime(message.sentAt, message.timestamp)}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      {isTeamChannel && isStarred && (
-                        <Star className={`w-3 h-3 flex-shrink-0 ${outgoing ? 'text-white' : 'text-primary'}`} />
-                      )}
-                    </span>
-                  </div>
-                  </div>
-                </div>
 
-                {/* Reaction summary and react button: below bubble */}
-                <div
-                  className={`mt-1 flex gap-1 items-center ${
-                    outgoing ? 'justify-end' : 'justify-start'
-                  }`}
-                >
-                  {aggregated.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setReactionDetailMessageId((id) =>
-                          id === message.id ? null : message.id,
-                        )
-                      }
-                      className="inline-flex items-center gap-1 rounded-full border border-border bg-white shadow-sm px-2 py-1 text-sm hover:bg-panel"
-                    >
-                      {aggregated.map(({ emoji, count }) => (
-                        <span key={emoji} className="inline-flex items-center gap-0.5">
-                          {emoji}
-                          {count > 1 && (
-                            <span className="text-xs text-text-muted">{count}</span>
-                          )}
-                        </span>
-                      ))}
-                    </button>
-                  )}
-                  {!readOnly && (
-                    <button
-                      type="button"
-                      onClick={() => setActiveReactionPickerId(message.id)}
-                      className={`p-1 rounded-full border transition-colors flex-shrink-0 ${
-                        myReaction
-                          ? 'bg-primary/20 border-primary text-primary'
-                          : 'bg-white/80 border-border shadow-sm text-text-muted hover:text-primary hover:border-primary'
-                      }`}
-                      aria-label="React"
-                    >
-                      {myReaction ? (
-                        <span className="text-base">{myReaction}</span>
-                      ) : (
-                        <Smile className="w-4 h-4" />
-                      )}
-                    </button>
-                  )}
-                </div>
-
-                {/* Who reacted detail popover */}
-                {showReactionDetail && reactionList.length > 0 && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setReactionDetailMessageId(null)} aria-hidden />
+                    {/* Reaction summary and react button: below bubble */}
                     <div
-                      className={`absolute z-20 w-64 bg-white border border-border rounded-xl shadow-xl overflow-hidden ${
-                        outgoing ? 'right-0' : 'left-0'
-                      } bottom-full mb-1`}
+                      className={`mt-1 flex gap-1 items-center ${
+                        outgoing ? 'justify-end' : 'justify-start'
+                      }`}
                     >
-                      <div className="px-3 py-2 border-b border-border flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium text-text-primary">All {reactionList.length}</span>
-                        {aggregated.map(({ emoji, count }) => (
-                          <span key={emoji} className="text-sm text-text-muted">
-                            {emoji} {count}
-                          </span>
-                        ))}
-                      </div>
-                      <div className="max-h-48 overflow-y-auto">
-                        {reactionList.map((r, i) => (
-                          <div
-                            key={`${r.userId}-${r.emoji}-${i}`}
-                            className="flex items-center gap-3 px-3 py-2 hover:bg-panel border-b border-border last:border-b-0"
-                          >
-                            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
-                              {r.userName === 'You' && agentAvatarUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
-                              ) : (
-                                r.userName.charAt(0)
+                      {aggregated.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setReactionDetailMessageId((id) =>
+                              id === message.id ? null : message.id,
+                            )
+                          }
+                          className="inline-flex items-center gap-1 rounded-full border border-border bg-white shadow-sm px-2 py-1 text-sm hover:bg-panel"
+                        >
+                          {aggregated.map(({ emoji, count }) => (
+                            <span key={emoji} className="inline-flex items-center gap-0.5">
+                              {emoji}
+                              {count > 1 && (
+                                <span className="text-xs text-text-muted">{count}</span>
                               )}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium text-text-primary truncate">{r.userName}</p>
-                              <p className="text-xs text-text-muted">{formatReactionTime(r.reactedAt)}</p>
-                            </div>
-                            <span className="text-lg flex-shrink-0">{r.emoji}</span>
-                          </div>
-                        ))}
-                      </div>
+                            </span>
+                          ))}
+                        </button>
+                      )}
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveReactionPickerId(message.id)}
+                          className={`p-1 rounded-full border transition-colors flex-shrink-0 ${
+                            myReaction
+                              ? 'bg-primary/20 border-primary text-primary'
+                              : 'bg-white/80 border-border shadow-sm text-text-muted hover:text-primary hover:border-primary'
+                          }`}
+                          aria-label="React"
+                        >
+                          {myReaction ? (
+                            <span className="text-base">{myReaction}</span>
+                          ) : (
+                            <Smile className="w-4 h-4" />
+                          )}
+                        </button>
+                      )}
                     </div>
-                  </>
-                )}
 
-                {!readOnly && showMenu && (
-                  <div
-                    className={`absolute w-48 bg-white border border-border rounded-lg shadow-xl z-20 py-1 text-sm ${
-                      outgoing
-                        ? dropdownPlaceAbove
-                          ? 'right-0 bottom-full mb-1'
-                          : 'right-full mr-2 top-0'
-                        : dropdownPlaceAbove
-                          ? 'left-0 bottom-full mb-1'
-                          : 'left-0 top-full mt-1'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
-                      onClick={() => {
-                        setReplyingTo({
-                          id: message.id,
-                          senderName: message.senderName,
-                          content: message.content,
-                        });
-                        setActiveMessageMenuId(null);
-                      }}
-                    >
-                      <CornerDownLeft className="w-4 h-4 text-text-muted" />
-                      Reply
-                    </button>
-                    {outgoing && (
-                      <button
-                        type="button"
-                        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
-                        onClick={() => setActiveReactionPickerId(message.id)}
-                      >
-                        <Smile className="w-4 h-4 text-text-muted" />
-                        React
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
-                      onClick={() => toggleStar(message.id)}
-                    >
-                      <Star
-                        className={`w-4 h-4 ${
-                          isStarred ? 'text-primary fill-primary' : 'text-text-muted'
-                        }`}
-                      />
-                      {isStarred ? 'Unstar' : 'Star'}
-                    </button>
-                    <button
-                      type="button"
-                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
-                      onClick={() => {
-                        if (navigator.clipboard?.writeText) {
-                          navigator.clipboard.writeText(message.content).catch(() => undefined);
-                        }
-                        setActiveMessageMenuId(null);
-                      }}
-                    >
-                      <Copy className="w-4 h-4 text-text-muted" />
-                      Copy
-                    </button>
-                    {outgoing && (
-                      <button
-                        type="button"
-                        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
-                        onClick={() => {
-                          setMessageInfoId(message.id);
-                          setActiveMessageMenuId(null);
-                        }}
-                      >
-                        <Info className="w-4 h-4 text-text-muted" />
-                        Info
-                      </button>
-                    )}
-                    <div className="border-t border-border my-1" />
-                    {outgoing ? (
+                    {/* Who reacted detail popover */}
+                    {showReactionDetail && reactionList.length > 0 && (
                       <>
-                        <button
-                          type="button"
-                          className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left text-status-error"
-                          onClick={() => deleteForMe(message.id)}
+                        <div className="fixed inset-0 z-10" onClick={() => setReactionDetailMessageId(null)} aria-hidden />
+                        <div
+                          className={`absolute z-20 w-64 bg-white border border-border rounded-xl shadow-xl overflow-hidden ${
+                            outgoing ? 'right-0' : 'left-0'
+                          } bottom-full mb-1`}
                         >
-                          <Trash2 className="w-4 h-4" />
-                          Delete for me
-                        </button>
-                        <button
-                          type="button"
-                          className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left text-status-error"
-                          onClick={() => deleteMessage(message.id)}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                          Delete for everyone
-                        </button>
+                          <div className="px-3 py-2 border-b border-border flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-medium text-text-primary">All {reactionList.length}</span>
+                            {aggregated.map(({ emoji, count }) => (
+                              <span key={emoji} className="text-sm text-text-muted">
+                                {emoji} {count}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="max-h-48 overflow-y-auto">
+                            {reactionList.map((r, i) => (
+                              <div
+                                key={`${r.userId}-${r.emoji}-${i}`}
+                                className="flex items-center gap-3 px-3 py-2 hover:bg-panel border-b border-border last:border-b-0"
+                              >
+                                <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
+                                  {r.userName === 'You' && agentAvatarUrl ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                                  ) : (
+                                    r.userName.charAt(0)
+                                  )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-medium text-text-primary truncate">{r.userName}</p>
+                                  <p className="text-xs text-text-muted">{formatReactionTime(r.reactedAt)}</p>
+                                </div>
+                                <span className="text-lg flex-shrink-0">{r.emoji}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left text-status-error"
-                        onClick={() => deleteForMe(message.id)}
+                    )}
+
+                    {!readOnly && showMenu && (
+                      <div
+                        className={`absolute w-48 bg-white border border-border rounded-lg shadow-xl z-20 py-1 text-sm ${
+                          outgoing
+                            ? dropdownPlaceAbove
+                              ? 'right-0 bottom-full mb-1'
+                              : 'right-full mr-2 top-0'
+                            : dropdownPlaceAbove
+                              ? 'left-0 bottom-full mb-1'
+                              : 'left-0 top-full mt-1'
+                        }`}
                       >
-                        <Trash2 className="w-4 h-4" />
-                        Delete for me
-                      </button>
+                        <button
+                          type="button"
+                          className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
+                          onClick={() => {
+                            setReplyingTo({
+                              id: message.id,
+                              senderName: message.senderName,
+                              content: message.content,
+                            });
+                            setActiveMessageMenuId(null);
+                          }}
+                        >
+                          <CornerDownLeft className="w-4 h-4 text-text-muted" />
+                          Reply
+                        </button>
+                        {outgoing && (
+                          <button
+                            type="button"
+                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
+                            onClick={() => setActiveReactionPickerId(message.id)}
+                          >
+                            <Smile className="w-4 h-4 text-text-muted" />
+                            React
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
+                          onClick={() => toggleStar(message.id)}
+                        >
+                          <Star
+                            className={`w-4 h-4 ${
+                              isStarred ? 'text-primary fill-primary' : 'text-text-muted'
+                            }`}
+                          />
+                          {isStarred ? 'Unstar' : 'Star'}
+                        </button>
+                        <button
+                          type="button"
+                          className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
+                          onClick={() => {
+                            if (navigator.clipboard?.writeText) {
+                              navigator.clipboard.writeText(message.content).catch(() => undefined);
+                            }
+                            setActiveMessageMenuId(null);
+                          }}
+                        >
+                          <Copy className="w-4 h-4 text-text-muted" />
+                          Copy
+                        </button>
+                        {outgoing && (
+                          <button
+                            type="button"
+                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
+                            onClick={() => {
+                              setMessageInfoId(message.id);
+                              setActiveMessageMenuId(null);
+                            }}
+                          >
+                            <Info className="w-4 h-4 text-text-muted" />
+                            Info
+                          </button>
+                        )}
+                        <div className="border-t border-border my-1" />
+                        {outgoing ? (
+                          <>
+                            <button
+                              type="button"
+                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left text-status-error"
+                              onClick={() => deleteForMe(message.id)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              Delete for me
+                            </button>
+                            <button
+                              type="button"
+                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left text-status-error"
+                              onClick={() => deleteMessage(message.id)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              Delete for everyone
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left text-status-error"
+                            onClick={() => deleteForMe(message.id)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            Delete for me
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {!readOnly && showReactions && (
+                      <div
+                        className={`absolute ${
+                          outgoing ? 'right-0' : 'left-0'
+                        } mt-2 w-64 bg-white border border-border rounded-xl shadow-2xl z-30 p-3`}
+                      >
+                        <p className="text-xs text-text-muted mb-2">React (one at a time, click again to remove)</p>
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                          {reactionEmojis.map((emoji) => {
+                            const isSelected = myReaction === emoji;
+                            return (
+                              <button
+                                key={emoji}
+                                type="button"
+                                className={`w-7 h-7 rounded-full flex items-center justify-center text-lg transition-colors ${
+                                  isSelected
+                                    ? 'bg-primary/20 border-2 border-primary'
+                                    : 'hover:bg-panel'
+                                }`}
+                                onClick={() => addReaction(message.id, emoji)}
+                              >
+                                {emoji}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     )}
                   </div>
-                )}
-
-                {!readOnly && showReactions && (
-                  <div
-                    className={`absolute ${
-                      outgoing ? 'right-0' : 'left-0'
-                    } mt-2 w-64 bg-white border border-border rounded-xl shadow-2xl z-30 p-3`}
-                  >
-                    <p className="text-xs text-text-muted mb-2">React (one at a time, click again to remove)</p>
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {reactionEmojis.map((emoji) => {
-                        const isSelected = myReaction === emoji;
-                        return (
-                          <button
-                            key={emoji}
-                            type="button"
-                            className={`w-7 h-7 rounded-full flex items-center justify-center text-lg transition-colors ${
-                              isSelected
-                                ? 'bg-primary/20 border-2 border-primary'
-                                : 'hover:bg-panel'
-                            }`}
-                            onClick={() => addReaction(message.id, emoji)}
-                          >
-                            {emoji}
-                          </button>
-                        );
-                      })}
+                  {isTeamChannel && outgoing && (
+                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
+                      {agentAvatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        (agentFullName || 'You').charAt(0)
+                      )}
                     </div>
-                  </div>
-                )}
-              </div>
-              {isTeamChannel && outgoing && (
-                <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
-                  {agentAvatarUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    (agentFullName || 'You').charAt(0)
                   )}
                 </div>
-              )}
-            </div>
-          );
-        })}
+              );
+            })}
           </div>
         ))}
       </div>
 
+      {/* Input Area */}
       <div className="flex-shrink-0 border-t border-border bg-white">
         {/* Reply bar when active (hidden in read-only) */}
         {!readOnly && replyingTo && (
@@ -1146,6 +1151,7 @@ export function ChatWindow({
             </button>
           </div>
         )}
+        
         {/* Pending attachment preview (hidden in read-only) */}
         {!readOnly && pendingAttachment && (
           <div className="px-4 py-2 bg-panel border-b border-border flex items-center justify-between gap-2">
@@ -1179,166 +1185,173 @@ export function ChatWindow({
             </button>
           </div>
         )}
+        
         {/* Input row - fixed height to align bottom separator with 2nd bar (80px) */}
         {(!readOnly || showBroadcastInput) && (
           <div className="flex items-center gap-2 px-4 h-[80px]">
-          {!showBroadcastInput && (
-          <div className="relative flex-shrink-0">
-            <button
-              type="button"
-              onClick={() => { setShowAttachmentMenu((v) => !v); setShowEmojiPicker(false); }}
-              className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors"
-              aria-label="Attach"
-            >
-              <Plus className="w-6 h-6" />
-            </button>
-            {showAttachmentMenu && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setShowAttachmentMenu(false)} aria-hidden />
-                <div className="absolute left-0 bottom-full mb-1 w-52 bg-white border border-border rounded-xl shadow-xl z-20 py-1">
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-panel text-left text-sm text-text-primary"
-                  >
-                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-                      <FileText className="w-5 h-5 text-primary" />
-                    </div>
-                    File
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => photoInputRef.current?.click()}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-panel text-left text-sm text-text-primary"
-                  >
-                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-                      <ImageIcon className="w-5 h-5 text-primary" />
-                    </div>
-                    Photos
-                  </button>
-                </div>
-              </>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.csv,.doc,.docx,.xls,.xlsx,.txt,.ppt,.pptx,application/pdf,text/csv,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-              className="hidden"
-              onChange={(e) => handleFileSelect(e, 'file')}
-            />
-            <input
-              ref={photoInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => handleFileSelect(e, 'photo')}
-            />
-          </div>
-          )}
-          <div className="flex-1 min-w-0 relative flex items-center gap-2 border border-border rounded-lg bg-white focus-within:ring-2 focus-within:ring-primary">
-            <input
-              ref={inputRef}
-              type="text"
-              value={inputValue}
-              onChange={handleInputChange}
-              placeholder={
-                showBroadcastInput
-                  ? 'Type a message... Use @ to tag an agent'
-                  : replyingTo
-                    ? `Reply to ${replyingTo.senderName}...`
-                    : 'Type a message...'
-              }
-              className="flex-1 min-w-0 px-4 py-2.5 focus:outline-none text-sm bg-transparent"
-              onKeyDown={handleInputKeyDown}
-            />
-            {showBroadcastInput && showMentionDropdown && mentionCandidates.length > 0 && (
-              <>
-                <div
-                  className="fixed inset-0 z-10"
-                  onClick={() => setShowMentionDropdown(false)}
-                  aria-hidden
-                />
-                <div className="absolute left-0 right-0 bottom-full mb-1 max-h-48 overflow-y-auto bg-white border border-border rounded-lg shadow-xl z-20 py-1">
-                  {mentionCandidates.map((name, i) => (
-                    <button
-                      key={name}
-                      type="button"
-                      className={`w-full px-3 py-2 text-left text-sm hover:bg-panel text-text-primary flex items-center gap-2 ${i === mentionIndex ? 'bg-panel' : ''}`}
-                      onClick={() => insertMention(name)}
-                    >
-                      <User className="w-4 h-4 text-text-muted flex-shrink-0" />
-                      {name}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
             {!showBroadcastInput && (
-              <>
+              <div className="relative flex-shrink-0">
                 <button
                   type="button"
-                  onClick={() => { setShowEmojiPicker((v) => !v); setShowAttachmentMenu(false); }}
-                  className="p-2 text-text-muted hover:text-primary rounded-full transition-colors flex-shrink-0"
-                  aria-label="Emoji"
+                  onClick={() => { setShowAttachmentMenu((v) => !v); setShowEmojiPicker(false); }}
+                  className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors"
+                  aria-label="Attach"
                 >
-                  <Smile className="w-5 h-5" />
+                  <Plus className="w-6 h-6" />
                 </button>
-                {showEmojiPicker && (
+                {showAttachmentMenu && (
                   <>
-                    <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)} aria-hidden />
-                    <div className="absolute right-0 bottom-full mb-1 w-64 bg-white border border-border rounded-xl shadow-xl z-20 p-3">
-                      <p className="text-xs font-medium text-text-muted mb-2">Emoji</p>
-                      <div className="grid grid-cols-5 gap-1">
-                        {EMOJI_LIST.map((emoji) => (
-                          <button
-                            key={emoji}
-                            type="button"
-                            className="w-9 h-9 flex items-center justify-center text-xl rounded-lg hover:bg-panel"
-                            onClick={() => {
-                              setInputValue((prev) => prev + emoji);
-                              inputRef.current?.focus();
-                            }}
-                          >
-                            {emoji}
-                          </button>
-                        ))}
-                      </div>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowAttachmentMenu(false)} aria-hidden />
+                    <div className="absolute left-0 bottom-full mb-1 w-52 bg-white border border-border rounded-xl shadow-xl z-20 py-1">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-panel text-left text-sm text-text-primary"
+                      >
+                        <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                          <FileText className="w-5 h-5 text-primary" />
+                        </div>
+                        File
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => photoInputRef.current?.click()}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-panel text-left text-sm text-text-primary"
+                      >
+                        <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                          <ImageIcon className="w-5 h-5 text-primary" />
+                        </div>
+                        Photos
+                      </button>
                     </div>
                   </>
                 )}
-              </>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.csv,.doc,.docx,.xls,.xlsx,.txt,.ppt,.pptx,application/pdf,text/csv,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                  className="hidden"
+                  onChange={(e) => handleFileSelect(e, 'file')}
+                />
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => handleFileSelect(e, 'photo')}
+                />
+              </div>
             )}
-          </div>
-          {!showBroadcastInput && (isRecording ? (
+            
+            <div className="flex-1 min-w-0 relative flex items-center gap-2 border border-border rounded-lg bg-white focus-within:ring-2 focus-within:ring-primary">
+              <input
+                ref={inputRef}
+                type="text"
+                value={inputValue}
+                onChange={handleInputChange}
+                placeholder={
+                  showBroadcastInput
+                    ? 'Type a message... Use @ to tag an agent'
+                    : replyingTo
+                      ? `Reply to ${replyingTo.senderName}...`
+                      : 'Type a message...'
+                }
+                className="flex-1 min-w-0 px-4 py-2.5 focus:outline-none text-sm bg-transparent"
+                onKeyDown={handleInputKeyDown}
+              />
+              
+              {showBroadcastInput && showMentionDropdown && mentionCandidates.length > 0 && (
+                <>
+                  <div
+                    className="fixed inset-0 z-10"
+                    onClick={() => setShowMentionDropdown(false)}
+                    aria-hidden
+                  />
+                  <div className="absolute left-0 right-0 bottom-full mb-1 max-h-48 overflow-y-auto bg-white border border-border rounded-lg shadow-xl z-20 py-1">
+                    {mentionCandidates.map((name, i) => (
+                      <button
+                        key={name}
+                        type="button"
+                        className={`w-full px-3 py-2 text-left text-sm hover:bg-panel text-text-primary flex items-center gap-2 ${i === mentionIndex ? 'bg-panel' : ''}`}
+                        onClick={() => insertMention(name)}
+                      >
+                        <User className="w-4 h-4 text-text-muted flex-shrink-0" />
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              
+              {!showBroadcastInput && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => { setShowEmojiPicker((v) => !v); setShowAttachmentMenu(false); }}
+                    className="p-2 text-text-muted hover:text-primary rounded-full transition-colors flex-shrink-0"
+                    aria-label="Emoji"
+                  >
+                    <Smile className="w-5 h-5" />
+                  </button>
+                  {showEmojiPicker && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)} aria-hidden />
+                      <div className="absolute right-0 bottom-full mb-1 w-64 bg-white border border-border rounded-xl shadow-xl z-20 p-3">
+                        <p className="text-xs font-medium text-text-muted mb-2">Emoji</p>
+                        <div className="grid grid-cols-5 gap-1">
+                          {EMOJI_LIST.map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              className="w-9 h-9 flex items-center justify-center text-xl rounded-lg hover:bg-panel"
+                              onClick={() => {
+                                setInputValue((prev) => prev + emoji);
+                                inputRef.current?.focus();
+                              }}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+            
+            {!showBroadcastInput && (isRecording ? (
+              <button
+                type="button"
+                onClick={stopVoiceRecording}
+                className="p-2.5 rounded-full bg-status-error text-white hover:bg-status-error/90 flex-shrink-0"
+                aria-label="Stop recording"
+              >
+                <Square className="w-5 h-5" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { setShowAttachmentMenu(false); setShowEmojiPicker(false); startVoiceRecording(); }}
+                className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors flex-shrink-0"
+                aria-label="Voice message"
+              >
+                <Mic className="w-6 h-6" />
+              </button>
+            ))}
+            
             <button
               type="button"
-              onClick={stopVoiceRecording}
-              className="p-2.5 rounded-full bg-status-error text-white hover:bg-status-error/90 flex-shrink-0"
-              aria-label="Stop recording"
+              className="bg-primary text-white px-5 py-2.5 rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium flex-shrink-0"
+              onClick={sendMessage}
             >
-              <Square className="w-5 h-5" />
+              Send
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => { setShowAttachmentMenu(false); setShowEmojiPicker(false); startVoiceRecording(); }}
-              className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors flex-shrink-0"
-              aria-label="Voice message"
-            >
-              <Mic className="w-6 h-6" />
-            </button>
-          ))}
-          <button
-            type="button"
-            className="bg-primary text-white px-5 py-2.5 rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium flex-shrink-0"
-            onClick={sendMessage}
-          >
-            Send
-          </button>
           </div>
         )}
       </div>
 
+      {/* Backdrop for menus */}
       {(activeMessageMenuId !== null || activeReactionPickerId !== null) && (
         <div
           className="fixed inset-0 z-10"
@@ -1349,6 +1362,7 @@ export function ChatWindow({
         />
       )}
 
+      {/* Message Info Modal */}
       {messageInfoId !== null && (() => {
         const readByList = isInternalChat && teamMemberNames.length > 0
           ? teamMemberNames.map((name, i) => ({
@@ -1384,23 +1398,23 @@ export function ChatWindow({
                 {readByList.map((reader, idx) => {
                   const isYou = reader.name === 'You' || reader.name === agentFullName;
                   return (
-                  <div
-                    key={reader.name}
-                    className={`flex items-center gap-3 px-4 py-3 ${idx > 0 ? 'border-t border-border' : ''}`}
-                  >
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold flex-shrink-0 overflow-hidden">
-                      {isYou && agentAvatarUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        reader.name.charAt(0)
-                      )}
+                    <div
+                      key={reader.name}
+                      className={`flex items-center gap-3 px-4 py-3 ${idx > 0 ? 'border-t border-border' : ''}`}
+                    >
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold flex-shrink-0 overflow-hidden">
+                        {isYou && agentAvatarUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          reader.name.charAt(0)
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-text-primary truncate">{reader.name}</p>
+                        <p className="text-xs text-text-muted">{formatReadAt(reader.readAt)}</p>
+                      </div>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-text-primary truncate">{reader.name}</p>
-                      <p className="text-xs text-text-muted">{formatReadAt(reader.readAt)}</p>
-                    </div>
-                  </div>
                   );
                 })}
               </div>
@@ -1409,6 +1423,7 @@ export function ChatWindow({
         );
       })()}
 
+      {/* Group Info Modal */}
       {isTeamChannel && showGroupInfo && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
           <div className="bg-white w-full max-w-4xl h-[520px] rounded-xl shadow-2xl flex overflow-hidden">
@@ -1511,20 +1526,20 @@ export function ChatWindow({
                     {teamMemberNames.map((name) => {
                       const isYou = name === 'You' || name === agentFullName;
                       return (
-                      <div
-                        key={name}
-                        className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-panel"
-                      >
-                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold overflow-hidden flex-shrink-0">
-                          {isYou && agentAvatarUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            name[0]
-                          )}
+                        <div
+                          key={name}
+                          className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-panel"
+                        >
+                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold overflow-hidden flex-shrink-0">
+                            {isYou && agentAvatarUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              name[0]
+                            )}
+                          </div>
+                          <span className="text-sm text-text-primary">{name}</span>
                         </div>
-                        <span className="text-sm text-text-primary">{name}</span>
-                      </div>
                       );
                     })}
                   </div>
@@ -1619,6 +1634,7 @@ export function ChatWindow({
         </div>
       )}
 
+      {/* Agent Profile Modal */}
       {isDmPage && showAgentProfile && (
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
