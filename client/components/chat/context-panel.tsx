@@ -1,10 +1,68 @@
 'use client';
 
+import { useState } from 'react';
 import { useInboxPanels } from '@/contexts/InboxPanelsContext';
+import { useToast } from '@/contexts/ToastContext';
 import { PanelRight } from 'lucide-react';
 
-export function ContextPanel() {
+/** Customer and store data (fetched from bot). Null or missing fields = new lead / not available. */
+export interface ContextPanelCustomer {
+  name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  customerId?: string | null;
+}
+
+export interface ContextPanelStore {
+  storeName?: string | null;
+  storeCode?: string | null;
+  storeType?: string | null;
+}
+
+interface ContextPanelProps {
+  /** Customer info. Omit or pass null/empty for new lead. */
+  customer?: ContextPanelCustomer | null;
+  /** Store details. Omit or pass null/empty when no store. */
+  store?: ContextPanelStore | null;
+}
+
+function placehold(value: string | null | undefined): string {
+  return value?.trim() || '—';
+}
+
+/** Default mock data when bot data not yet provided. Replace with fetched data per conversation. */
+const defaultCustomer: ContextPanelCustomer = {
+  name: 'Ahmed Ali',
+  phone: '+971 50 123 4567',
+  email: 'ahmed.ali@example.com',
+  customerId: '#1234',
+};
+
+const defaultStore: ContextPanelStore = {
+  storeName: 'My Shopify Store',
+  storeCode: 'STORE001',
+  storeType: 'Shopify',
+};
+
+export function ContextPanel(props: ContextPanelProps = {}) {
+  const { customer: customerProp, store: storeProp } = props;
   const inboxPanels = useInboxPanels();
+  const { toast } = useToast();
+  const [internalNote, setInternalNote] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
+
+  const customer = customerProp === undefined ? defaultCustomer : customerProp;
+  const store = storeProp === undefined ? defaultStore : storeProp;
+  const hasCustomer = customer != null && (customer.name || customer.phone || customer.email || customer.customerId);
+  const hasStore = store != null && (store.storeName || store.storeCode || store.storeType);
+
+  const handleSaveNote = () => {
+    setSavingNote(true);
+    setTimeout(() => {
+      setSavingNote(false);
+      toast('Note saved');
+    }, 300);
+  };
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -23,84 +81,68 @@ export function ContextPanel() {
               </button>
             )}
           </div>
-          <div className="space-y-3">
-            <div>
-              <p className="text-xs text-text-secondary mb-1">Name</p>
-              <p className="text-sm text-text-primary">Ahmed Ali</p>
+          {hasCustomer ? (
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs text-text-secondary mb-1">Name</p>
+                <p className="text-sm text-text-primary">{placehold(customer?.name)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-text-secondary mb-1">Phone</p>
+                <p className="text-sm text-text-primary">{placehold(customer?.phone)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-text-secondary mb-1">Email</p>
+                <p className="text-sm text-text-primary">{placehold(customer?.email)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-text-secondary mb-1">Customer ID</p>
+                <p className="text-sm text-text-primary">{placehold(customer?.customerId)}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-text-secondary mb-1">Phone</p>
-              <p className="text-sm text-text-primary">+971 50 123 4567</p>
-            </div>
-            <div>
-              <p className="text-xs text-text-secondary mb-1">Email</p>
-              <p className="text-sm text-text-primary">ahmed.ali@example.com</p>
-            </div>
-            <div>
-              <p className="text-xs text-text-secondary mb-1">Customer ID</p>
-              <p className="text-sm text-text-primary">#1234</p>
-            </div>
-          </div>
+          ) : (
+            <p className="text-xs text-text-muted">No customer info yet. Data will appear when fetched from the conversation.</p>
+          )}
         </div>
 
         <div className="border-t border-border pt-6">
           <h3 className="text-sm font-semibold text-text-primary mb-4">Store Details</h3>
-          <div className="space-y-3">
-            <div>
-              <p className="text-xs text-text-secondary mb-1">Store Name</p>
-              <p className="text-sm text-text-primary">My Shopify Store</p>
+          {hasStore ? (
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs text-text-secondary mb-1">Store Name</p>
+                <p className="text-sm text-text-primary">{placehold(store?.storeName)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-text-secondary mb-1">Store Code</p>
+                <p className="text-sm text-text-primary">{placehold(store?.storeCode)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-text-secondary mb-1">Store Type</p>
+                <p className="text-sm text-text-primary">{placehold(store?.storeType)}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-text-secondary mb-1">Store Code</p>
-              <p className="text-sm text-text-primary">STORE001</p>
-            </div>
-            <div>
-              <p className="text-xs text-text-secondary mb-1">Store Type</p>
-              <p className="text-sm text-text-primary">Shopify</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="border-t border-border pt-6">
-          <h3 className="text-sm font-semibold text-text-primary mb-4">Current Order</h3>
-          <div className="p-3 bg-panel rounded-lg border border-border">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-text-primary">Order #12345</p>
-              <span className="text-xs px-2 py-1 bg-status-warning/10 text-status-warning rounded">
-                In Transit
-              </span>
-            </div>
-            <p className="text-xs text-text-secondary mb-2">$99.99 • 3 items</p>
-            <p className="text-xs text-text-muted">Placed on Jan 15, 2024</p>
-            <button className="mt-3 w-full text-xs text-primary hover:text-primary-dark">
-              View Full Details →
-            </button>
-          </div>
-        </div>
-
-        <div className="border-t border-border pt-6">
-          <h3 className="text-sm font-semibold text-text-primary mb-4">Order History</h3>
-          <div className="space-y-2">
-            <div className="p-3 bg-panel rounded-lg border border-border">
-              <p className="text-sm font-medium text-text-primary">Order #12344</p>
-              <p className="text-xs text-text-secondary">$149.99 • Delivered</p>
-            </div>
-            <div className="p-3 bg-panel rounded-lg border border-border">
-              <p className="text-sm font-medium text-text-primary">Order #12343</p>
-              <p className="text-xs text-text-secondary">$79.99 • Delivered</p>
-            </div>
-          </div>
+          ) : (
+            <p className="text-xs text-text-muted">No store linked. Show when available from the bot.</p>
+          )}
         </div>
 
         <div className="border-t border-border pt-6">
           <h3 className="text-sm font-semibold text-text-primary mb-4">Internal Notes</h3>
           <textarea
             placeholder="Add internal notes..."
+            value={internalNote}
+            onChange={(e) => setInternalNote(e.target.value)}
             className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm resize-none"
             rows={4}
           />
-          <button className="mt-2 text-xs text-primary hover:text-primary-dark">
-            Save Note
+          <button
+            type="button"
+            onClick={handleSaveNote}
+            disabled={savingNote}
+            className="mt-2 px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-medium hover:bg-primary-dark disabled:opacity-50 transition-colors"
+          >
+            {savingNote ? 'Saving…' : 'Save Note'}
           </button>
         </div>
       </div>

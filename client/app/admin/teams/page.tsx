@@ -28,6 +28,7 @@ export default function AdminTeams() {
   const [transferTarget, setTransferTarget] = useState<Record<string, string>>({});
   const [teamDescription, setTeamDescription] = useState('');
   const [activeMemberMenu, setActiveMemberMenu] = useState<string | null>(null);
+  const [deleteTeamConfirm, setDeleteTeamConfirm] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     if (!selectedId && teams.length > 0) {
@@ -56,11 +57,16 @@ export default function AdminTeams() {
     toast('Team added');
   };
 
-  const handleDelete = (id: string, name: string) => {
-    if (!confirm(`Delete team "${name}"? Members will simply lose this team grouping.`)) return;
-    removeTeam(id);
-    if (menuTeamId === id) setMenuTeamId(null);
+  const handleDeleteClick = (id: string, name: string) => {
+    setDeleteTeamConfirm({ id, name });
+  };
+
+  const handleDeleteTeamConfirm = () => {
+    if (!deleteTeamConfirm) return;
+    removeTeam(deleteTeamConfirm.id);
+    if (menuTeamId === deleteTeamConfirm.id) setMenuTeamId(null);
     toast('Team removed');
+    setDeleteTeamConfirm(null);
   };
 
   const handleAddMember = () => {
@@ -203,7 +209,7 @@ export default function AdminTeams() {
                               </Link>
                               <button
                                 type="button"
-                                onClick={() => handleDelete(team.id, team.name)}
+                                onClick={() => handleDeleteClick(team.id, team.name)}
                                 className="w-full flex items-center gap-2 px-3 py-2 text-xs text-status-error hover:bg-panel text-left"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -461,6 +467,40 @@ export default function AdminTeams() {
           ) : null}
         </div>
       </div>
+
+      {deleteTeamConfirm && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+          onClick={() => setDeleteTeamConfirm(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm font-semibold text-text-primary mb-1">Delete team</p>
+            <p className="text-xs text-text-secondary mb-6">
+              Delete &quot;{deleteTeamConfirm.name}&quot;? Members will simply lose this team grouping.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTeamConfirm(null)}
+                className="px-4 py-2 rounded-lg border border-border text-xs font-medium text-text-primary hover:bg-panel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteTeamConfirm}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-status-error text-white text-xs font-medium hover:opacity-90"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete team
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showCreateModal && (
         <div

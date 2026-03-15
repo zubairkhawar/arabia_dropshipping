@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import { useInboxPanels } from '@/contexts/InboxPanelsContext';
+import { useInboxConversations } from '@/contexts/InboxConversationsContext';
 import { ChevronDown } from 'lucide-react';
 
 type ConversationStatus = 'active' | 'resolved' | 'pending';
@@ -21,6 +22,10 @@ interface Conversation {
   /** Backend-generated agent ID when handler is an agent. */
   handlerAgentId?: string;
   closedAt?: string;
+  /** True when last message is from customer and agent has not replied yet. Only live conversations. */
+  isNewLead?: boolean;
+  /** When set, conversation was closed and customer messaged again; now back in live. */
+  reopenedAt?: string;
 }
 
 interface AgentAvatar {
@@ -31,53 +36,63 @@ interface AgentAvatar {
   online: boolean;
 }
 
+const defaultConversations: Conversation[] = [
+  {
+    id: 1,
+    customerName: 'Ahmed Ali',
+    customerId: '#1234',
+    lastMessage: 'Hello, I need help with my order...',
+    lastActivityAt: '2m ago',
+    unread: 2,
+    channel: 'whatsapp',
+    status: 'active',
+    handlerType: 'ai',
+    isNewLead: true,
+  },
+  {
+    id: 2,
+    customerName: 'Sarah Khan',
+    customerId: '#1235',
+    lastMessage: 'When will my order be delivered?',
+    lastActivityAt: '5m ago',
+    unread: 1,
+    channel: 'whatsapp',
+    status: 'active',
+    handlerType: 'agent',
+    handlerName: 'Hamza',
+    handlerAgentId: '1002',
+    isNewLead: true,
+  },
+  {
+    id: 3,
+    customerName: 'Mohammed Hassan',
+    customerId: '#1236',
+    lastMessage: 'Thank you for your help!',
+    lastActivityAt: '1h ago',
+    unread: 0,
+    channel: 'whatsapp',
+    status: 'resolved',
+    handlerType: 'agent',
+    handlerName: 'Sarah',
+    handlerAgentId: '1003',
+    closedAt: '1h ago',
+  },
+];
+
 export function ChatList() {
   const inboxPanels = useInboxPanels();
   const pathname = usePathname();
-  const [selectedId, setSelectedId] = useState<number | null>(1);
+  const inboxConv = useInboxConversations();
+  const [localSelectedId, setLocalSelectedId] = useState<number | null>(1);
+  const [localConversations] = useState<Conversation[]>(defaultConversations);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [liveOpen, setLiveOpen] = useState(true);
   const [closedOpen, setClosedOpen] = useState(true);
-  const [conversations] = useState<Conversation[]>([
-    {
-      id: 1,
-      customerName: 'Ahmed Ali',
-      customerId: '#1234',
-      lastMessage: 'Hello, I need help with my order...',
-      lastActivityAt: '2m ago',
-      unread: 2,
-      channel: 'whatsapp',
-      status: 'active',
-      handlerType: 'ai',
-    },
-    {
-      id: 2,
-      customerName: 'Sarah Khan',
-      customerId: '#1235',
-      lastMessage: 'When will my order be delivered?',
-      lastActivityAt: '5m ago',
-      unread: 1,
-      channel: 'whatsapp',
-      status: 'active',
-      handlerType: 'agent',
-      handlerName: 'Hamza',
-      handlerAgentId: '1002',
-    },
-    {
-      id: 3,
-      customerName: 'Mohammed Hassan',
-      customerId: '#1236',
-      lastMessage: 'Thank you for your help!',
-      lastActivityAt: '1h ago',
-      unread: 0,
-      channel: 'whatsapp',
-      status: 'resolved',
-      handlerType: 'agent',
-      handlerName: 'Sarah',
-      handlerAgentId: '1003',
-      closedAt: '1h ago',
-    },
-  ]);
+
+  const isAgentInbox = pathname?.startsWith('/agent/inbox');
+  const conversations = isAgentInbox && inboxConv ? inboxConv.conversations : localConversations;
+  const selectedId = isAgentInbox && inboxConv ? inboxConv.selectedId : localSelectedId;
+  const setSelectedId = isAgentInbox && inboxConv ? inboxConv.setSelectedId : setLocalSelectedId;
 
   const view: 'all' | 'live' | 'closed' = useMemo(() => {
     if (pathname?.startsWith('/admin/inbox/live')) return 'live';
@@ -206,6 +221,9 @@ export function ChatList() {
                 {liveOpen &&
                   liveConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
+                    const isReopened = !!(conv as { reopenedAt?: string }).reopenedAt;
+                    const showNewLead = isAgentInbox && conv.status === 'active' && conv.isNewLead && !isReopened;
+                    const showReopened = isAgentInbox && conv.status === 'active' && isReopened;
                     return (
                       <button
                         key={conv.id}
@@ -217,22 +235,51 @@ export function ChatList() {
                             : 'bg-white hover:bg-panel border border-border'
                         }`}
                       >
-                        <div className="flex items-start justify-between mb-1">
+                        <div className="flex items-start justify-between gap-2 mb-1">
                           <span
-                            className={`text-sm font-medium truncate flex-1 min-w-0 ${
+                            className={`text-sm font-medium truncate flex-1 min-w-0 flex items-center gap-1.5 ${
                               isSelected ? 'text-white' : 'text-text-primary'
                             }`}
                           >
                             {conv.customerName}
+                            {conv.unread > 0 && (
+                              <span
+                                className={`shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-full flex items-center justify-center text-[10px] font-semibold ${
+                                  isSelected
+                                    ? 'bg-white/25 text-white'
+                                    : 'bg-primary text-white'
+                                }`}
+                              >
+                                {conv.unread}
+                              </span>
+                            )}
                           </span>
                           <span
-                            className={`text-xs flex-shrink-0 ml-2 ${
+                            className={`text-xs flex-shrink-0 ${
                               isSelected ? 'text-white/80' : 'text-text-muted'
                             }`}
                           >
                             {conv.lastActivityAt}
                           </span>
                         </div>
+                        {showNewLead && (
+                          <p
+                            className={`text-[10px] font-semibold uppercase tracking-wide mb-0.5 ${
+                              isSelected ? 'text-white/90' : 'text-primary'
+                            }`}
+                          >
+                            New Lead
+                          </p>
+                        )}
+                        {showReopened && (
+                          <p
+                            className={`text-[10px] font-semibold uppercase tracking-wide mb-0.5 ${
+                              isSelected ? 'text-white/90' : 'text-text-muted'
+                            }`}
+                          >
+                            Reopened
+                          </p>
+                        )}
                         <p
                           className={`text-xs truncate ${
                             isSelected ? 'text-white/90' : 'text-text-secondary'
@@ -267,7 +314,6 @@ export function ChatList() {
                 {closedOpen &&
                   closedConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
-
                     return (
                       <button
                         key={conv.id}
@@ -279,16 +325,25 @@ export function ChatList() {
                             : 'bg-white hover:bg-panel border border-border'
                         }`}
                       >
-                        <div className="flex items-start justify-between mb-1">
+                        <div className="flex items-start justify-between gap-2 mb-1">
                           <span
-                            className={`text-sm font-medium truncate flex-1 min-w-0 ${
+                            className={`text-sm font-medium truncate flex-1 min-w-0 flex items-center gap-1.5 ${
                               isSelected ? 'text-white' : 'text-text-primary'
                             }`}
                           >
                             {conv.customerName}
+                            {conv.unread > 0 && (
+                              <span
+                                className={`shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-full flex items-center justify-center text-[10px] font-semibold ${
+                                  isSelected ? 'bg-white/25 text-white' : 'bg-primary text-white'
+                                }`}
+                              >
+                                {conv.unread}
+                              </span>
+                            )}
                           </span>
                           <span
-                            className={`text-xs flex-shrink-0 ml-2 ${
+                            className={`text-xs flex-shrink-0 ${
                               isSelected ? 'text-white/80' : 'text-text-muted'
                             }`}
                           >
@@ -302,6 +357,21 @@ export function ChatList() {
                         >
                           {conv.lastMessage}
                         </p>
+                        {isAgentInbox && inboxConv && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              inboxConv.reopenConversation(conv.id);
+                              setSelectedId(conv.id);
+                            }}
+                            className={`mt-2 text-[10px] font-medium underline ${
+                              isSelected ? 'text-white/90 hover:text-white' : 'text-primary hover:text-primary/80'
+                            }`}
+                          >
+                            Simulate: Customer messaged again
+                          </button>
+                        )}
                       </button>
                     );
                   })}

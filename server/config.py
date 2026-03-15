@@ -35,3 +35,15 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Runtime override for OpenAI API key (set via admin Settings UI). Takes precedence over env.
+_openai_api_key_override: Optional[str] = None
+
+
+def get_openai_api_key() -> Optional[str]:
+    return _openai_api_key_override or settings.openai_api_key
+
+
+def set_openai_api_key_override(key: Optional[str]) -> None:
+    global _openai_api_key_override
+    _openai_api_key_override = key

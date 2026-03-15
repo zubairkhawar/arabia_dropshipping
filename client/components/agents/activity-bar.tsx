@@ -2,9 +2,7 @@
 
 import { useMemo, useState, useCallback } from 'react';
 
-const WEEKS = 26;
 const DAYS_PER_WEEK = 7;
-const TOTAL_DAYS = WEEKS * DAYS_PER_WEEK;
 const CELL_BASE = 'rounded-sm';
 
 export type DaySession = { startMinutes: number; endMinutes: number };
@@ -15,9 +13,26 @@ export type DayAttendance = {
   sessions: DaySession[];
 };
 
-function getDateForIndex(index: number): Date {
-  const d = new Date();
-  d.setDate(d.getDate() - (TOTAL_DAYS - 1 - index));
+/** Rolling window: last 7 months from today. Updates as time passes. */
+function getAttendanceWindow(): { firstSunday: Date; totalDays: number; columns: number } {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const startDate = new Date(today);
+  startDate.setMonth(startDate.getMonth() - 7);
+  startDate.setHours(0, 0, 0, 0);
+  const firstSunday = new Date(startDate);
+  firstSunday.setDate(firstSunday.getDate() - startDate.getDay());
+  const endTime = today.getTime();
+  const startTime = firstSunday.getTime();
+  const totalDaysFromFirstSunday = Math.ceil((endTime - startTime) / 86400000) + 1;
+  const columns = Math.ceil(totalDaysFromFirstSunday / DAYS_PER_WEEK);
+  const totalDays = columns * DAYS_PER_WEEK;
+  return { firstSunday, totalDays, columns };
+}
+
+function getDateForIndex(index: number, firstSunday: Date): Date {
+  const d = new Date(firstSunday);
+  d.setDate(d.getDate() + index);
   return d;
 }
 
@@ -25,7 +40,7 @@ function formatDate(d: Date): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function formatTimeFromMinutes(m: number): string {
+export function formatTimeFromMinutes(m: number): string {
   const h = Math.floor(m / 60);
   const min = m % 60;
   const period = h >= 12 ? 'PM' : 'AM';
@@ -33,7 +48,7 @@ function formatTimeFromMinutes(m: number): string {
   return `${h12}:${min.toString().padStart(2, '0')} ${period}`;
 }
 
-function formatDurationMinutes(totalMinutes: number): string {
+export function formatDurationMinutes(totalMinutes: number): string {
   const h = Math.floor(totalMinutes / 60);
   const m = totalMinutes % 60;
   if (h === 0) return `${m}m`;
@@ -41,17 +56,18 @@ function formatDurationMinutes(totalMinutes: number): string {
   return `${h}h ${m}m`;
 }
 
-/** Stable mock: per-day hours worked and sessions from agentId. Replace with API. */
-function getDayAttendance(agentId: string, workingDays: number[]): DayAttendance[] {
+/** Stable mock: per-day hours worked and sessions from agentId. Replace with API. Exported for PDF reports. Uses March–today window. */
+export function getDayAttendance(agentId: string, workingDays: number[]): DayAttendance[] {
+  const { firstSunday, totalDays } = getAttendanceWindow();
   const workingSet = new Set(workingDays);
   const out: DayAttendance[] = [];
   let seed = agentId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   const WORK_START = 9 * 60; // 9:00
   const WORK_END = 18 * 60;   // 18:00
 
-  for (let i = 0; i < TOTAL_DAYS; i++) {
+  for (let i = 0; i < totalDays; i++) {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    const date = getDateForIndex(i);
+    const date = getDateForIndex(i, firstSunday);
     const isOff = !workingSet.has(date.getDay());
     if (isOff) {
       out.push({ date, hoursWorked: 0, sessions: [] });
@@ -128,12 +144,13 @@ export function AgentActivityBar({
 }) {
   const [selectedDayIndex, setSelectedDayIndex] = useState<number | null>(null);
 
-  const { dayLabels, monthLabels, isOffDay } = useMemo(() => {
+  const { dayLabels, monthLabels, isOffDay, columns } = useMemo(() => {
+    const { firstSunday, totalDays, columns: cols } = getAttendanceWindow();
     const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const monthLabels: { col: number; label: string }[] = [];
     let lastMonth = -1;
-    for (let col = 0; col < WEEKS; col++) {
-      const date = getDateForIndex(col * DAYS_PER_WEEK);
+    for (let col = 0; col < cols; col++) {
+      const date = getDateForIndex(col * DAYS_PER_WEEK, firstSunday);
       const month = date.getMonth();
       if (month !== lastMonth) {
         monthLabels.push({ col, label: date.toLocaleDateString(undefined, { month: 'short' }) });
@@ -141,8 +158,8 @@ export function AgentActivityBar({
       }
     }
     const workingSet = new Set(workingDays);
-    const isOffDay = (index: number) => !workingSet.has(getDateForIndex(index).getDay());
-    return { dayLabels, monthLabels, isOffDay };
+    const isOffDay = (index: number) => !workingSet.has(getDateForIndex(index, firstSunday).getDay());
+    return { dayLabels, monthLabels, isOffDay, columns: cols };
   }, [workingDays]);
 
   const selectedDay = selectedDayIndex != null ? dayData[selectedDayIndex] : null;
@@ -168,7 +185,7 @@ export function AgentActivityBar({
         </div>
         <div className="flex flex-col gap-0.5 flex-1 min-w-0 min-h-[100px]">
           <div className="flex gap-0.5 w-full">
-            {Array.from({ length: WEEKS }, (_, col) => {
+            {Array.from({ length: columns }, (_, col) => {
               const label = monthLabels.find((m) => m.col === col);
               return (
                 <div
@@ -181,7 +198,7 @@ export function AgentActivityBar({
             })}
           </div>
           <div className="flex gap-0.5 flex-1 min-w-0 w-full min-h-0">
-            {Array.from({ length: WEEKS }, (_, col) => (
+            {Array.from({ length: columns }, (_, col) => (
               <div key={col} className="flex flex-col gap-0.5 flex-1 min-w-0">
                 {Array.from({ length: DAYS_PER_WEEK }, (_, row) => {
                   const index = col * DAYS_PER_WEEK + row;

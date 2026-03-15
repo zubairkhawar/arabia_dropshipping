@@ -4,6 +4,7 @@ import { ChatList } from '@/components/chat/chat-list';
 import { ChatWindow } from '@/components/chat/chat-window';
 import { ContextPanel } from '@/components/chat/context-panel';
 import { InboxPanelsProvider, useInboxPanels } from '@/contexts/InboxPanelsContext';
+import { InboxConversationsProvider } from '@/contexts/InboxConversationsContext';
 import { PanelRightOpen, SquareChevronRight, Search } from 'lucide-react';
 
 function AgentInboxContent() {
@@ -65,7 +66,9 @@ function AgentInboxContent() {
 export default function AgentInbox() {
   return (
     <InboxPanelsProvider>
-      <AgentInboxContent />
+      <InboxConversationsProvider>
+        <AgentInboxContent />
+      </InboxConversationsProvider>
     </InboxPanelsProvider>
   );
 }

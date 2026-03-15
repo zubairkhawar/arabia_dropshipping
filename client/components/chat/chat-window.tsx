@@ -27,6 +27,8 @@ import {
   Pause,
 } from 'lucide-react';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
+import { useInboxConversations } from '@/contexts/InboxConversationsContext';
+import type { InboxMessage } from '@/contexts/InboxConversationsContext';
 import type { TeamEvent } from '@/contexts/TeamsContext';
 
 interface MessageAttachment {
@@ -160,6 +162,7 @@ export function ChatWindow({
 }: ChatWindowProps) {
   const pathname = usePathname();
   const { avatarUrl: agentAvatarUrl, fullName: agentFullName } = useAgentProfile();
+  const inboxConv = useInboxConversations();
   const isTeamChannel = pathname?.startsWith('/agent/team') || (pathname?.startsWith('/admin/teams') && !!teamName);
   const isDmPage = pathname?.startsWith('/agent/dm');
   const showBroadcastInput = broadcastMode && isInternalChat && !!teamName;
@@ -167,6 +170,24 @@ export function ChatWindow({
   const [messages, setMessages] = useState<Message[]>(
     isInternalChat ? defaultInternalMessages : defaultCustomerMessages,
   );
+
+  const selectedConv =
+    inboxConv?.selectedId != null
+      ? inboxConv.conversations.find((c) => c.id === inboxConv.selectedId)
+      : undefined;
+  const isInboxWithSelection = !!inboxConv && inboxConv.selectedId != null;
+
+  useEffect(() => {
+    if (!isInboxWithSelection || isInternalChat) return;
+    const convId = inboxConv!.selectedId!;
+    const stored = inboxConv.getMessages(convId);
+    if (stored.length > 0) {
+      setMessages(stored as Message[]);
+    } else {
+      inboxConv.setMessages(convId, defaultCustomerMessages as InboxMessage[]);
+      setMessages(defaultCustomerMessages);
+    }
+  }, [isInboxWithSelection, inboxConv?.selectedId]);
   const [inputValue, setInputValue] = useState('');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
@@ -438,23 +459,25 @@ export function ChatWindow({
     if (!hasContent) return;
     const nextId = Math.max(0, ...messages.map((m) => m.id)) + 1;
     const now = new Date();
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: nextId,
-        content: text || (pendingAttachment?.type === 'voice' ? 'Voice message' : pendingAttachment?.name || 'Attachment'),
-        sender: 'agent' as const,
-        senderName: showBroadcastInput ? 'Admin' : 'You',
-        timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        sentAt: now.toISOString(),
-        replyTo: replyingTo ?? undefined,
-        attachment: pendingAttachment ?? undefined,
-      },
-    ]);
+    const newMsg: Message = {
+      id: nextId,
+      content: text || (pendingAttachment?.type === 'voice' ? 'Voice message' : pendingAttachment?.name || 'Attachment'),
+      sender: 'agent' as const,
+      senderName: showBroadcastInput ? 'Admin' : 'You',
+      timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      sentAt: now.toISOString(),
+      replyTo: replyingTo ?? undefined,
+      attachment: pendingAttachment ?? undefined,
+    };
+    setMessages((prev) => [...prev, newMsg]);
     setInputValue('');
     setReplyingTo(null);
     setPendingAttachment(null);
     setShowMentionDropdown(false);
+    if (inboxConv?.selectedId != null) {
+      inboxConv.appendMessage(inboxConv.selectedId, newMsg as InboxMessage);
+      inboxConv.markAgentReplied(inboxConv.selectedId);
+    }
   };
 
   const startVoiceRecording = () => {
@@ -660,7 +683,22 @@ export function ChatWindow({
                     <button
                       type="button"
                       onClick={() => {
-                        addSystemNote('Conversation closed by agent.');
+                        if (inboxConv?.selectedId != null) {
+                          const now = new Date();
+                          const systemMsg: Message = {
+                            id: Math.max(0, ...messages.map((m) => m.id)) + 1,
+                            content: 'Conversation closed by agent.',
+                            sender: 'ai',
+                            senderName: 'System',
+                            timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                            sentAt: now.toISOString(),
+                          };
+                          inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
+                          setMessages((prev) => [...prev, systemMsg]);
+                          inboxConv.closeConversation(inboxConv.selectedId);
+                        } else {
+                          addSystemNote('Conversation closed by agent.');
+                        }
                         closeMenus();
                       }}
                       className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-status-error"
@@ -681,6 +719,11 @@ export function ChatWindow({
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto p-6 space-y-4 bg-panel relative"
       >
+        {selectedConv?.reopenedAt && selectedConv.closedAt && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            You closed this conversation on {selectedConv.closedAt}. The customer has messaged again.
+          </div>
+        )}
         {stickyDate && (
           <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
             <span className="bg-white/95 border border-border rounded-full px-3 py-1.5 text-xs font-medium text-text-secondary shadow-sm">

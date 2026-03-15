@@ -4,8 +4,13 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema import BaseMessage
 
-from config import settings
+from config import get_openai_api_key
 from services.store_integration_service.client import StoreIntegrationClient
+
+
+def _clear_llm_cache() -> None:
+    AIOrchestrator._llm_cache = None
+    AIOrchestrator._llm_cache_key = None
 
 
 class AIOrchestrator:
@@ -17,13 +22,23 @@ class AIOrchestrator:
     - LLM reasoning and escalation decisions
     """
 
+    _llm_cache = None
+    _llm_cache_key = None
+
     def __init__(self):
-        self.llm = ChatOpenAI(
-            model_name="gpt-4o-mini",
-            temperature=0.3,
-            openai_api_key=settings.openai_api_key,
-        )
         self.store_client = StoreIntegrationClient()
+
+    @property
+    def llm(self):
+        key = get_openai_api_key()
+        if key != AIOrchestrator._llm_cache_key:
+            AIOrchestrator._llm_cache = ChatOpenAI(
+                model_name="gpt-4o-mini",
+                temperature=0.3,
+                openai_api_key=key,
+            )
+            AIOrchestrator._llm_cache_key = key
+        return AIOrchestrator._llm_cache
 
     async def detect_language(self, text: str) -> str:
         """Very lightweight language detection stub for routing / prompts."""

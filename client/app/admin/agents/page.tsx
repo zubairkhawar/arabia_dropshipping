@@ -2,10 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
-import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X } from 'lucide-react';
+import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X, Download } from 'lucide-react';
 import { AgentActivityBar, useAgentAttendanceData } from '@/components/agents/activity-bar';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useToast } from '@/contexts/ToastContext';
+import { buildSingleAgentPdf, filterByMonth } from '@/lib/attendance-pdf';
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 /** Mock per-agent performance metrics (replace with API when available). */
 function getAgentMetrics(agentId: string, index: number): { uptimePercent: number; avgResponseTimeSeconds: number } {
@@ -36,6 +39,10 @@ export default function AdminAgents() {
   const [showPassword, setShowPassword] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
+  const [agentReportMonth, setAgentReportMonth] = useState(() => new Date().getMonth() + 1);
+  const [agentReportYear, setAgentReportYear] = useState(() => new Date().getFullYear());
+  const [agentReportDownloading, setAgentReportDownloading] = useState(false);
+  const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<{ id: string; label: string } | null>(null);
 
   useEffect(() => {
     if (!selectedId && agents.length > 0) {
@@ -69,10 +76,34 @@ export default function AdminAgents() {
     toast('Agent added');
   };
 
-  const handleDelete = (id: string, label: string) => {
-    if (!confirm(`Delete agent "${label}" and remove their access to the agent portal?`)) return;
-    removeAgent(id);
+  const handleDeleteClick = (id: string, label: string) => {
+    setDeleteAgentConfirm({ id, label });
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!deleteAgentConfirm) return;
+    removeAgent(deleteAgentConfirm.id);
     toast('Agent removed');
+    setDeleteAgentConfirm(null);
+  };
+
+  const handleDownloadAgentReport = async () => {
+    if (!selectedAgent) return;
+    setAgentReportDownloading(true);
+    try {
+      const dayData = filterByMonth(attendanceDayData, agentReportYear, agentReportMonth - 1);
+      const periodLabel = new Date(agentReportYear, agentReportMonth - 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+      await buildSingleAgentPdf({
+        agent: { id: selectedAgent.id, name: selectedAgent.name, email: selectedAgent.email },
+        dayData,
+        periodLabel,
+      });
+      toast('Report downloaded');
+    } catch (e) {
+      toast('Failed to generate report');
+    } finally {
+      setAgentReportDownloading(false);
+    }
   };
 
   const width = listCollapsed ? 64 : 280;
@@ -336,14 +367,47 @@ export default function AdminAgents() {
                   Deleting this agent will immediately remove their access to the agent portal. It
                   does not delete historical conversations; those stay attached to their name.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => handleDelete(selectedAgent.id, selectedAgent.name)}
-                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-status-error/60 text-status-error hover:bg-status-error/10 text-xs font-medium"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Delete agent and revoke access
-                </button>
+                <div className="flex flex-wrap gap-2 items-center">
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteClick(selectedAgent.id, selectedAgent.name)}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-status-error/60 text-status-error hover:bg-status-error/10 text-xs font-medium"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete agent and revoke access
+                  </button>
+                </div>
+                <div className="pt-3 border-t border-border">
+                  <p className="text-text-secondary mb-2">Download this agent’s attendance report (PDF) for a month.</p>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <select
+                      value={agentReportMonth}
+                      onChange={(e) => setAgentReportMonth(Number(e.target.value))}
+                      className="px-2 py-1.5 border border-border rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      {MONTHS.map((m, i) => (
+                        <option key={m} value={i + 1}>{m}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min={2020}
+                      max={2030}
+                      value={agentReportYear}
+                      onChange={(e) => setAgentReportYear(Number(e.target.value))}
+                      className="px-2 py-1.5 border border-border rounded-lg text-xs w-20 focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleDownloadAgentReport}
+                      disabled={agentReportDownloading}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-medium hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      {agentReportDownloading ? 'Generating…' : 'Download report'}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -424,6 +488,40 @@ export default function AdminAgents() {
           </div>
         )}
       </div>
+
+      {deleteAgentConfirm && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+          onClick={() => setDeleteAgentConfirm(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm font-semibold text-text-primary mb-1">Delete agent</p>
+            <p className="text-xs text-text-secondary mb-6">
+              Delete &quot;{deleteAgentConfirm.label}&quot; and remove their access to the agent portal? This does not delete historical conversations.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteAgentConfirm(null)}
+                className="px-4 py-2 rounded-lg border border-border text-xs font-medium text-text-primary hover:bg-panel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteConfirm}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-status-error text-white text-xs font-medium hover:opacity-90"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete agent
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showCreateModal && (
         <div
