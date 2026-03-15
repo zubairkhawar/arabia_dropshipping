@@ -5,6 +5,7 @@ import { useAgents } from '@/contexts/AgentsContext';
 import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X } from 'lucide-react';
 import { AgentActivityBar } from '@/components/agents/activity-bar';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
+import { useToast } from '@/contexts/ToastContext';
 
 /** Mock per-agent performance metrics (replace with API when available). */
 function getAgentMetrics(agentId: string, index: number): { uptimePercent: number; avgResponseTimeSeconds: number } {
@@ -25,6 +26,7 @@ function formatAvgResponse(seconds: number): string {
 export default function AdminAgents() {
   const { agents, addAgent, removeAgent, updateAgent } = useAgents();
   const { schedule } = useOnlineSchedule();
+  const { toast } = useToast();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listCollapsed, setListCollapsed] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -63,11 +65,13 @@ export default function AdminAgents() {
     setName('');
     setPassword('');
     setShowCreateModal(false);
+    toast('Agent added');
   };
 
   const handleDelete = (id: string, label: string) => {
     if (!confirm(`Delete agent "${label}" and remove their access to the agent portal?`)) return;
     removeAgent(id);
+    toast('Agent removed');
   };
 
   const width = listCollapsed ? 64 : 280;

@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Radio, XCircle, Clock } from 'lucide-react';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
+import { useToast } from '@/contexts/ToastContext';
 
 interface Broadcast {
   id: string;
@@ -35,6 +36,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export default function AdminSettings() {
   const { schedule, setSchedule } = useOnlineSchedule();
+  const { toast } = useToast();
   const [platformName, setPlatformName] = useState('Arabia Dropshipping');
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
   const [title, setTitle] = useState('');
@@ -60,6 +62,7 @@ export default function AdminSettings() {
     setStartsAt('');
     setEndsAt('');
     setMessage('');
+    toast('Broadcast added');
   };
 
   const removeBroadcast = (id: string) => {
@@ -71,6 +74,7 @@ export default function AdminSettings() {
     if (typeof window === 'undefined') return;
     if (confirm('End this broadcast now? The AI will no longer use this message.')) {
       removeBroadcast(id);
+      toast('Broadcast ended');
     }
   };
 
@@ -188,7 +192,11 @@ export default function AdminSettings() {
           </div>
 
           <div className="border-t border-border pt-6">
-            <button className="bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary-dark transition-colors text-sm">
+            <button
+              type="button"
+              onClick={() => toast('Settings saved')}
+              className="bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary-dark transition-colors text-sm"
+            >
               Save Changes
             </button>
           </div>

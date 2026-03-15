@@ -4,9 +4,11 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ChatWindow } from '@/components/chat/chat-window';
 import { useTeams } from '@/contexts/TeamsContext';
+import { useToast } from '@/contexts/ToastContext';
 import { Users, UserPlus, MoreVertical, Trash2, ChevronLeft, ChevronRight, ArrowRightLeft, UserMinus } from 'lucide-react';
 
 export default function AdminTeams() {
+  const { toast } = useToast();
   const {
     teams,
     addTeam,
@@ -51,12 +53,14 @@ export default function AdminTeams() {
     setTeamName('');
     setTeamDescription('');
     setShowCreateModal(false);
+    toast('Team added');
   };
 
   const handleDelete = (id: string, name: string) => {
     if (!confirm(`Delete team "${name}"? Members will simply lose this team grouping.`)) return;
     removeTeam(id);
     if (menuTeamId === id) setMenuTeamId(null);
+    toast('Team removed');
   };
 
   const handleAddMember = () => {
