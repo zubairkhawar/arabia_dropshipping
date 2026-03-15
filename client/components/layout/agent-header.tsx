@@ -5,6 +5,8 @@ import { Search, Bell, User, ChevronDown, LogOut, Settings, PanelRightOpen, Pane
 import { useSidebar } from '@/contexts/SidebarContext';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useAgents } from '@/contexts/AgentsContext';
+import { useAgentPresence, getSlugByName } from '@/contexts/AgentPresenceContext';
+import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { usePathname } from 'next/navigation';
 
 type AgentStatus = 'active' | 'offline';
@@ -26,11 +28,15 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
-  const [agentStatus, setAgentStatus] = useState<AgentStatus>('active');
   const { isCollapsed, toggleSidebar } = useSidebar();
   const { avatarUrl, fullName, setAvatarUrl, setFullName } = useAgentProfile();
   const { currentAgentId, updateAgent, getCurrentAgent } = useAgents();
   const currentAgent = getCurrentAgent();
+  const { getPresence, setPresence } = useAgentPresence();
+  const { isWithinSchedule, schedule } = useOnlineSchedule();
+  const slug = getSlugByName(fullName);
+  const rawStatus = slug ? getPresence(slug) : 'offline';
+  const agentStatus: AgentStatus = isWithinSchedule() ? rawStatus : 'offline';
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordMessage, setPasswordMessage] = useState<'success' | 'error' | null>(null);
@@ -136,19 +142,31 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
             <>
               <div className="fixed inset-0 z-10" onClick={() => setShowStatusMenu(false)} />
               <div className="absolute right-0 mt-1 w-40 bg-white border border-border rounded-lg shadow-xl z-20 py-1">
-                {(Object.keys(statusConfig) as AgentStatus[]).map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => {
-                      setAgentStatus(status);
-                      setShowStatusMenu(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-panel text-sm"
-                  >
-                    <span className={`w-2 h-2 rounded-full ${statusConfig[status].dotClass}`} />
-                    {statusConfig[status].label}
-                  </button>
-                ))}
+                {(Object.keys(statusConfig) as AgentStatus[]).map((status) => {
+                  const disabled = status === 'active' && !isWithinSchedule();
+                  return (
+                    <button
+                      key={status}
+                      onClick={() => {
+                        if (disabled) return;
+                        if (slug) setPresence(slug, status);
+                        setShowStatusMenu(false);
+                      }}
+                      disabled={disabled}
+                      title={
+                        disabled
+                          ? `You can only go online during working hours (${schedule.startTime}–${schedule.endTime}, selected days)`
+                          : undefined
+                      }
+                      className={`w-full flex items-center gap-2 px-4 py-2 text-left text-sm ${
+                        disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-panel'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${statusConfig[status].dotClass}`} />
+                      {statusConfig[status].label}
+                    </button>
+                  );
+                })}
               </div>
             </>
           )}

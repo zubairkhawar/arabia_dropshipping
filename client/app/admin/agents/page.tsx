@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
 import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X } from 'lucide-react';
 import { AgentActivityBar } from '@/components/agents/activity-bar';
+import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 
 /** Mock per-agent performance metrics (replace with API when available). */
 function getAgentMetrics(agentId: string, index: number): { uptimePercent: number; avgResponseTimeSeconds: number } {
@@ -23,6 +24,7 @@ function formatAvgResponse(seconds: number): string {
 
 export default function AdminAgents() {
   const { agents, addAgent, removeAgent, updateAgent } = useAgents();
+  const { schedule } = useOnlineSchedule();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listCollapsed, setListCollapsed] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -342,14 +344,13 @@ export default function AdminAgents() {
 
             {/* Row 2: Attendance (3/4) + Performance (1/4) */}
             {selectedAgent && (
-              <div className="lg:col-span-3 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4">
+              <div className="lg:col-span-3 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
                 <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
                   Attendance
                 </p>
-                <p className="text-xs text-text-secondary">
-                  Activity over the last 26 weeks (GitHub-style)
-                </p>
-                <AgentActivityBar agentId={selectedAgent.id} />
+                <div className="flex-1 min-h-0 min-w-0 flex flex-col">
+                  <AgentActivityBar agentId={selectedAgent.id} workingDays={schedule.workingDays} />
+                </div>
               </div>
             )}
             {selectedAgent && (

@@ -1,12 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 const WEEKS = 26;
 const DAYS_PER_WEEK = 7;
 const TOTAL_DAYS = WEEKS * DAYS_PER_WEEK;
 
-const CELL_CLASS = 'w-3 h-3 rounded-sm shrink-0';
+const CELL_BASE = 'rounded-sm';
 
 /** Generate stable mock attendance (present = true) for each day from agentId. Replace with API data. */
 function getAttendancePresent(agentId: string): boolean[] {
@@ -29,11 +29,16 @@ function getDateForIndex(index: number): Date {
   return d;
 }
 
-export function AgentActivityBar({ agentId }: { agentId: string }) {
-  const [tooltip, setTooltip] = useState<{ date: string; present: boolean } | null>(null);
-
-  const { present, dayLabels, monthLabels } = useMemo(() => {
-    const present = getAttendancePresent(agentId);
+/** workingDays: 0=Sun, 1=Mon, ... 6=Sat. Days not in this array are holidays (attendance not marked). */
+export function AgentActivityBar({
+  agentId,
+  workingDays = [1, 2, 3, 4, 5, 6],
+}: {
+  agentId: string;
+  workingDays?: number[];
+}) {
+  const { present, dayLabels, monthLabels, isOffDay } = useMemo(() => {
+    const rawPresent = getAttendancePresent(agentId);
     const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const monthLabels: { col: number; label: string }[] = [];
     let lastMonth = -1;
@@ -45,58 +50,69 @@ export function AgentActivityBar({ agentId }: { agentId: string }) {
         lastMonth = month;
       }
     }
-    return { present, dayLabels, monthLabels };
-  }, [agentId]);
+    const workingSet = new Set(workingDays);
+    const present = rawPresent.map((_, index) => {
+      const date = getDateForIndex(index);
+      if (!workingSet.has(date.getDay())) return false;
+      return rawPresent[index];
+    });
+    const isOffDay = (index: number) => !workingSet.has(getDateForIndex(index).getDay());
+    return { present, dayLabels, monthLabels, isOffDay };
+  }, [agentId, workingDays]);
 
   return (
-    <div className="space-y-2">
-      <div className="flex gap-1 overflow-x-auto pb-1">
+    <div className="flex flex-col flex-1 min-h-0 min-w-0 space-y-2">
+      <div className="flex flex-1 min-h-0 min-w-0 gap-1">
         {/* Day-of-week labels (y-axis) */}
-        <div className="flex flex-col justify-around text-[10px] text-text-muted pr-1 shrink-0">
-          <span className="h-3 flex items-center opacity-0" aria-hidden>
+        <div className="flex flex-col justify-around text-[10px] text-text-muted pr-2 shrink-0">
+          <span className="h-4 flex items-center opacity-0" aria-hidden>
             placeholder
           </span>
           {dayLabels.map((label) => (
-            <span key={label} className="h-3 flex items-center">
+            <span key={label} className="h-4 flex items-center">
               {label}
             </span>
           ))}
         </div>
-        {/* Month row (x-axis) + grid */}
-        <div className="flex flex-col gap-0.5 min-w-0">
+        {/* Month row (x-axis) + grid - fills remaining space */}
+        <div className="flex flex-col gap-0.5 flex-1 min-w-0 min-h-[100px]">
           {/* Month labels on x-axis */}
-          <div className="flex gap-0.5">
+          <div className="flex gap-0.5 w-full">
             {Array.from({ length: WEEKS }, (_, col) => {
               const label = monthLabels.find((m) => m.col === col);
               return (
                 <div
                   key={col}
-                  className={`${CELL_CLASS} flex items-center justify-center text-[9px] text-text-muted font-medium`}
+                  className={`${CELL_BASE} flex-1 min-w-0 flex items-center justify-center text-[9px] text-text-muted font-medium min-h-[14px]`}
                 >
                   {label?.label ?? ''}
                 </div>
               );
             })}
           </div>
-          {/* Grid: 26 columns (weeks), 7 rows (days) - one color when present */}
-          <div className="flex gap-0.5">
+          {/* Grid: 26 columns (weeks), 7 rows (days) - equal width columns, one color when present */}
+          <div className="flex gap-0.5 flex-1 min-w-0 w-full min-h-0">
             {Array.from({ length: WEEKS }, (_, col) => (
-              <div key={col} className="flex flex-col gap-0.5">
+              <div key={col} className="flex flex-col gap-0.5 flex-1 min-w-0">
                 {Array.from({ length: DAYS_PER_WEEK }, (_, row) => {
                   const index = col * DAYS_PER_WEEK + row;
-                  const isPresent = present[index] ?? false;
+                  const offDay = isOffDay(index);
+                  const isPresent = !offDay && (present[index] ?? false);
                   const date = getDateForIndex(index);
+                  const title = offDay
+                    ? `${formatDate(date)} · Off day (holiday)`
+                    : `${formatDate(date)} · ${isPresent ? 'Present' : 'Absent'}`;
                   return (
                     <div
                       key={row}
-                      className={`${CELL_CLASS} cursor-default transition-colors ${
-                        isPresent
-                          ? 'bg-primary hover:bg-primary/90'
-                          : 'bg-[#ebedf0] hover:bg-[#e0e2e6]'
+                      className={`${CELL_BASE} flex-1 min-h-2 min-w-0 cursor-default transition-colors ${
+                        offDay
+                          ? 'bg-[#ebedf0] opacity-70'
+                          : isPresent
+                            ? 'bg-primary hover:bg-primary/90'
+                            : 'bg-[#ebedf0] hover:bg-[#e0e2e6]'
                       }`}
-                      title={formatDate(date)}
-                      onMouseEnter={() => setTooltip({ date: formatDate(date), present: isPresent })}
-                      onMouseLeave={() => setTooltip(null)}
+                      title={title}
                     />
                   );
                 })}
@@ -105,11 +121,6 @@ export function AgentActivityBar({ agentId }: { agentId: string }) {
           </div>
         </div>
       </div>
-      {tooltip && (
-        <p className="text-xs text-text-muted">
-          {tooltip.date} · {tooltip.present ? 'Present' : 'Absent'}
-        </p>
-      )}
     </div>
   );
 }
