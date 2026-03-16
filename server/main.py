@@ -9,6 +9,11 @@ from services.analytics_service.api import router as analytics_router
 from services.ai_orchestrator_service.api import router as ai_router
 from services.messaging_service.api import router as messaging_router
 from services.agent_routing_service.api import router as routing_router
+from services.agents_service.api import router as agents_router
+from services.teams_service.api import router as teams_router
+from services.notifications_service.api import router as notifications_router
+from services.broadcasts_service.api import router as broadcasts_router
+from services.knowledge_service.api import router as knowledge_router
 
 
 @asynccontextmanager
@@ -42,6 +47,11 @@ app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"]
 app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
 app.include_router(messaging_router, prefix="/api/messaging", tags=["messaging"])
 app.include_router(routing_router, prefix="/api/routing", tags=["routing"])
+app.include_router(agents_router, prefix="/api/agents", tags=["agents"])
+app.include_router(teams_router, prefix="/api/teams", tags=["teams"])
+app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
+app.include_router(broadcasts_router, prefix="/api", tags=["broadcasts"])
+app.include_router(knowledge_router, prefix="/api/knowledge", tags=["knowledge"])
 
 
 @app.get("/")
