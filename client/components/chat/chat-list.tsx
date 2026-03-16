@@ -357,21 +357,6 @@ export function ChatList() {
                         >
                           {conv.lastMessage}
                         </p>
-                        {isAgentInbox && inboxConv && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              inboxConv.reopenConversation(conv.id);
-                              setSelectedId(conv.id);
-                            }}
-                            className={`mt-2 text-[10px] font-medium underline ${
-                              isSelected ? 'text-white/90 hover:text-white' : 'text-primary hover:text-primary/80'
-                            }`}
-                          >
-                            Simulate: Customer messaged again
-                          </button>
-                        )}
                       </button>
                     );
                   })}

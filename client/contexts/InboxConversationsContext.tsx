@@ -133,6 +133,18 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           : c
       )
     );
+    const systemMsg: InboxMessage = {
+      id: Date.now(),
+      content: 'Customer messaged again.',
+      sender: 'ai',
+      senderName: 'System',
+      timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      sentAt: now.toISOString(),
+    };
+    setMessagesByConvId((prev) => ({
+      ...prev,
+      [convId]: [...(prev[convId] ?? []), systemMsg],
+    }));
   }, []);
 
   const transferConversation = useCallback((convId: number, toAgentId: string, toAgentName: string) => {
