@@ -31,7 +31,7 @@ class BroadcastCreate(BaseModel):
     ends_at: datetime | None = None
 
 
-@router.get("/broadcasts", response_model[List[BroadcastPayload]])
+@router.get("/broadcasts", response_model=List[BroadcastPayload])
 async def list_broadcasts(tenant_id: int, db: Session = Depends(get_db)):
     """
     List all broadcasts for a tenant.
