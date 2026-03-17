@@ -4,8 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 
-const ADMIN_EMAIL =
-  process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'admin@arabia-dropshipping.com';
+const ADMIN_EMAIL = 'arabiadropshipping05@gmail.com';
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 export default function LoginPage() {
