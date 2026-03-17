@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 
 const STORAGE_KEY = 'online-schedule';
+const DEFAULT_TENANT_ID = 1;
 
 /** 0 = Sunday, 1 = Monday, ... 6 = Saturday. Days not in this array are holidays (e.g. Sunday). */
 export interface OnlineSchedule {
@@ -82,12 +83,45 @@ export function OnlineScheduleProvider({ children }: { children: ReactNode }) {
   const [schedule, setScheduleState] = useState<OnlineSchedule>(defaultSchedule);
 
   useEffect(() => {
+    // Load from local storage immediately for fast UI, then try backend override.
     setScheduleState(loadSchedule());
+
+    async function fetchScheduleFromBackend() {
+      try {
+        const res = await fetch(`/api/tenants/${DEFAULT_TENANT_ID}/schedule`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { working_days: number[]; start_time: string; end_time: string };
+        const next: OnlineSchedule = {
+          workingDays: Array.isArray(data.working_days) && data.working_days.length > 0 ? data.working_days : defaultSchedule.workingDays,
+          startTime: data.start_time || defaultSchedule.startTime,
+          endTime: data.end_time || defaultSchedule.endTime,
+        };
+        setScheduleState(next);
+        saveSchedule(next);
+      } catch {
+        // ignore, stay with local/default
+      }
+    }
+
+    fetchScheduleFromBackend();
   }, []);
 
   const setSchedule = useCallback((next: OnlineSchedule) => {
     setScheduleState(next);
     saveSchedule(next);
+
+    // Fire-and-forget sync to backend; errors are ignored on purpose.
+    if (typeof window !== 'undefined') {
+      fetch(`/api/tenants/${DEFAULT_TENANT_ID}/schedule`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          working_days: next.workingDays,
+          start_time: next.startTime,
+          end_time: next.endTime,
+        }),
+      }).catch(() => undefined);
+    }
   }, []);
 
   const isWithinScheduleNow = useCallback(

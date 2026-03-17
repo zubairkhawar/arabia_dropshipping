@@ -60,24 +60,84 @@ export default function AdminSettings() {
   const [endsAt, setEndsAt] = useState('');
   const [message, setMessage] = useState('');
 
-  const addBroadcast = (e: React.FormEvent) => {
+  const TENANT_ID = 1;
+
+  useEffect(() => {
+    async function loadBroadcasts() {
+      try {
+        const res = await fetch(`/api/broadcasts?tenant_id=${TENANT_ID}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          id: number;
+          tenant_id: number;
+          title: string;
+          message: string;
+          occasion?: string | null;
+          starts_at?: string | null;
+          ends_at?: string | null;
+        }[];
+        setBroadcasts(
+          data.map((b) => ({
+            id: String(b.id),
+            title: b.title,
+            message: b.message,
+            occasion: b.occasion || '',
+            startsAt: b.starts_at || '',
+            endsAt: b.ends_at || '',
+          })),
+        );
+      } catch {
+        // ignore, keep local empty
+      }
+    }
+    loadBroadcasts();
+  }, []);
+
+  const addBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !message.trim() || !startsAt || !endsAt) return;
-    const next: Broadcast = {
-      id: `${Date.now()}`,
-      title: title.trim(),
-      message: message.trim(),
-      startsAt,
-      endsAt,
-      occasion: occasion.trim(),
-    };
-    setBroadcasts((prev) => [next, ...prev]);
-    setTitle('');
-    setOccasion('');
-    setStartsAt('');
-    setEndsAt('');
-    setMessage('');
-    toast('Broadcast added');
+    try {
+      const res = await fetch('/api/broadcasts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenant_id: TENANT_ID,
+          title: title.trim(),
+          message: message.trim(),
+          occasion: occasion.trim() || null,
+          starts_at: startsAt,
+          ends_at: endsAt,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to create broadcast');
+      }
+      const created = (await res.json()) as {
+        id: number;
+        title: string;
+        message: string;
+        occasion?: string | null;
+        starts_at?: string | null;
+        ends_at?: string | null;
+      };
+      const next: Broadcast = {
+        id: String(created.id),
+        title: created.title,
+        message: created.message,
+        startsAt: created.starts_at || startsAt,
+        endsAt: created.ends_at || endsAt,
+        occasion: created.occasion || occasion.trim(),
+      };
+      setBroadcasts((prev) => [next, ...prev]);
+      setTitle('');
+      setOccasion('');
+      setStartsAt('');
+      setEndsAt('');
+      setMessage('');
+      toast('Broadcast added');
+    } catch {
+      toast('Failed to add broadcast');
+    }
   };
 
   const removeBroadcast = (id: string) => {
@@ -88,6 +148,8 @@ export default function AdminSettings() {
   const cancelBroadcast = (id: string) => {
     if (typeof window === 'undefined') return;
     if (confirm('End this broadcast now? The AI will no longer use this message.')) {
+      // Fire-and-forget delete to backend; we optimistically update UI.
+      fetch(`/api/broadcasts/${id}`, { method: 'DELETE' }).catch(() => undefined);
       removeBroadcast(id);
       toast('Broadcast ended');
     }

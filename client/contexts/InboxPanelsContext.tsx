@@ -36,6 +36,10 @@ export function InboxPanelsProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useInboxPanels(): InboxPanelsContextType | undefined {
-  return useContext(InboxPanelsContext);
+export function useInboxPanels(): InboxPanelsContextType {
+  const ctx = useContext(InboxPanelsContext);
+  if (!ctx) {
+    throw new Error('useInboxPanels must be used within an InboxPanelsProvider');
+  }
+  return ctx;
 }
