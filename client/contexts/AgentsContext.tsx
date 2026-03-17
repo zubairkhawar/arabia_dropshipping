@@ -2,90 +2,17 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 
-const STORAGE_KEY = 'agents-data';
-
 /** Agent unique ID is set by the backend when the admin creates a new agent. */
 export interface AgentRecord {
   id: string;
   email: string;
   name: string;
+  /**
+   * Initial password set by the admin. Only stored on the client for convenience when
+   * creating a new agent – the backend never returns plaintext passwords.
+   */
   password: string;
   avatarUrl: string | null;
-}
-
-interface AgentsData {
-  agents: AgentRecord[];
-  currentAgentId: string | null;
-}
-
-const defaultAgents: AgentRecord[] = [
-  { id: '1001', email: 'agent@example.com', name: 'Support Agent', password: 'changeme', avatarUrl: null },
-  { id: '1002', email: 'hamza@example.com', name: 'Hamza', password: 'changeme', avatarUrl: null },
-  { id: '1003', email: 'sarah@example.com', name: 'Sarah', password: 'changeme', avatarUrl: null },
-];
-
-/** 4-digit numeric ID (e.g. 1001). Old formats like agent01 are migrated to this. */
-function isNumericAgentId(id: string): boolean {
-  return /^\d{4}$/.test(id);
-}
-
-function migrateAgentsToNumericIds(agents: AgentRecord[]): AgentRecord[] {
-  const usedIds = new Set(agents.filter((a) => isNumericAgentId(a.id)).map((a) => a.id));
-  let nextId = 1001;
-  const nextNumericId = () => {
-    while (usedIds.has(String(nextId))) nextId++;
-    const id = String(nextId);
-    usedIds.add(id);
-    nextId++;
-    return id;
-  };
-  return agents.map((a) =>
-    isNumericAgentId(a.id) ? a : { ...a, id: nextNumericId() },
-  );
-}
-
-function loadFromStorage(): AgentsData {
-  if (typeof window === 'undefined') {
-    return { agents: defaultAgents, currentAgentId: defaultAgents[0]?.id ?? null };
-  }
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { agents: defaultAgents, currentAgentId: defaultAgents[0]?.id ?? null };
-    const parsed = JSON.parse(raw) as AgentsData;
-    let agents =
-      Array.isArray(parsed.agents) && parsed.agents.length > 0 ? parsed.agents : defaultAgents;
-    const hasLegacyIds = agents.some((a) => !isNumericAgentId(a.id));
-    if (hasLegacyIds) {
-      const idMap = new Map<string, string>();
-      const migrated = migrateAgentsToNumericIds(agents);
-      agents.forEach((a, i) => {
-        if (!isNumericAgentId(a.id)) idMap.set(a.id, migrated[i].id);
-      });
-      agents = migrated;
-      let currentAgentId = parsed.currentAgentId ?? parsed.agents?.[0]?.id ?? null;
-      if (currentAgentId && idMap.has(currentAgentId)) {
-        currentAgentId = idMap.get(currentAgentId) ?? currentAgentId;
-      }
-      saveToStorage({ agents, currentAgentId });
-      return { agents, currentAgentId };
-    }
-    return {
-      agents,
-      currentAgentId: parsed.currentAgentId ?? parsed.agents?.[0]?.id ?? null,
-    };
-  } catch {
-    return { agents: defaultAgents, currentAgentId: defaultAgents[0]?.id ?? null };
-  }
-}
-
-function saveToStorage(data: AgentsData) {
-  try {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    }
-  } catch {
-    // ignore
-  }
 }
 
 interface AgentsContextType {
@@ -93,70 +20,167 @@ interface AgentsContextType {
   currentAgentId: string | null;
   setCurrentAgentId: (id: string | null) => void;
   getCurrentAgent: () => AgentRecord | null;
-  addAgent: (email: string, name: string, password: string) => void;
-  updateAgent: (id: string, updates: Partial<Pick<AgentRecord, 'name' | 'password' | 'avatarUrl'>>) => void;
-  removeAgent: (id: string) => void;
+  addAgent: (email: string, name: string, password: string) => Promise<void>;
+  updateAgent: (id: string, updates: Partial<Pick<AgentRecord, 'name' | 'password' | 'avatarUrl'>>) => Promise<void>;
+  removeAgent: (id: string) => Promise<void>;
 }
 
 const AgentsContext = createContext<AgentsContextType | undefined>(undefined);
 
+// FastAPI backend base URL; in production set NEXT_PUBLIC_API_BASE_URL to override.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+// For now we operate on the default tenant created by the backend.
+const DEFAULT_TENANT_ID = 1;
+
+interface AgentApiModel {
+  id: number;
+  tenant_id: number;
+  user_id: number;
+  email: string;
+  full_name: string | null;
+  status: string;
+  team: string | null;
+}
+
 export function AgentsProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<AgentsData>({ agents: defaultAgents, currentAgentId: defaultAgents[0]?.id ?? null });
+  const [agents, setAgents] = useState<AgentRecord[]>([]);
+  const [currentAgentId, setCurrentAgentId] = useState<string | null>(null);
 
   useEffect(() => {
-    setData(loadFromStorage());
-  }, []);
+    let cancelled = false;
 
-  const persist = useCallback((next: AgentsData) => {
-    setData(next);
-    saveToStorage(next);
-  }, []);
+    const loadAgents = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/agents?tenant_id=${DEFAULT_TENANT_ID}`, {
+          method: 'GET',
+        });
+        if (!res.ok) {
+          return;
+        }
+        const data = (await res.json()) as AgentApiModel[];
+        if (cancelled) return;
+        const mapped: AgentRecord[] = data.map((a) => ({
+          id: String(a.id),
+          email: a.email,
+          name: a.full_name || a.email.split('@')[0] || 'Agent',
+          password: '',
+          avatarUrl: null,
+        }));
+        setAgents(mapped);
+        if (!currentAgentId && mapped.length > 0) {
+          setCurrentAgentId(mapped[0].id);
+        }
+      } catch {
+        // Silent failure to avoid impacting UI performance.
+      }
+    };
+
+    loadAgents();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentAgentId]);
 
   const getCurrentAgent = useCallback(() => {
-    if (!data.currentAgentId) return null;
-    return data.agents.find((a) => a.id === data.currentAgentId) ?? null;
-  }, [data.agents, data.currentAgentId]);
-
-  const setCurrentAgentId = useCallback(
-    (id: string | null) => {
-      persist({ ...data, currentAgentId: id });
-    },
-    [data, persist],
-  );
+    if (!currentAgentId) return null;
+    return agents.find((a) => a.id === currentAgentId) ?? null;
+  }, [agents, currentAgentId]);
 
   const addAgent = useCallback(
-    (email: string, name: string, password: string) => {
-      // In production, the backend creates the agent and returns the generated id.
-      const id = String(Math.floor(1000 + Math.random() * 9000));
-      const newAgent: AgentRecord = { id, email, name, password, avatarUrl: null };
-      persist({ ...data, agents: [...data.agents, newAgent] });
+    async (email: string, name: string, password: string) => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/agents`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            email,
+            password,
+            full_name: name,
+            tenant_id: DEFAULT_TENANT_ID,
+          }),
+        });
+        if (!res.ok) {
+          return;
+        }
+        const created = (await res.json()) as AgentApiModel;
+        const record: AgentRecord = {
+          id: String(created.id),
+          email: created.email,
+          name: created.full_name || name,
+          password,
+          avatarUrl: null,
+        };
+        setAgents((prev) => [...prev, record]);
+        setCurrentAgentId(String(created.id));
+      } catch {
+        // Ignore errors here; calling components can surface generic toasts if needed.
+      }
     },
-    [data, persist],
+    [],
   );
 
   const updateAgent = useCallback(
-    (id: string, updates: Partial<Pick<AgentRecord, 'name' | 'password' | 'avatarUrl'>>) => {
-      const nextAgents = data.agents.map((a) => (a.id === id ? { ...a, ...updates } : a));
-      persist({ ...data, agents: nextAgents });
+    async (id: string, updates: Partial<Pick<AgentRecord, 'name' | 'password' | 'avatarUrl'>>) => {
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) return;
+
+      // Optimistic UI update.
+      setAgents((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)));
+
+      const payload: { full_name?: string; avatar_url?: string | null } = {};
+      if (updates.name !== undefined) payload.full_name = updates.name;
+      if (updates.avatarUrl !== undefined) payload.avatar_url = updates.avatarUrl;
+
+      if (Object.keys(payload).length === 0) {
+        return;
+      }
+
+      try {
+        await fetch(`${API_BASE_URL}/api/agents/${numericId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+      } catch {
+        // On failure we leave the optimistic state; admin can refresh if needed.
+      }
     },
-    [data, persist],
+    [],
   );
 
   const removeAgent = useCallback(
-    (id: string) => {
-      const nextAgents = data.agents.filter((a) => a.id !== id);
-      const nextCurrentId =
-        data.currentAgentId === id ? (nextAgents[0]?.id ?? null) : data.currentAgentId;
-      persist({ agents: nextAgents, currentAgentId: nextCurrentId });
+    async (id: string) => {
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) return;
+
+      // Optimistic removal.
+      setAgents((prev) => prev.filter((a) => a.id !== id));
+      setCurrentAgentId((prev) => {
+        if (prev !== id) return prev;
+        const remaining = agents.filter((a) => a.id !== id);
+        return remaining[0]?.id ?? null;
+      });
+
+      try {
+        await fetch(`${API_BASE_URL}/api/agents/${numericId}`, {
+          method: 'DELETE',
+        });
+      } catch {
+        // Ignore; deletion will be consistent after a refresh.
+      }
     },
-    [data, persist],
+    [agents],
   );
 
   return (
     <AgentsContext.Provider
       value={{
-        agents: data.agents,
-        currentAgentId: data.currentAgentId,
+        agents,
+        currentAgentId,
         setCurrentAgentId,
         getCurrentAgent,
         addAgent,
@@ -173,13 +197,13 @@ export function useAgents() {
   const context = useContext(AgentsContext);
   if (context === undefined) {
     return {
-      agents: defaultAgents,
-      currentAgentId: null,
+      agents: [] as AgentRecord[],
+      currentAgentId: null as string | null,
       setCurrentAgentId: () => {},
-      getCurrentAgent: () => defaultAgents[0] ?? null,
-      addAgent: () => {},
-      updateAgent: () => {},
-      removeAgent: () => {},
+      getCurrentAgent: () => null,
+      addAgent: async () => {},
+      updateAgent: async () => {},
+      removeAgent: async () => {},
     };
   }
   return context;
