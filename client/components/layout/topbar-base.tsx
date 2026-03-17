@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Search, User, ChevronDown, LogOut, Settings, PanelRightOpen, PanelLeftClose } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
@@ -13,6 +14,7 @@ interface TopBarBaseProps {
 export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopBarBaseProps) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const { isCollapsed, toggleSidebar } = useSidebar();
+  const router = useRouter();
 
   return (
     <div 
@@ -86,7 +88,18 @@ export function TopBarBase({ userRole = 'User', userName = 'Store Owner' }: TopB
                       <div className="border-t border-border my-2"></div>
                     </>
                   )}
-                  <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-status-error flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUserMenu(false);
+                      if (typeof window !== 'undefined') {
+                        localStorage.clear();
+                        sessionStorage.clear();
+                      }
+                      router.push('/login');
+                    }}
+                    className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-status-error flex items-center gap-2"
+                  >
                     <LogOut className="w-4 h-4" />
                     Logout
                   </button>

@@ -10,7 +10,7 @@ import { useAgentPresence, getSlugByName } from '@/contexts/AgentPresenceContext
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { useToast } from '@/contexts/ToastContext';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 
 type AgentStatus = 'active' | 'offline';
 
@@ -49,6 +49,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const [passwordMessage, setPasswordMessage] = useState<'success' | 'error' | 'wrong_old' | null>(null);
   const { toast } = useToast();
   const pathname = usePathname();
+  const router = useRouter();
   const displayName = fullName || userName || 'Support Agent';
   const {
     getNotificationsForCurrentAgent,
@@ -298,7 +299,18 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                     Change password
                   </button>
                   <div className="border-t border-border my-2" />
-                  <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-status-error flex items-center gap-2 text-sm">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUserMenu(false);
+                      if (typeof window !== 'undefined') {
+                        localStorage.clear();
+                        sessionStorage.clear();
+                      }
+                      router.push('/login');
+                    }}
+                    className="w-full text-left px-4 py-2 rounded-lg hover:bg-panel text-status-error flex items-center gap-2 text-sm"
+                  >
                     <LogOut className="w-4 h-4" />
                     Logout
                   </button>
