@@ -258,6 +258,6 @@ class KnowledgeSource(Base):
     url = Column(String, nullable=True)
     status = Column(String, nullable=False, default="indexing")  # indexing | ready | error
     chunk_count = Column(Integer, default=0)
-    metadata = Column(JSON, nullable=True)
+    knowledge_metadata = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
