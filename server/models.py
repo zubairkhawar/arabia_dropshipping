@@ -123,7 +123,7 @@ class Conversation(Base):
     channel = Column(String, nullable=False)  # whatsapp, web, portal
     status = Column(String, nullable=False, default="active")  # active, closed, escalated
     tags = Column(JSON, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    conversation_metadata = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -141,7 +141,7 @@ class Message(Base):
     sender_type = Column(String, nullable=False)  # customer, agent, ai
     sender_id = Column(Integer, nullable=True)
     language = Column(String, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    message_metadata = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     conversation = relationship("Conversation", back_populates="messages")
