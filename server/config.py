@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = True
     frontend_base_url: str = "http://localhost:3000"
+    admin_email: Optional[str] = None
+    admin_password: Optional[str] = None
     
     class Config:
         env_file = ".env"

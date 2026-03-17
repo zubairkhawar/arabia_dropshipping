@@ -1,6 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from datetime import datetime
+
+from config import settings
+from database import SessionLocal, engine, Base
+from models import Tenant, User
+from services.auth_service.services import get_password_hash
 
 from services.auth_service.api import router as auth_router
 from services.tenant_service.api import router as tenant_router
@@ -16,9 +22,49 @@ from services.broadcasts_service.api import router as broadcasts_router
 from services.knowledge_service.api import router as knowledge_router
 
 
+def ensure_admin_user() -> None:
+    """
+    Create a default tenant (id=1) and an admin user from env vars if they don't exist.
+    """
+    if not settings.admin_email or not settings.admin_password:
+        return
+
+    # Ensure tables exist
+    Base.metadata.create_all(bind=engine)
+
+    db = SessionLocal()
+    try:
+        tenant = db.query(Tenant).filter(Tenant.id == 1).first()
+        if tenant is None:
+            tenant = Tenant(id=1, name="Default Tenant", domain=None, is_active=True)
+            db.add(tenant)
+            db.commit()
+            db.refresh(tenant)
+
+        existing = db.query(User).filter(User.email == settings.admin_email).first()
+        if existing:
+            return
+
+        user = User(
+            tenant_id=tenant.id,
+            email=settings.admin_email,
+            full_name="Arabia Admin",
+            role="admin",
+            hashed_password=get_password_hash(settings.admin_password),
+            is_active=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(user)
+        db.commit()
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    ensure_admin_user()
     yield
     # Shutdown
 
