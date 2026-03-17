@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { Radio, XCircle, Clock, Download, Key, BarChart3, Eye, EyeOff, Copy } from 'lucide-react';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useToast } from '@/contexts/ToastContext';
@@ -35,9 +35,24 @@ function formatBroadcastDateTime(s: string): string {
   });
 }
 
-const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export default function AdminSettings() {
   const { schedule, setSchedule } = useOnlineSchedule();
@@ -65,7 +80,7 @@ export default function AdminSettings() {
   useEffect(() => {
     async function loadBroadcasts() {
       try {
-        const res = await fetch(`/api/broadcasts?tenant_id=${TENANT_ID}`);
+        const res = await fetch(`${API_BASE}/api/broadcasts?tenant_id=${TENANT_ID}`);
         if (!res.ok) return;
         const data = (await res.json()) as {
           id: number;
@@ -97,7 +112,7 @@ export default function AdminSettings() {
     e.preventDefault();
     if (!title.trim() || !message.trim() || !startsAt || !endsAt) return;
     try {
-      const res = await fetch('/api/broadcasts', {
+      const res = await fetch(`${API_BASE}/api/broadcasts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -134,9 +149,9 @@ export default function AdminSettings() {
       setStartsAt('');
       setEndsAt('');
       setMessage('');
-      toast('Broadcast added');
+      toast("Broadcast added");
     } catch {
-      toast('Failed to add broadcast');
+      toast("Failed to add broadcast");
     }
   };
 
@@ -146,18 +161,18 @@ export default function AdminSettings() {
 
   /** End/cancel a broadcast (remove from list so it stops being active). */
   const cancelBroadcast = (id: string) => {
-    if (typeof window === 'undefined') return;
-    if (confirm('End this broadcast now? The AI will no longer use this message.')) {
+    if (typeof window === "undefined") return;
+    if (confirm("End this broadcast now? The AI will no longer use this message.")) {
       // Fire-and-forget delete to backend; we optimistically update UI.
-      fetch(`/api/broadcasts/${id}`, { method: 'DELETE' }).catch(() => undefined);
+      fetch(`${API_BASE}/api/broadcasts/${id}`, { method: "DELETE" }).catch(() => undefined);
       removeBroadcast(id);
-      toast('Broadcast ended');
+      toast("Broadcast ended");
     }
   };
 
   const handleDownloadAttendanceReport = async () => {
     if (agents.length === 0) {
-      toast('No agents to report');
+      toast("No agents to report");
       return;
     }
     setReportDownloading(true);
@@ -168,9 +183,9 @@ export default function AdminSettings() {
         year: reportYear,
         month: reportMonth - 1,
       });
-      toast('Report downloaded');
+      toast("Report downloaded");
     } catch (e) {
-      toast('Failed to generate report');
+      toast("Failed to generate report");
     } finally {
       setReportDownloading(false);
     }
@@ -178,7 +193,7 @@ export default function AdminSettings() {
 
   const fetchOpenAIConfig = useCallback(async () => {
     try {
-      const r = await fetch('/api/ai/openai-config');
+      const r = await fetch(`${API_BASE}/api/ai/openai-config`);
       const data = await r.json();
       setOpenaiKeyConfigured(!!data.key_configured);
     } catch {
@@ -193,21 +208,25 @@ export default function AdminSettings() {
   const saveOpenAIKey = async () => {
     setOpenaiKeySaving(true);
     try {
-      const res = await fetch('/api/ai/openai-config', {
+      const res = await fetch(`${API_BASE}/api/ai/openai-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ api_key: openaiKeyInput.trim() }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(typeof err.detail === 'string' ? err.detail : err.detail?.[0]?.msg || 'Failed to save key');
+        throw new Error(
+          typeof err.detail === "string"
+            ? err.detail
+            : err.detail?.[0]?.msg || "Failed to save key",
+        );
       }
       const data = await res.json();
       setOpenaiKeyConfigured(!!data.key_configured);
       setOpenaiKeyInput('');
-      toast('API key saved successfully.');
+      toast("API key saved successfully.");
     } catch (e: unknown) {
-      toast(e instanceof Error ? e.message : 'Failed to save key');
+      toast(e instanceof Error ? e.message : "Failed to save key");
     } finally {
       setOpenaiKeySaving(false);
     }
@@ -218,7 +237,7 @@ export default function AdminSettings() {
     setOpenaiUsageError(null);
     setOpenaiUsage(null);
     try {
-      const res = await fetch('/api/ai/openai-usage');
+      const res = await fetch(`${API_BASE}/api/ai/openai-usage`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Error ${res.status}`);

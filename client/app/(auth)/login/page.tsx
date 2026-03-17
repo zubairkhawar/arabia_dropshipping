@@ -6,6 +6,7 @@ import Image from 'next/image';
 
 const ADMIN_EMAIL =
   process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'admin@arabia-dropshipping.com';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -33,7 +34,7 @@ export default function LoginPage() {
     setForgotMessage(null);
     setSubmittingForgot(true);
     try {
-      const res = await fetch('/api/auth/forgot-password', {
+      const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail.trim() }),
