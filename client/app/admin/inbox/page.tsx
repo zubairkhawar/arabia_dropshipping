@@ -97,7 +97,7 @@ function ContextPanel() {
 }
 
 function AdminInboxContent() {
-  const { contextCollapsed, setContextCollapsed } = useInboxPanels();
+  const { contextCollapsed, setContextCollapsed } = useInboxPanels()!;
 
   return (
     <div className="flex h-full">
