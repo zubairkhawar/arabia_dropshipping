@@ -60,6 +60,7 @@ class AgentOut(BaseModel):
     avatar_url: Optional[str] = None
     status: str
     team: Optional[str] = None
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -119,6 +120,7 @@ async def list_agents(tenant_id: int, db: Session = Depends(get_db)):
                 full_name=user.full_name,
                 status=agent.status,
                 team=agent.team,
+                created_at=agent.created_at,
             )
         )
     return agents
@@ -166,6 +168,7 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
         full_name=user.full_name,
         status=agent.status,
         team=agent.team,
+        created_at=agent.created_at,
     )
 
 
@@ -206,6 +209,7 @@ async def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depend
         full_name=user.full_name,
         status=agent.status,
         team=agent.team,
+        created_at=agent.created_at,
     )
 
 
@@ -285,5 +289,6 @@ async def get_me(current_user: User = Depends(get_current_user), db: Session = D
         full_name=current_user.full_name,
         status=agent.status,
         team=agent.team,
+        created_at=agent.created_at,
     )
 

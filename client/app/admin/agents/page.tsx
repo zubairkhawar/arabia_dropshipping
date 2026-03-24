@@ -74,10 +74,22 @@ export default function AdminAgents() {
     [agents, selectedId],
   );
   const { dayData: attendanceDayData } = useAgentAttendanceData(selectedAgent?.id, schedule.workingDays);
+  const visibleAttendanceDayData = useMemo(() => {
+    if (!selectedAgent) return [];
+    const created = new Date(selectedAgent.createdAt);
+    if (Number.isNaN(created.getTime())) return attendanceDayData;
+    // Avoid fake historical attendance for newly created agents: only show after next day.
+    const cutoff = new Date(created);
+    cutoff.setHours(0, 0, 0, 0);
+    cutoff.setDate(cutoff.getDate() + 1);
+    return attendanceDayData.map((d) =>
+      d.date < cutoff ? { ...d, hoursWorked: 0, sessions: [] } : d
+    );
+  }, [attendanceDayData, selectedAgent]);
   const performanceMetrics = useMemo(() => {
     if (!selectedAgent) return { uptimePercent: 0, avgResponseTimeSeconds: 0 };
-    return getDemoPerformanceFromAttendance(attendanceDayData, schedule.workingDays, selectedAgent.id);
-  }, [attendanceDayData, schedule.workingDays, selectedAgent]);
+    return getDemoPerformanceFromAttendance(visibleAttendanceDayData, schedule.workingDays, selectedAgent.id);
+  }, [visibleAttendanceDayData, schedule.workingDays, selectedAgent]);
 
   const toTitle = (value: string) => {
     const v = value.trim().toLowerCase();
@@ -126,7 +138,7 @@ export default function AdminAgents() {
     setPassword('');
     setCreateError('');
     setShowCreateModal(false);
-    toast('Agent added');
+    requestAnimationFrame(() => toast('Agent created successfully'));
   };
 
   const handleDeleteClick = (id: string, label: string) => {
@@ -144,7 +156,7 @@ export default function AdminAgents() {
     if (!selectedAgent) return;
     setAgentReportDownloading(true);
     try {
-      const dayData = filterByMonth(attendanceDayData, agentReportYear, agentReportMonth - 1);
+      const dayData = filterByMonth(visibleAttendanceDayData, agentReportYear, agentReportMonth - 1);
       if (dayData.length === 0) {
         toast('No attendance data for selected month.');
         return;
@@ -508,7 +520,7 @@ export default function AdminAgents() {
                   </div>
                 </div>
                 <div className="flex-1 min-h-0 min-w-0 flex flex-col">
-                  <AgentActivityBar agentId={selectedAgent.id} workingDays={schedule.workingDays} dayData={attendanceDayData} />
+                  <AgentActivityBar agentId={selectedAgent.id} workingDays={schedule.workingDays} dayData={visibleAttendanceDayData} />
                 </div>
               </div>
             )}

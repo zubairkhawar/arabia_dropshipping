@@ -13,6 +13,7 @@ export interface AgentRecord {
    */
   password: string;
   avatarUrl: string | null;
+  createdAt: string;
 }
 
 interface AgentsContextType {
@@ -44,6 +45,7 @@ interface AgentApiModel {
   full_name: string | null;
   status: string;
   team: string | null;
+  created_at: string;
 }
 
 function loadStoredPasswords(): Record<string, string> {
@@ -86,6 +88,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
       name: a.full_name || a.email.split('@')[0] || 'Agent',
       password: storedPasswords[String(a.id)] ?? '',
       avatarUrl: null,
+      createdAt: a.created_at,
     }));
     setAgents(mapped);
     setCurrentAgentId((prev) => {
@@ -141,6 +144,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           name: created.full_name || name,
           password,
           avatarUrl: null,
+          createdAt: created.created_at,
         };
         const storedPasswords = loadStoredPasswords();
         storedPasswords[String(created.id)] = password;
