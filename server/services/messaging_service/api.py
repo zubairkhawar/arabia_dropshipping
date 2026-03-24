@@ -52,6 +52,10 @@ class MessageOut(BaseModel):
     created_at: datetime
 
 
+class ConversationStatusUpdate(BaseModel):
+    status: str  # active | closed | escalated
+
+
 class WhatsAppWebhookPayload(BaseModel):
     """
     Minimal normalized payload for a WhatsApp-style webhook.
@@ -273,6 +277,58 @@ async def send_message(
         language=msg.language,
         created_at=msg.created_at,
     )
+
+
+@router.patch("/conversations/{conversation_id}/status", response_model=ConversationSummary)
+async def update_conversation_status(
+    conversation_id: int,
+    payload: ConversationStatusUpdate,
+    db: Session = Depends(get_db),
+):
+    """
+    Update conversation status (active/closed/escalated).
+    """
+    conversation: Conversation | None = (
+        db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    )
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
+        )
+    conversation.status = payload.status
+    conversation.updated_at = datetime.utcnow()
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    _ = conversation.customer
+    _ = conversation.messages
+    return _build_conversation_summary(conversation)
+
+
+@router.post("/conversations/{conversation_id}/send-to-ai", response_model=ConversationSummary)
+async def send_conversation_to_ai(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Return ownership of a conversation to AI by clearing assigned agent.
+    """
+    conversation: Conversation | None = (
+        db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    )
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
+        )
+    conversation.agent_id = None
+    conversation.status = "active"
+    conversation.updated_at = datetime.utcnow()
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    _ = conversation.customer
+    _ = conversation.messages
+    return _build_conversation_summary(conversation)
 
 
 @router.post("/whatsapp/webhook")

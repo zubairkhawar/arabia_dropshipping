@@ -1,12 +1,11 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Notification, Agent, User
-from services.auth_service.api import get_current_user
+from models import Notification
 
 
 router = APIRouter()
@@ -26,23 +25,30 @@ class NotificationOut(BaseModel):
         from_attributes = True
 
 
+class NotificationCreate(BaseModel):
+    tenant_id: int
+    agent_id: int
+    type: str
+    message: str
+    description: str | None = None
+    from_agent_id: int | None = None
+    conversation_id: int | None = None
+
+
 @router.get("", response_model=List[NotificationOut])
 async def list_notifications(
+    tenant_id: int,
+    agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """
     List notifications for the current agent.
     """
-    agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
     rows = (
         db.query(Notification)
         .filter(
-            Notification.tenant_id == current_user.tenant_id,
-            Notification.agent_id == agent.id,
+            Notification.tenant_id == tenant_id,
+            Notification.agent_id == agent_id,
         )
         .order_by(Notification.created_at.desc())
         .all()
@@ -66,23 +72,38 @@ async def mark_notification_read(notification_id: int, db: Session = Depends(get
     return notif
 
 
+@router.post("", response_model=NotificationOut)
+async def create_notification(payload: NotificationCreate, db: Session = Depends(get_db)):
+    notif = Notification(
+        tenant_id=payload.tenant_id,
+        agent_id=payload.agent_id,
+        type=payload.type,
+        message=payload.message,
+        description=payload.description,
+        from_agent_id=payload.from_agent_id,
+        conversation_id=payload.conversation_id,
+        read=False,
+    )
+    db.add(notif)
+    db.commit()
+    db.refresh(notif)
+    return notif
+
+
 @router.post("/read-all")
 async def mark_all_read(
+    tenant_id: int,
+    agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """
     Mark all notifications for current agent as read.
     """
-    agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
-    if not agent:
-        return {"updated": 0}
-
     updated = (
         db.query(Notification)
         .filter(
-            Notification.tenant_id == current_user.tenant_id,
-            Notification.agent_id == agent.id,
+            Notification.tenant_id == tenant_id,
+            Notification.agent_id == agent_id,
             Notification.read.is_(False),
         )
         .update({Notification.read: True})

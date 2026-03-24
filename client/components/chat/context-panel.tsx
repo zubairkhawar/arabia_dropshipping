@@ -30,20 +30,6 @@ function placehold(value: string | null | undefined): string {
   return value?.trim() || '—';
 }
 
-/** Default mock data when bot data not yet provided. Replace with fetched data per conversation. */
-const defaultCustomer: ContextPanelCustomer = {
-  name: 'Ahmed Ali',
-  phone: '+971 50 123 4567',
-  email: 'ahmed.ali@example.com',
-  customerId: '#1234',
-};
-
-const defaultStore: ContextPanelStore = {
-  storeName: 'My Shopify Store',
-  storeCode: 'STORE001',
-  storeType: 'Shopify',
-};
-
 export function ContextPanel(props: ContextPanelProps = {}) {
   const { customer: customerProp, store: storeProp } = props;
   const inboxPanels = useInboxPanels();
@@ -51,8 +37,8 @@ export function ContextPanel(props: ContextPanelProps = {}) {
   const [internalNote, setInternalNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
 
-  const customer = customerProp === undefined ? defaultCustomer : customerProp;
-  const store = storeProp === undefined ? defaultStore : storeProp;
+  const customer = customerProp === undefined ? null : customerProp;
+  const store = storeProp === undefined ? null : storeProp;
   const hasCustomer = customer != null && (customer.name || customer.phone || customer.email || customer.customerId);
   const hasStore = store != null && (store.storeName || store.storeCode || store.storeType);
 

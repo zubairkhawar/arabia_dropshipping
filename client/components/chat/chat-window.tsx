@@ -187,9 +187,13 @@ export function ChatWindow({
   })();
   const isTeamChannel = pathname?.startsWith('/agent/team') || (pathname?.startsWith('/admin/teams') && !!teamName);
   const isDmPage = pathname?.startsWith('/agent/dm');
+  const isInboxPage = pathname?.startsWith('/agent/inbox') || pathname?.startsWith('/admin/inbox');
   const showBroadcastInput = broadcastMode && isInternalChat && !!teamName;
 
   const [messages, setMessages] = useState<Message[]>(() => {
+    if (isInboxPage && !isInternalChat) {
+      return [];
+    }
     if (isInternalChat && isTeamChannel) {
       return [];
     }
@@ -206,12 +210,7 @@ export function ChatWindow({
     if (!isInboxWithSelection || isInternalChat) return;
     const convId = inboxConv!.selectedId!;
     const stored = inboxConv.getMessages(convId);
-    if (stored.length > 0) {
-      setMessages(stored as Message[]);
-    } else {
-      inboxConv.setMessages(convId, defaultCustomerMessages as InboxMessage[]);
-      setMessages(defaultCustomerMessages);
-    }
+    setMessages(stored as Message[]);
   }, [isInboxWithSelection, inboxConv?.selectedId]);
   const [inputValue, setInputValue] = useState('');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -713,6 +712,7 @@ export function ChatWindow({
                             sentAt: now.toISOString(),
                           };
                           inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
+                          inboxConv.sendConversationToAI(inboxConv.selectedId);
                           setMessages((prev) => [...prev, systemMsg]);
                         } else {
                           addSystemNote(content);

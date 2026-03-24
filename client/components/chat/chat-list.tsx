@@ -90,9 +90,9 @@ export function ChatList() {
   const [closedOpen, setClosedOpen] = useState(true);
 
   const isAgentInbox = pathname?.startsWith('/agent/inbox');
-  const conversations = isAgentInbox && inboxConv ? inboxConv.conversations : localConversations;
-  const selectedId = isAgentInbox && inboxConv ? inboxConv.selectedId : localSelectedId;
-  const setSelectedId = isAgentInbox && inboxConv ? inboxConv.setSelectedId : setLocalSelectedId;
+  const conversations = inboxConv ? inboxConv.conversations : localConversations;
+  const selectedId = inboxConv ? inboxConv.selectedId : localSelectedId;
+  const setSelectedId = inboxConv ? inboxConv.setSelectedId : setLocalSelectedId;
 
   const view: 'all' | 'live' | 'closed' = useMemo(() => {
     if (pathname?.startsWith('/admin/inbox/live')) return 'live';

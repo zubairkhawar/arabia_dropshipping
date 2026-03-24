@@ -3,95 +3,47 @@
 import { ChatList } from '@/components/chat/chat-list';
 import { ChatWindow } from '@/components/chat/chat-window';
 import { InboxPanelsProvider, useInboxPanels } from '@/contexts/InboxPanelsContext';
+import { InboxConversationsProvider, useInboxConversations } from '@/contexts/InboxConversationsContext';
 import { PanelRightOpen, SquareChevronRight } from 'lucide-react';
 
 function ContextPanel() {
+  const inboxConv = useInboxConversations();
+  const selected =
+    inboxConv?.selectedId != null
+      ? inboxConv.conversations.find((c) => c.id === inboxConv.selectedId)
+      : null;
+
   return (
     <div className="hidden xl:block w-80 2xl:w-96 shrink-0 border-l border-border bg-panel p-4 transition-all duration-300">
       <h3 className="text-sm font-semibold text-text-primary mb-3">Conversation Context</h3>
-      <div className="space-y-3 text-xs">
-        <div className="flex items-center justify-between">
-          <span className="text-text-secondary">Customer</span>
-          <span className="font-semibold text-text-primary">Ahmed Ali</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-text-secondary">Store</span>
-          <span className="font-semibold text-text-primary">My Shopify Store</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-text-secondary">Channel</span>
-          <span className="font-semibold text-text-primary">WhatsApp</span>
-        </div>
-      </div>
-      <div className="mt-4 border-t border-border pt-4 space-y-3 text-xs">
-        <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
-          Assignment
-        </p>
-        <div className="space-y-2">
+      {selected ? (
+        <div className="space-y-3 text-xs">
           <div className="flex items-center justify-between">
-            <span className="text-text-secondary">Assigned agent</span>
-            <span className="font-semibold text-text-primary">Hamza (ID: 1002)</span>
+            <span className="text-text-secondary">Customer</span>
+            <span className="font-semibold text-text-primary">{selected.customerName}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">Conversation</span>
+            <span className="font-semibold text-text-primary">{selected.customerId}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-text-secondary">Channel</span>
+            <span className="font-semibold text-text-primary">{selected.channel}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-text-secondary">Status</span>
-            <span className="font-semibold text-status-success">Live</span>
+            <span className="font-semibold text-text-primary">{selected.status}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-text-secondary">Closed at</span>
-            <span className="font-semibold text-text-primary">—</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-text-secondary">Resolved by</span>
-            <span className="font-semibold text-text-primary">—</span>
+            <span className="text-text-secondary">Handler</span>
+            <span className="font-semibold text-text-primary">
+              {selected.handlerType === 'ai' ? 'AI' : selected.handlerName || 'Agent'}
+            </span>
           </div>
         </div>
-      </div>
-      <div className="mt-4 border-t border-border pt-4 space-y-3">
-        <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
-          Live Analytics
-        </p>
-        <div className="space-y-2 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-text-secondary">AI Resolution Rate</span>
-            <span className="font-semibold text-text-primary">87.5%</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-text-secondary">Human Agent Load</span>
-            <span className="font-semibold text-text-primary">34 active</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-text-secondary">Conversations Live</span>
-            <span className="font-semibold text-status-info">126</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-text-secondary">At Risk (SLA)</span>
-            <span className="font-semibold text-status-error">5</span>
-          </div>
-        </div>
-        <div className="space-y-2 pt-2">
-          <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
-            Routing Snapshot
-          </p>
-          <div>
-            <div className="flex items-center justify-between text-xs mb-1">
-              <span className="text-text-secondary">AI</span>
-              <span className="text-text-primary">82%</span>
-            </div>
-            <div className="h-1.5 rounded-full bg-white/60 overflow-hidden">
-              <div className="h-full w-[82%] bg-primary rounded-full" />
-            </div>
-          </div>
-          <div>
-            <div className="flex items-center justify-between text-xs mb-1">
-              <span className="text-text-secondary">Agents</span>
-              <span className="text-text-primary">18%</span>
-            </div>
-            <div className="h-1.5 rounded-full bg-white/60 overflow-hidden">
-              <div className="h-full w-[18%] bg-status-info rounded-full" />
-            </div>
-          </div>
-        </div>
-      </div>
+      ) : (
+        <p className="text-xs text-text-muted">Select a conversation to view context.</p>
+      )}
     </div>
   );
 }
@@ -140,7 +92,9 @@ function AdminInboxContent() {
 export default function AdminInbox() {
   return (
     <InboxPanelsProvider>
-      <AdminInboxContent />
+      <InboxConversationsProvider>
+        <AdminInboxContent />
+      </InboxConversationsProvider>
     </InboxPanelsProvider>
   );
 }
