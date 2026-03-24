@@ -62,13 +62,17 @@ export default function AdminAgents() {
   );
   const { dayData: attendanceDayData } = useAgentAttendanceData(selectedAgent?.id, schedule.workingDays);
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedEmail = email.trim();
     const trimmedName = name.trim();
     const trimmedPassword = password.trim();
     if (!trimmedEmail || !trimmedName || !trimmedPassword) return;
-    addAgent(trimmedEmail, trimmedName, trimmedPassword);
+    const ok = await addAgent(trimmedEmail, trimmedName, trimmedPassword);
+    if (!ok) {
+      toast('Failed to create agent. Check backend/API and try again.');
+      return;
+    }
     setEmail('');
     setName('');
     setPassword('');
@@ -80,10 +84,10 @@ export default function AdminAgents() {
     setDeleteAgentConfirm({ id, label });
   };
 
-  const handleDeleteConfirm = () => {
+  const handleDeleteConfirm = async () => {
     if (!deleteAgentConfirm) return;
-    removeAgent(deleteAgentConfirm.id);
-    toast('Agent removed');
+    const ok = await removeAgent(deleteAgentConfirm.id);
+    toast(ok ? 'Agent removed' : 'Failed to remove agent');
     setDeleteAgentConfirm(null);
   };
 
@@ -238,7 +242,9 @@ export default function AdminAgents() {
                           if (e.key === 'Enter') {
                             const v = nameDraft.trim();
                             if (v) {
-                              updateAgent(selectedAgent.id, { name: v });
+                              void updateAgent(selectedAgent.id, { name: v }).then((ok) => {
+                                if (!ok) toast('Failed to update agent name');
+                              });
                               setEditingName(false);
                             }
                           }
@@ -253,7 +259,9 @@ export default function AdminAgents() {
                         onClick={() => {
                           const v = nameDraft.trim();
                           if (v) {
-                            updateAgent(selectedAgent.id, { name: v });
+                            void updateAgent(selectedAgent.id, { name: v }).then((ok) => {
+                              if (!ok) toast('Failed to update agent name');
+                            });
                             setEditingName(false);
                           }
                         }}
