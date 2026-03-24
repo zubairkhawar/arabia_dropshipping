@@ -294,7 +294,7 @@ export default function AdminTeams() {
           )}
         </div>
 
-        <div className="flex-[1.5] min-w-[240px] max-w-sm xl:max-w-md flex flex-col p-6">
+        <div className="flex-[1.7] min-w-[320px] max-w-md xl:max-w-lg flex flex-col p-6">
           <div className="mb-4">
             <h1 className="text-2xl font-bold text-text-primary">Teams</h1>
             <p className="text-text-secondary mt-1 text-sm">
@@ -374,11 +374,11 @@ export default function AdminTeams() {
                       Members are visible in the team channel. Changes appear as soft messages in the
                       chat stream.
                     </p>
-                    <div className="flex gap-2">
+                    <div className="flex flex-col sm:flex-row gap-2">
                       <select
                         value={newMemberId}
                         onChange={(e) => setNewMemberId(e.target.value)}
-                        className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+                        className="w-full min-w-0 sm:flex-1 px-3 py-2.5 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white"
                       >
                         <option value="">Select agent</option>
                         {availableAgentsToAdd.map((agent) => (
@@ -391,7 +391,7 @@ export default function AdminTeams() {
                         type="button"
                         onClick={handleAddMember}
                         disabled={!newMemberId}
-                        className="inline-flex items-center gap-2 px-3 py-2 bg-primary text-white rounded-lg text-xs hover:bg-primary-dark transition-colors"
+                        className="inline-flex w-full sm:w-auto sm:flex-shrink-0 justify-center items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors"
                       >
                         <UserPlus className="w-4 h-4" />
                         Add
@@ -408,7 +408,7 @@ export default function AdminTeams() {
                         No members yet. Add the first member above.
                       </p>
                     ) : (
-                      <div className="max-h-64 overflow-y-auto pr-1">
+                      <div className={`max-h-64 pr-1 ${activeMemberMenu ? 'overflow-visible' : 'overflow-y-auto'}`}>
                         <ul className="space-y-2 text-sm">
                           {selectedTeam.members.map((member) => {
                             const menuOpen = activeMemberMenu === member.agentId;

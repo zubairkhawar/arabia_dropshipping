@@ -115,10 +115,10 @@ async def get_agent_activity(
     now = datetime.utcnow()
     start = now - timedelta(days=days)
 
-    # Group by date and sender_type
+    # Group by date and sender_type (use SQL date() for broad DB compatibility)
     rows = (
         db.query(
-            func.date_trunc("day", Message.created_at).label("day"),
+            func.date(Message.created_at).label("day"),
             Message.sender_type,
             func.count(Message.id).label("count"),
         )
@@ -135,13 +135,19 @@ async def get_agent_activity(
 
     series: Dict[str, Dict[str, int]] = {}
     for day, sender_type, count in rows:
-        day_str = day.date().isoformat()
+        day_str = str(day)
         if day_str not in series:
             series[day_str] = {"customer": 0, "agent": 0, "ai": 0}
         if sender_type in series[day_str]:
             series[day_str][sender_type] = int(count)
 
-    return {"days": series}
+    # Ensure all days in range are present so charts have a stable 7-day axis.
+    for i in range(days):
+        d = (start + timedelta(days=i)).date().isoformat()
+        if d not in series:
+            series[d] = {"customer": 0, "agent": 0, "ai": 0}
+
+    return {"days": dict(sorted(series.items(), key=lambda item: item[0]))}
 
 
 @router.get("/language-distribution")
