@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useToast } from '@/contexts/ToastContext';
 
 type SourceType = 'file' | 'url' | 'api';
 
@@ -13,7 +14,27 @@ interface KnowledgeSource {
   lastUpdated: string;
 }
 
+interface KnowledgeSourceApi {
+  id: number;
+  tenant_id: number;
+  name: string;
+  type: SourceType;
+  url: string | null;
+  status: 'indexing' | 'ready' | 'error';
+  chunk_count: number;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  'https://arabia-dropshipping.onrender.com';
+const DEFAULT_TENANT_ID = 1;
+
 export default function AdminKnowledgeBase() {
+  const { toast } = useToast();
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [fileName, setFileName] = useState('');
   const [url, setUrl] = useState('');
@@ -24,49 +45,217 @@ export default function AdminKnowledgeBase() {
   const [headers, setHeaders] = useState('');
   const [refreshInterval, setRefreshInterval] = useState('24');
   const [schemaNotes, setSchemaNotes] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmittingFile, setIsSubmittingFile] = useState(false);
+  const [isSubmittingUrl, setIsSubmittingUrl] = useState(false);
+  const [isSubmittingApi, setIsSubmittingApi] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const addSource = (name: string, type: SourceType) => {
-    if (!name.trim()) return;
-    setSources((prev) => [
-      ...prev,
-      {
-        id: `${Date.now()}-${type}`,
-        name: name.trim(),
-        type,
-        status: 'ready',
-        chunks: type === 'api' ? 0 : 42,
-        lastUpdated: new Date().toLocaleString(),
-      },
-    ]);
+  const mapSource = useCallback((s: KnowledgeSourceApi): KnowledgeSource => {
+    const updated = s.updated_at || s.created_at;
+    return {
+      id: String(s.id),
+      name: s.name,
+      type: s.type,
+      status: s.status === 'ready' ? 'ready' : 'indexing',
+      chunks: s.chunk_count,
+      lastUpdated: updated ? new Date(updated).toLocaleString() : '-',
+    };
+  }, []);
+
+  const fetchSources = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/knowledge/sources?tenant_id=${DEFAULT_TENANT_ID}`,
+        { method: 'GET' },
+      );
+      if (!res.ok) {
+        toast('Failed to load knowledge sources');
+        return;
+      }
+      const data = (await res.json()) as KnowledgeSourceApi[];
+      setSources(data.map(mapSource));
+    } catch {
+      toast('Failed to load knowledge sources');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [mapSource, toast]);
+
+  useEffect(() => {
+    void fetchSources();
+  }, [fetchSources]);
+
+  const createSource = useCallback(
+    async (payload: {
+      name: string;
+      type: SourceType;
+      url?: string;
+      metadata?: Record<string, unknown>;
+    }) => {
+      const res = await fetch(`${API_BASE_URL}/api/knowledge/sources`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenant_id: DEFAULT_TENANT_ID,
+          name: payload.name,
+          type: payload.type,
+          url: payload.url ?? null,
+          metadata: payload.metadata ?? {},
+        }),
+      });
+      if (!res.ok) {
+        throw new Error('create_failed');
+      }
+      const created = (await res.json()) as KnowledgeSourceApi;
+      setSources((prev) => [mapSource(created), ...prev]);
+    },
+    [mapSource],
+  );
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
   };
 
-  const handleFileMock = () => {
-    if (!fileName.trim()) return;
-    addSource(fileName, 'file');
-    setFileName('');
+  const handleFileAdd = async () => {
+    const trimmed = fileName.trim();
+    if (!trimmed) {
+      toast('Please choose a file');
+      return;
+    }
+    setIsSubmittingFile(true);
+    try {
+      await createSource({
+        name: trimmed,
+        type: 'file',
+        metadata: {
+          filename: trimmed,
+        },
+      });
+      toast('File source added');
+      setFileName('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch {
+      toast('Failed to add file source');
+    } finally {
+      setIsSubmittingFile(false);
+    }
   };
 
-  const handleUrlAdd = () => {
-    if (!url.trim()) return;
-    addSource(url, 'url');
-    setUrl('');
+  const handleUrlAdd = async () => {
+    const trimmed = url.trim();
+    if (!trimmed) {
+      toast('Please enter a URL');
+      return;
+    }
+    setIsSubmittingUrl(true);
+    try {
+      await createSource({
+        name: trimmed,
+        type: 'url',
+        url: trimmed,
+        metadata: { seed_url: trimmed },
+      });
+      toast('URL source added');
+      setUrl('');
+    } catch {
+      toast('Failed to add URL source');
+    } finally {
+      setIsSubmittingUrl(false);
+    }
   };
 
-  const handleApiAdd = (e: React.FormEvent) => {
+  const handleApiAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!apiName.trim() || !apiUrl.trim()) return;
-    addSource(apiName, 'api');
-    setApiName('');
-    setApiUrl('');
-    setAuthType('none');
-    setApiKey('');
-    setHeaders('');
-    setRefreshInterval('24');
-    setSchemaNotes('');
+    const trimmedName = apiName.trim();
+    const trimmedUrl = apiUrl.trim();
+    if (!trimmedName || !trimmedUrl) {
+      toast('API name and base URL are required');
+      return;
+    }
+    let parsedHeaders: Record<string, unknown> = {};
+    if (headers.trim()) {
+      try {
+        const parsed = JSON.parse(headers) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          toast('Extra headers must be a JSON object');
+          return;
+        }
+        parsedHeaders = parsed as Record<string, unknown>;
+      } catch {
+        toast('Extra headers JSON is invalid');
+        return;
+      }
+    }
+    const refresh = Number(refreshInterval);
+    if (!Number.isFinite(refresh) || refresh <= 0) {
+      toast('Refresh interval must be greater than 0');
+      return;
+    }
+    setIsSubmittingApi(true);
+    try {
+      await createSource({
+        name: trimmedName,
+        type: 'api',
+        url: trimmedUrl,
+        metadata: {
+          auth_type: authType,
+          api_key: authType === 'none' ? '' : apiKey,
+          refresh_interval_hours: refresh,
+          headers: parsedHeaders,
+          schema_notes: schemaNotes.trim(),
+        },
+      });
+      toast('API source connected');
+      setApiName('');
+      setApiUrl('');
+      setAuthType('none');
+      setApiKey('');
+      setHeaders('');
+      setRefreshInterval('24');
+      setSchemaNotes('');
+    } catch {
+      toast('Failed to connect API source');
+    } finally {
+      setIsSubmittingApi(false);
+    }
   };
 
-  const removeSource = (id: string) => {
-    setSources((prev) => prev.filter((s) => s.id !== id));
+  const removeSource = async (id: string) => {
+    setDeletingId(id);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/knowledge/sources/${id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        toast('Failed to delete source');
+        return;
+      }
+      setSources((prev) => prev.filter((s) => s.id !== id));
+      toast('Source deleted');
+    } catch {
+      toast('Failed to delete source');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const fileInputAccept = useMemo(
+    () => '.pdf,.doc,.docx,.csv,.txt,.xls,.xlsx,.ppt,.pptx,.json',
+    [],
+  );
+
+  const isBusy = isSubmittingApi || isSubmittingFile || isSubmittingUrl;
+
+  const openFilePicker = () => {
+    fileInputRef.current?.click();
+  };
+
+  const clearFile = () => {
+    setFileName('');
   };
 
   return (
@@ -88,21 +277,45 @@ export default function AdminKnowledgeBase() {
             </p>
             <div className="space-y-2">
               <input
+                ref={fileInputRef}
+                type="file"
+                accept={fileInputAccept}
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+              <input
                 type="text"
                 value={fileName}
                 onChange={(e) => setFileName(e.target.value)}
-                placeholder="Select or mock file name (UI only)"
+                placeholder="Select file or type file name"
                 className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={openFilePicker}
+                  className="flex-1 border border-border px-3 py-2 rounded-lg text-sm font-medium hover:bg-panel transition-colors"
+                >
+                  Choose file
+                </button>
+                <button
+                  type="button"
+                  onClick={clearFile}
+                  className="px-3 py-2 rounded-lg text-sm border border-border text-text-secondary hover:bg-panel"
+                >
+                  Clear
+                </button>
+              </div>
               <button
                 type="button"
-                onClick={handleFileMock}
-                className="w-full bg-primary text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors"
+                disabled={!fileName.trim() || isBusy}
+                onClick={() => void handleFileAdd()}
+                className="w-full bg-primary text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Add file source
+                {isSubmittingFile ? 'Adding file source...' : 'Add file source'}
               </button>
               <p className="text-[11px] text-text-muted">
-                In production this will open a real file picker and stream content to your vector DB.
+                This creates a backend source record. File content indexing can be attached to your vector pipeline next.
               </p>
             </div>
           </div>
@@ -122,10 +335,11 @@ export default function AdminKnowledgeBase() {
               />
               <button
                 type="button"
-                onClick={handleUrlAdd}
-                className="w-full bg-primary text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors"
+                disabled={!url.trim() || isBusy}
+                onClick={() => void handleUrlAdd()}
+                className="w-full bg-primary text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Add URL source
+                {isSubmittingUrl ? 'Adding URL source...' : 'Add URL source'}
               </button>
             </div>
           </div>
@@ -224,9 +438,10 @@ export default function AdminKnowledgeBase() {
               <div className="flex justify-end">
                 <button
                   type="submit"
-                  className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors"
+                  disabled={isBusy}
+                  className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Connect API source
+                  {isSubmittingApi ? 'Connecting API source...' : 'Connect API source'}
                 </button>
               </div>
             </form>
@@ -244,7 +459,11 @@ export default function AdminKnowledgeBase() {
             </div>
           </div>
 
-          {sources.length === 0 ? (
+          {isLoading ? (
+            <div className="flex-1 flex items-center justify-center py-12">
+              <p className="text-sm text-text-secondary">Loading knowledge sources...</p>
+            </div>
+          ) : sources.length === 0 ? (
             <div className="flex-1 flex items-center justify-center py-12">
               <p className="text-sm text-text-secondary">
                 No knowledge sources yet. Upload a file, add a URL, or connect an API on the left.
@@ -290,10 +509,11 @@ export default function AdminKnowledgeBase() {
                       <td className="px-4 py-2 text-right">
                         <button
                           type="button"
-                          onClick={() => removeSource(s.id)}
-                          className="text-[11px] text-status-error hover:underline"
+                          disabled={deletingId === s.id}
+                          onClick={() => void removeSource(s.id)}
+                          className="text-[11px] text-status-error hover:underline disabled:opacity-60 disabled:no-underline"
                         >
-                          Delete
+                          {deletingId === s.id ? 'Deleting...' : 'Delete'}
                         </button>
                       </td>
                     </tr>

@@ -7,6 +7,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { getDayAttendance } from '@/components/agents/activity-bar';
 import { buildAllAgentsPdf } from '@/lib/attendance-pdf';
+import type { OnlineSchedule } from '@/contexts/OnlineScheduleContext';
 
 interface Broadcast {
   id: string;
@@ -59,6 +60,9 @@ export default function AdminSettings() {
   const { toast } = useToast();
   const { agents } = useAgents();
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
+  const [broadcastsLoading, setBroadcastsLoading] = useState(false);
+  const [broadcastSubmitting, setBroadcastSubmitting] = useState(false);
+  const [deletingBroadcastId, setDeletingBroadcastId] = useState<string | null>(null);
   const [reportMonth, setReportMonth] = useState(() => new Date().getMonth() + 1);
   const [reportYear, setReportYear] = useState(() => new Date().getFullYear());
   const [reportDownloading, setReportDownloading] = useState(false);
@@ -74,14 +78,21 @@ export default function AdminSettings() {
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
   const [message, setMessage] = useState('');
+  const [scheduleDraft, setScheduleDraft] = useState<OnlineSchedule>(schedule);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
 
   const TENANT_ID = 1;
 
   useEffect(() => {
+    setScheduleDraft(schedule);
+  }, [schedule]);
+
+  useEffect(() => {
     async function loadBroadcasts() {
+      setBroadcastsLoading(true);
       try {
         const res = await fetch(`${API_BASE}/api/broadcasts?tenant_id=${TENANT_ID}`);
-        if (!res.ok) return;
+        if (!res.ok) throw new Error('Failed to fetch broadcasts');
         const data = (await res.json()) as {
           id: number;
           tenant_id: number;
@@ -102,15 +113,25 @@ export default function AdminSettings() {
           })),
         );
       } catch {
-        // ignore, keep local empty
+        toast('Failed to load broadcasts');
+      } finally {
+        setBroadcastsLoading(false);
       }
     }
-    loadBroadcasts();
-  }, []);
+    void loadBroadcasts();
+  }, [toast]);
 
   const addBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !message.trim() || !startsAt || !endsAt) return;
+    if (!title.trim() || !message.trim() || !startsAt || !endsAt) {
+      toast('Fill all required broadcast fields');
+      return;
+    }
+    if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+      toast('Broadcast end time must be after start time');
+      return;
+    }
+    setBroadcastSubmitting(true);
     try {
       const res = await fetch(`${API_BASE}/api/broadcasts`, {
         method: 'POST',
@@ -152,6 +173,8 @@ export default function AdminSettings() {
       toast("Broadcast added");
     } catch {
       toast("Failed to add broadcast");
+    } finally {
+      setBroadcastSubmitting(false);
     }
   };
 
@@ -160,13 +183,54 @@ export default function AdminSettings() {
   };
 
   /** End/cancel a broadcast (remove from list so it stops being active). */
-  const cancelBroadcast = (id: string) => {
+  const cancelBroadcast = async (id: string) => {
     if (typeof window === "undefined") return;
     if (confirm("End this broadcast now? The AI will no longer use this message.")) {
-      // Fire-and-forget delete to backend; we optimistically update UI.
-      fetch(`${API_BASE}/api/broadcasts/${id}`, { method: "DELETE" }).catch(() => undefined);
-      removeBroadcast(id);
-      toast("Broadcast ended");
+      setDeletingBroadcastId(id);
+      try {
+        const res = await fetch(`${API_BASE}/api/broadcasts/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error('Failed to delete');
+        removeBroadcast(id);
+        toast("Broadcast ended");
+      } catch {
+        toast("Failed to end broadcast");
+      } finally {
+        setDeletingBroadcastId(null);
+      }
+    }
+  };
+
+  const saveScheduleChanges = async () => {
+    if (scheduleDraft.workingDays.length === 0) {
+      toast('Select at least one working day');
+      return;
+    }
+    if (!scheduleDraft.startTime || !scheduleDraft.endTime) {
+      toast('Set both start and end time');
+      return;
+    }
+    if (scheduleDraft.endTime <= scheduleDraft.startTime) {
+      toast('End time must be later than start time');
+      return;
+    }
+    setScheduleSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/schedule`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          working_days: scheduleDraft.workingDays,
+          start_time: scheduleDraft.startTime,
+          end_time: scheduleDraft.endTime,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      setSchedule(scheduleDraft);
+      toast('Settings saved');
+    } catch {
+      toast('Failed to save schedule');
+    } finally {
+      setScheduleSaving(false);
     }
   };
 
@@ -244,8 +308,10 @@ export default function AdminSettings() {
       }
       const data = await res.json();
       setOpenaiUsage(data);
+      toast('Usage fetched');
     } catch (e: unknown) {
       setOpenaiUsageError(e instanceof Error ? e.message : 'Failed to fetch usage');
+      toast('Failed to fetch usage');
     } finally {
       setOpenaiUsageLoading(false);
     }
@@ -397,12 +463,12 @@ export default function AdminSettings() {
                     <label key={dayIndex} className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={schedule.workingDays.includes(dayIndex)}
+                        checked={scheduleDraft.workingDays.includes(dayIndex)}
                         onChange={(e) => {
                           const next = e.target.checked
-                            ? [...schedule.workingDays, dayIndex].sort((a, b) => a - b)
-                            : schedule.workingDays.filter((d) => d !== dayIndex);
-                          setSchedule({ ...schedule, workingDays: next.length > 0 ? next : [1] });
+                            ? [...scheduleDraft.workingDays, dayIndex].sort((a, b) => a - b)
+                            : scheduleDraft.workingDays.filter((d) => d !== dayIndex);
+                          setScheduleDraft({ ...scheduleDraft, workingDays: next.length > 0 ? next : [1] });
                         }}
                         className="rounded border-border text-primary focus:ring-primary"
                       />
@@ -418,8 +484,8 @@ export default function AdminSettings() {
                   </label>
                   <input
                     type="time"
-                    value={schedule.startTime}
-                    onChange={(e) => setSchedule({ ...schedule, startTime: e.target.value })}
+                    value={scheduleDraft.startTime}
+                    onChange={(e) => setScheduleDraft({ ...scheduleDraft, startTime: e.target.value })}
                     className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
@@ -429,8 +495,8 @@ export default function AdminSettings() {
                   </label>
                   <input
                     type="time"
-                    value={schedule.endTime}
-                    onChange={(e) => setSchedule({ ...schedule, endTime: e.target.value })}
+                    value={scheduleDraft.endTime}
+                    onChange={(e) => setScheduleDraft({ ...scheduleDraft, endTime: e.target.value })}
                     className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
@@ -441,10 +507,11 @@ export default function AdminSettings() {
           <div className="border-t border-border pt-6">
             <button
               type="button"
-              onClick={() => toast('Settings saved')}
-              className="bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary-dark transition-colors text-sm"
+              onClick={saveScheduleChanges}
+              disabled={scheduleSaving}
+              className="bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary-dark transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Save Changes
+              {scheduleSaving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
         </div>
@@ -538,9 +605,10 @@ export default function AdminSettings() {
             <div className="flex justify-end">
               <button
                 type="submit"
-                className="bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors"
+                disabled={broadcastSubmitting}
+                className="bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Add broadcast
+                {broadcastSubmitting ? 'Adding...' : 'Add broadcast'}
               </button>
             </div>
           </form>
@@ -576,17 +644,20 @@ export default function AdminSettings() {
                 <div className="pt-2">
                   <button
                     type="button"
-                    onClick={() => cancelBroadcast(activeBroadcast.id)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-status-error/50 text-status-error text-xs font-medium hover:bg-status-error/10 transition-colors"
+                    onClick={() => void cancelBroadcast(activeBroadcast.id)}
+                    disabled={deletingBroadcastId === activeBroadcast.id}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-status-error/50 text-status-error text-xs font-medium hover:bg-status-error/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <XCircle className="w-3.5 h-3.5" />
-                    End broadcast now
+                    {deletingBroadcastId === activeBroadcast.id ? 'Ending...' : 'End broadcast now'}
                   </button>
                 </div>
               </div>
             )}
 
-            {broadcasts.length === 0 ? (
+            {broadcastsLoading ? (
+              <p className="text-xs text-text-muted">Loading broadcasts...</p>
+            ) : broadcasts.length === 0 ? (
               <p className="text-xs text-text-muted">
                 No broadcasts yet. Add one above to tell the AI about agent availability during a
                 festival or special event.
@@ -628,11 +699,12 @@ export default function AdminSettings() {
                       <div className="flex justify-end">
                         <button
                           type="button"
-                          onClick={() => cancelBroadcast(b.id)}
-                          className="inline-flex items-center gap-1 text-status-error hover:underline text-[10px] font-medium"
+                          onClick={() => void cancelBroadcast(b.id)}
+                          disabled={deletingBroadcastId === b.id}
+                          className="inline-flex items-center gap-1 text-status-error hover:underline text-[10px] font-medium disabled:opacity-50 disabled:no-underline"
                         >
                           <XCircle className="w-3 h-3" />
-                          {isPast ? 'Remove' : 'Cancel'}
+                          {deletingBroadcastId === b.id ? 'Removing...' : isPast ? 'Remove' : 'Cancel'}
                         </button>
                       </div>
                     </li>

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List
+from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
@@ -25,13 +25,30 @@ class KnowledgeSourceOut(BaseModel):
     tenant_id: int
     name: str
     type: str
-    url: str | None
+    url: Optional[str]
     status: str
     chunk_count: int
-    metadata: dict | None
+    metadata: Optional[Dict[str, Any]]
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+def _to_knowledge_source_out(row: KnowledgeSource) -> KnowledgeSourceOut:
+    return KnowledgeSourceOut(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        name=row.name,
+        type=row.type,
+        url=row.url,
+        status=row.status,
+        chunk_count=row.chunk_count,
+        metadata=row.knowledge_metadata or {},
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
 
 
 @router.get("/sources", response_model=List[KnowledgeSourceOut])
@@ -45,7 +62,7 @@ async def list_sources(tenant_id: int, db: Session = Depends(get_db)):
         .order_by(KnowledgeSource.created_at.desc())
         .all()
     )
-    return rows
+    return [_to_knowledge_source_out(row) for row in rows]
 
 
 @router.post(
@@ -73,7 +90,7 @@ async def create_source(payload: KnowledgeSourceIn, db: Session = Depends(get_db
     db.commit()
     db.refresh(src)
     # TODO: enqueue background job to fetch/chunk/embed and update status/chunk_count.
-    return src
+    return _to_knowledge_source_out(src)
 
 
 @router.delete("/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
