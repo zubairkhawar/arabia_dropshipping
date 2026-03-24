@@ -7,7 +7,15 @@ from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Agent, User
+from models import (
+    Agent,
+    User,
+    Conversation,
+    StoreAgentMapping,
+    TeamMembership,
+    TeamEvent,
+    Notification,
+)
 from services.auth_service.api import get_current_user
 from services.auth_service.services import get_password_hash
 
@@ -204,25 +212,56 @@ async def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depend
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(agent_id: int, db: Session = Depends(get_db)):
     """
-    Deactivate an agent safely.
-    Keeps Agent row for history, marks user inactive and agent offline.
+    Delete an agent account and revoke access.
+    Safely detaches related references first, then removes Agent + User rows.
     """
     agent = db.query(Agent).filter(Agent.id == agent_id).first()
     if not agent:
         return
 
     user = db.query(User).filter(User.id == agent.user_id).first()
-    if user:
-        user.is_active = False
-        user.updated_at = datetime.utcnow()
-        db.add(user)
+    try:
+        # Keep conversation history but unassign this deleted agent.
+        db.query(Conversation).filter(Conversation.agent_id == agent.id).update(
+            {Conversation.agent_id: None}, synchronize_session=False
+        )
 
-    agent.status = "offline"
-    agent.updated_at = datetime.utcnow()
-    db.add(agent)
+        # Remove mappings/memberships tied directly to this agent.
+        db.query(StoreAgentMapping).filter(StoreAgentMapping.agent_id == agent.id).delete(
+            synchronize_session=False
+        )
+        db.query(TeamMembership).filter(TeamMembership.agent_id == agent.id).delete(
+            synchronize_session=False
+        )
 
-    db.commit()
-    return
+        # Keep event history; null out references to the deleted agent.
+        db.query(TeamEvent).filter(TeamEvent.actor_agent_id == agent.id).update(
+            {TeamEvent.actor_agent_id: None}, synchronize_session=False
+        )
+        db.query(TeamEvent).filter(TeamEvent.target_agent_id == agent.id).update(
+            {TeamEvent.target_agent_id: None}, synchronize_session=False
+        )
+
+        # Notifications owned by this agent are no longer relevant after account deletion.
+        db.query(Notification).filter(Notification.agent_id == agent.id).delete(
+            synchronize_session=False
+        )
+        db.query(Notification).filter(Notification.from_agent_id == agent.id).update(
+            {Notification.from_agent_id: None}, synchronize_session=False
+        )
+
+        db.delete(agent)
+        if user:
+            db.delete(user)
+
+        db.commit()
+        return
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to delete agent due to related records",
+        )
 
 
 @router.get("/me", response_model=AgentOut)

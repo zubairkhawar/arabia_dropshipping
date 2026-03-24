@@ -145,6 +145,10 @@ export default function AdminAgents() {
     setAgentReportDownloading(true);
     try {
       const dayData = filterByMonth(attendanceDayData, agentReportYear, agentReportMonth - 1);
+      if (dayData.length === 0) {
+        toast('No attendance data for selected month.');
+        return;
+      }
       const periodLabel = new Date(agentReportYear, agentReportMonth - 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
       await buildSingleAgentPdf({
         agent: { id: selectedAgent.id, name: selectedAgent.name, email: selectedAgent.email },
