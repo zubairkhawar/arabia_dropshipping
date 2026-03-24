@@ -29,7 +29,9 @@ const AgentsContext = createContext<AgentsContextType | undefined>(undefined);
 
 // Keep consistent with the rest of the frontend config.
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  'https://arabia-dropshipping.onrender.com';
 // For now we operate on the default tenant created by the backend.
 const DEFAULT_TENANT_ID = 1;
 

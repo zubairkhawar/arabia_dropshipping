@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 
 const ADMIN_EMAIL = 'arabiadropshipping05@gmail.com';
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'https://arabia-dropshipping.onrender.com';
 
 export default function LoginPage() {
   const router = useRouter();

@@ -52,7 +52,7 @@ const MONTHS = [
   "December",
 ];
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "https://arabia-dropshipping.onrender.com";
 
 export default function AdminSettings() {
   const { schedule, setSchedule } = useOnlineSchedule();

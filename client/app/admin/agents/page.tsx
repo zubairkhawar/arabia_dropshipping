@@ -10,20 +10,30 @@ import { buildSingleAgentPdf, filterByMonth } from '@/lib/attendance-pdf';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-/** Mock per-agent performance metrics (replace with API when available). */
-function getAgentMetrics(agentId: string, index: number): { uptimePercent: number; avgResponseTimeSeconds: number } {
-  const seed = agentId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  return {
-    uptimePercent: 96 + (seed % 5),
-    avgResponseTimeSeconds: 45 + (seed % 90),
-  };
-}
-
 function formatAvgResponse(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return s > 0 ? `${m}.${Math.round((s / 60) * 10)}m` : `${m}m`;
+}
+
+function getDemoPerformanceFromAttendance(
+  dayData: { date: Date; hoursWorked: number }[],
+  workingDays: number[],
+  agentId: string,
+): { uptimePercent: number; avgResponseTimeSeconds: number } {
+  const now = new Date();
+  const from = new Date(now);
+  from.setDate(from.getDate() - 29);
+  from.setHours(0, 0, 0, 0);
+  const workingSet = new Set(workingDays);
+  const recent = dayData.filter((d) => d.date >= from && d.date <= now && workingSet.has(d.date.getDay()));
+  const worked = recent.filter((d) => d.hoursWorked > 0);
+  const uptimePercent = recent.length > 0 ? Math.round((worked.length / recent.length) * 100) : 0;
+  const avgHours = worked.length > 0 ? worked.reduce((s, d) => s + d.hoursWorked, 0) / worked.length : 0;
+  const idSeed = agentId.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 12;
+  const avgResponseTimeSeconds = Math.max(20, Math.round(170 - avgHours * 14 + idSeed));
+  return { uptimePercent, avgResponseTimeSeconds };
 }
 
 export default function AdminAgents() {
@@ -61,6 +71,10 @@ export default function AdminAgents() {
     [agents, selectedId],
   );
   const { dayData: attendanceDayData } = useAgentAttendanceData(selectedAgent?.id, schedule.workingDays);
+  const performanceMetrics = useMemo(() => {
+    if (!selectedAgent) return { uptimePercent: 0, avgResponseTimeSeconds: 0 };
+    return getDemoPerformanceFromAttendance(attendanceDayData, schedule.workingDays, selectedAgent.id);
+  }, [attendanceDayData, schedule.workingDays, selectedAgent]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -455,7 +469,7 @@ export default function AdminAgents() {
                     <div className="min-w-0">
                       <p className="text-xs text-text-muted">Uptime</p>
                       <p className="text-lg font-semibold text-text-primary">
-                        {getAgentMetrics(selectedAgent.id, Math.max(0, agents.findIndex((a) => a.id === selectedAgent.id))).uptimePercent}%
+                        {performanceMetrics.uptimePercent}%
                       </p>
                     </div>
                   </div>
@@ -466,7 +480,7 @@ export default function AdminAgents() {
                     <div className="min-w-0">
                       <p className="text-xs text-text-muted">Avg response</p>
                       <p className="text-lg font-semibold text-text-primary">
-                        {formatAvgResponse(getAgentMetrics(selectedAgent.id, Math.max(0, agents.findIndex((a) => a.id === selectedAgent.id))).avgResponseTimeSeconds)}
+                        {formatAvgResponse(performanceMetrics.avgResponseTimeSeconds)}
                       </p>
                     </div>
                   </div>

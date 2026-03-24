@@ -3,7 +3,7 @@
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'https://arabia-dropshipping.onrender.com';
 
 function ResetPasswordContent() {
   const router = useRouter();

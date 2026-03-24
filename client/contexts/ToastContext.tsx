@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react';
 
 interface ToastItem {
   id: number;
@@ -17,22 +17,21 @@ const TOAST_DURATION_MS = 3500;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
-  const [nextId, setNextId] = useState(0);
+  const nextIdRef = useRef(1);
 
   const toast = useCallback((message: string) => {
-    const id = nextId;
-    setNextId((n) => n + 1);
+    const id = nextIdRef.current++;
     setItems((prev) => [...prev, { id, message }]);
     setTimeout(() => {
       setItems((prev) => prev.filter((item) => item.id !== id));
     }, TOAST_DURATION_MS);
-  }, [nextId]);
+  }, []);
 
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
       <div
-        className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none"
+        className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none"
         aria-live="polite"
       >
         {items.map((item) => (

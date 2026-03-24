@@ -11,7 +11,7 @@ import React, {
 
 const STORAGE_KEY = 'online-schedule';
 const DEFAULT_TENANT_ID = 1;
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'https://arabia-dropshipping.onrender.com';
 
 /** 0 = Sunday, 1 = Monday, ... 6 = Saturday. Days not in this array are holidays (e.g. Sunday). */
 export interface OnlineSchedule {

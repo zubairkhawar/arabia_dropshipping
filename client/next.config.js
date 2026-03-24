@@ -5,7 +5,7 @@ const nextConfig = {
     domains: ['localhost'],
   },
   async rewrites() {
-    const backend = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const backend = process.env.NEXT_PUBLIC_API_URL || 'https://arabia-dropshipping.onrender.com';
     return [
       {
         source: '/api/:path*',

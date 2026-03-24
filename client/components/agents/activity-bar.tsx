@@ -178,7 +178,7 @@ export function AgentActivityBar({
       {/* Heatmap */}
       <div className="flex flex-1 min-h-0 min-w-0 gap-1">
         <div className="flex flex-col justify-around text-[10px] text-text-muted pr-2 shrink-0">
-          <span className="h-4 flex items-center opacity-0" aria-hidden>placeholder</span>
+          <span className="h-4 flex items-center opacity-0" aria-hidden>&nbsp;</span>
           {dayLabels.map((label) => (
             <span key={label} className="h-4 flex items-center">{label}</span>
           ))}
