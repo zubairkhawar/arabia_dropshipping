@@ -173,9 +173,11 @@ export function ChatWindow({
 
   const transferTargetOptions = (() => {
     const currentName = agentFullName || getCurrentAgent()?.name || '';
-    const team = teams.find((t) => t.members.some((m) => m === currentName));
+    const team = teams.find((t) => t.members.some((m) => m.name === currentName));
     if (!team) return [];
-    const otherNames = team.members.filter((m) => m !== currentName);
+    const otherNames = team.members
+      .map((m) => m.name)
+      .filter((m) => m !== currentName);
     return otherNames
       .map((name) => {
         const agent = agents.find((a) => a.name === name);
@@ -187,9 +189,12 @@ export function ChatWindow({
   const isDmPage = pathname?.startsWith('/agent/dm');
   const showBroadcastInput = broadcastMode && isInternalChat && !!teamName;
 
-  const [messages, setMessages] = useState<Message[]>(
-    isInternalChat ? defaultInternalMessages : defaultCustomerMessages,
-  );
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (isInternalChat && isTeamChannel) {
+      return [];
+    }
+    return isInternalChat ? defaultInternalMessages : defaultCustomerMessages;
+  });
 
   const selectedConv =
     inboxConv?.selectedId != null

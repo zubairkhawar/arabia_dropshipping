@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ChatWindow } from '@/components/chat/chat-window';
 import { useTeams } from '@/contexts/TeamsContext';
+import { useAgents } from '@/contexts/AgentsContext';
 import { useToast } from '@/contexts/ToastContext';
 import { Users, UserPlus, MoreVertical, Trash2, ChevronLeft, ChevronRight, ArrowRightLeft, UserMinus } from 'lucide-react';
 
@@ -17,14 +18,16 @@ export default function AdminTeams() {
     addMemberToTeam,
     removeMemberFromTeam,
     transferMember,
+    isLoading,
   } = useTeams();
+  const { agents } = useAgents();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listCollapsed, setListCollapsed] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [teamName, setTeamName] = useState('');
   const [menuTeamId, setMenuTeamId] = useState<string | null>(null);
   const [showMemberManager, setShowMemberManager] = useState(false);
-  const [newMemberName, setNewMemberName] = useState('');
+  const [newMemberId, setNewMemberId] = useState('');
   const [transferTarget, setTransferTarget] = useState<Record<string, string>>({});
   const [teamDescription, setTeamDescription] = useState('');
   const [activeMemberMenu, setActiveMemberMenu] = useState<string | null>(null);
@@ -45,12 +48,22 @@ export default function AdminTeams() {
   const teamEvents = selectedTeam ? getEventsForTeam(selectedTeam.id) : [];
   const otherTeams = selectedTeam ? teams.filter((t) => t.id !== selectedTeam.id) : [];
 
-  const handleCreate = (e: React.FormEvent) => {
+  const availableAgentsToAdd = useMemo(() => {
+    if (!selectedTeam) return [];
+    const existing = new Set(selectedTeam.members.map((m) => m.agentId));
+    return agents.filter((a) => !existing.has(a.id));
+  }, [agents, selectedTeam]);
+
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = teamName.trim();
     const desc = teamDescription.trim();
     if (!trimmed) return;
-    addTeam(trimmed, desc);
+    const ok = await addTeam(trimmed, desc);
+    if (!ok) {
+      toast('Failed to create team');
+      return;
+    }
     setTeamName('');
     setTeamDescription('');
     setShowCreateModal(false);
@@ -61,34 +74,52 @@ export default function AdminTeams() {
     setDeleteTeamConfirm({ id, name });
   };
 
-  const handleDeleteTeamConfirm = () => {
+  const handleDeleteTeamConfirm = async () => {
     if (!deleteTeamConfirm) return;
-    removeTeam(deleteTeamConfirm.id);
+    const ok = await removeTeam(deleteTeamConfirm.id);
+    if (!ok) {
+      toast('Unable to delete team. Remove members first.');
+      return;
+    }
     if (menuTeamId === deleteTeamConfirm.id) setMenuTeamId(null);
     toast('Team removed');
     setDeleteTeamConfirm(null);
   };
 
-  const handleAddMember = () => {
+  const handleAddMember = async () => {
     if (!selectedTeam) return;
-    const name = newMemberName.trim();
-    if (!name) return;
-    addMemberToTeam(selectedTeam.id, name);
-    setNewMemberName('');
+    if (!newMemberId) return;
+    const ok = await addMemberToTeam(selectedTeam.id, newMemberId);
+    if (!ok) {
+      toast('Failed to add member');
+      return;
+    }
+    setNewMemberId('');
+    toast('Member added');
   };
 
-  const handleRemoveMember = (memberName: string) => {
+  const handleRemoveMember = async (memberName: string, memberAgentId: string) => {
     if (!selectedTeam) return;
     if (!confirm(`Remove ${memberName} from ${selectedTeam.name}?`)) return;
-    removeMemberFromTeam(selectedTeam.id, memberName);
+    const ok = await removeMemberFromTeam(selectedTeam.id, memberAgentId);
+    if (!ok) {
+      toast('Failed to remove member');
+      return;
+    }
+    toast('Member removed');
   };
 
-  const handleTransferMember = (memberName: string) => {
+  const handleTransferMember = async (memberName: string, memberAgentId: string) => {
     if (!selectedTeam) return;
-    const toId = transferTarget[memberName];
+    const toId = transferTarget[memberAgentId];
     if (!toId) return;
-    transferMember(selectedTeam.id, memberName, toId);
-    setTransferTarget((prev) => ({ ...prev, [memberName]: '' }));
+    const ok = await transferMember(selectedTeam.id, memberAgentId, toId);
+    if (!ok) {
+      toast('Failed to transfer member');
+      return;
+    }
+    setTransferTarget((prev) => ({ ...prev, [memberAgentId]: '' }));
+    toast('Member transferred');
   };
 
   const width = listCollapsed ? 64 : 260;
@@ -236,7 +267,7 @@ export default function AdminTeams() {
               title="# Team Channel"
               subtitle={`Internal chat for ${selectedTeam.name}`}
               teamName={selectedTeam.name}
-              teamMemberNames={selectedTeam.members}
+              teamMemberNames={selectedTeam.members.map((m) => m.name)}
               teamEvents={teamEvents}
               readOnly
               broadcastMode
@@ -316,15 +347,15 @@ export default function AdminTeams() {
                   ) : (
                       <div className="max-h-64 overflow-y-auto pr-1">
                       <ul className="space-y-1.5 text-sm">
-                      {selectedTeam.members.map((name) => (
+                      {selectedTeam.members.map((member) => (
                         <li
-                          key={name}
+                          key={member.agentId}
                           className="flex items-center gap-3 px-3 py-1.5 rounded-lg bg-panel border border-border"
                         >
                           <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-semibold flex-shrink-0">
-                            {name.charAt(0)}
+                            {member.name.charAt(0)}
                           </div>
-                          <span className="text-text-primary truncate">{name}</span>
+                          <span className="text-text-primary truncate">{member.name}</span>
                         </li>
                       ))}
                     </ul>
@@ -344,17 +375,22 @@ export default function AdminTeams() {
                       chat stream.
                     </p>
                     <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Member name"
-                        value={newMemberName}
-                        onChange={(e) => setNewMemberName(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleAddMember()}
-                        className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                      />
+                      <select
+                        value={newMemberId}
+                        onChange={(e) => setNewMemberId(e.target.value)}
+                        className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+                      >
+                        <option value="">Select agent</option>
+                        {availableAgentsToAdd.map((agent) => (
+                          <option key={agent.id} value={agent.id}>
+                            {agent.name} ({agent.email})
+                          </option>
+                        ))}
+                      </select>
                       <button
                         type="button"
                         onClick={handleAddMember}
+                        disabled={!newMemberId}
                         className="inline-flex items-center gap-2 px-3 py-2 bg-primary text-white rounded-lg text-xs hover:bg-primary-dark transition-colors"
                       >
                         <UserPlus className="w-4 h-4" />
@@ -374,25 +410,25 @@ export default function AdminTeams() {
                     ) : (
                       <div className="max-h-64 overflow-y-auto pr-1">
                         <ul className="space-y-2 text-sm">
-                          {selectedTeam.members.map((name) => {
-                            const menuOpen = activeMemberMenu === name;
+                          {selectedTeam.members.map((member) => {
+                            const menuOpen = activeMemberMenu === member.agentId;
                             return (
                               <li
-                                key={name}
+                                key={member.agentId}
                                 className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-panel border border-border"
                               >
                                 <div className="flex items-center gap-3 min-w-0">
                                   <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-semibold flex-shrink-0">
-                                    {name.charAt(0)}
+                                    {member.name.charAt(0)}
                                   </div>
-                                  <span className="text-text-primary truncate">{name}</span>
+                                  <span className="text-text-primary truncate">{member.name}</span>
                                 </div>
                                 <div className="relative flex-shrink-0">
                                   <button
                                     type="button"
                                     onClick={() =>
                                       setActiveMemberMenu((current) =>
-                                        current === name ? null : name,
+                                        current === member.agentId ? null : member.agentId,
                                       )
                                     }
                                     className="p-1.5 rounded-lg text-text-secondary hover:bg-white transition-colors"
@@ -409,11 +445,11 @@ export default function AdminTeams() {
                                           </p>
                                           <div className="flex items-center gap-2">
                                             <select
-                                              value={transferTarget[name] ?? ''}
+                                              value={transferTarget[member.agentId] ?? ''}
                                               onChange={(e) =>
                                                 setTransferTarget((prev) => ({
                                                   ...prev,
-                                                  [name]: e.target.value,
+                                                  [member.agentId]: e.target.value,
                                                 }))
                                               }
                                               className="flex-1 px-2 py-1.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
@@ -428,10 +464,10 @@ export default function AdminTeams() {
                                             <button
                                               type="button"
                                               onClick={() => {
-                                                handleTransferMember(name);
+                                                void handleTransferMember(member.name, member.agentId);
                                                 setActiveMemberMenu(null);
                                               }}
-                                              disabled={!transferTarget[name]}
+                                              disabled={!transferTarget[member.agentId]}
                                               className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-border hover:bg-panel disabled:opacity-50 disabled:cursor-not-allowed text-text-secondary"
                                             >
                                               <ArrowRightLeft className="w-3.5 h-3.5" />
@@ -443,7 +479,7 @@ export default function AdminTeams() {
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          handleRemoveMember(name);
+                                          void handleRemoveMember(member.name, member.agentId);
                                           setActiveMemberMenu(null);
                                         }}
                                         className="w-full flex items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-panel"
@@ -467,6 +503,12 @@ export default function AdminTeams() {
           ) : null}
         </div>
       </div>
+
+      {isLoading && (
+        <div className="fixed top-4 right-4 text-xs text-text-secondary bg-white border border-border rounded-lg px-3 py-2 shadow-sm">
+          Loading teams...
+        </div>
+      )}
 
       {deleteTeamConfirm && (
         <div

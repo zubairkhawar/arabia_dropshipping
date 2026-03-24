@@ -5,16 +5,24 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ChevronLeft, UserPlus, UserMinus, ArrowRightLeft } from 'lucide-react';
 import { useTeams } from '@/contexts/TeamsContext';
+import { useAgents } from '@/contexts/AgentsContext';
+import { useToast } from '@/contexts/ToastContext';
 
 export default function AdminTeamManagePage() {
   const params = useParams();
-  const teamId = (params?.teamId as string) || 'team-a';
+  const teamId = (params?.teamId as string) || '';
   const { teams, getTeam, addMemberToTeam, removeMemberFromTeam, transferMember } = useTeams();
+  const { agents } = useAgents();
+  const { toast } = useToast();
   const team = getTeam(teamId);
   const otherTeams = teams.filter((t) => t.id !== teamId);
 
-  const [newMemberName, setNewMemberName] = useState('');
+  const [newMemberId, setNewMemberId] = useState('');
   const [transferTarget, setTransferTarget] = useState<Record<string, string>>({});
+
+  const availableAgentsToAdd = team
+    ? agents.filter((a) => !team.members.some((member) => member.agentId === a.id))
+    : [];
 
   if (!team) {
     return (
@@ -28,24 +36,38 @@ export default function AdminTeamManagePage() {
     );
   }
 
-  const handleAddMember = () => {
-    const name = newMemberName.trim();
-    if (!name) return;
-    addMemberToTeam(teamId, name);
-    setNewMemberName('');
+  const handleAddMember = async () => {
+    if (!newMemberId) return;
+    const ok = await addMemberToTeam(teamId, newMemberId);
+    if (!ok) {
+      toast('Failed to add member');
+      return;
+    }
+    setNewMemberId('');
+    toast('Member added');
   };
 
-  const handleRemove = (memberName: string) => {
+  const handleRemove = async (memberName: string, memberAgentId: string) => {
     if (confirm(`Remove ${memberName} from ${team.name}?`)) {
-      removeMemberFromTeam(teamId, memberName);
+      const ok = await removeMemberFromTeam(teamId, memberAgentId);
+      if (!ok) {
+        toast('Failed to remove member');
+        return;
+      }
+      toast('Member removed');
     }
   };
 
-  const handleTransfer = (memberName: string) => {
-    const toId = transferTarget[memberName];
+  const handleTransfer = async (memberName: string, memberAgentId: string) => {
+    const toId = transferTarget[memberAgentId];
     if (!toId) return;
-    transferMember(teamId, memberName, toId);
-    setTransferTarget((prev) => ({ ...prev, [memberName]: '' }));
+    const ok = await transferMember(teamId, memberAgentId, toId);
+    if (!ok) {
+      toast('Failed to transfer member');
+      return;
+    }
+    setTransferTarget((prev) => ({ ...prev, [memberAgentId]: '' }));
+    toast('Member transferred');
   };
 
   return (
@@ -63,17 +85,22 @@ export default function AdminTeamManagePage() {
         <h2 className="font-semibold text-text-primary mb-4">Add member</h2>
         <p className="text-sm text-text-muted mb-2">Members can be added from the admin panel only. They will see a soft message in the team channel.</p>
         <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="Member name"
-            value={newMemberName}
-            onChange={(e) => setNewMemberName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAddMember()}
-            className="flex-1 px-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-text-primary"
-          />
+          <select
+            value={newMemberId}
+            onChange={(e) => setNewMemberId(e.target.value)}
+            className="flex-1 px-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-text-primary bg-white"
+          >
+            <option value="">Select agent</option>
+            {availableAgentsToAdd.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name} ({agent.email})
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             onClick={handleAddMember}
+            disabled={!newMemberId}
             className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors"
           >
             <UserPlus className="w-4 h-4" />
@@ -88,18 +115,20 @@ export default function AdminTeamManagePage() {
           <p className="text-text-muted text-sm">No members yet. Add one above.</p>
         ) : (
           <ul className="space-y-3">
-            {team.members.map((name) => (
+            {team.members.map((member) => (
               <li
-                key={name}
+                key={member.agentId}
                 className="flex items-center justify-between gap-4 py-3 px-4 rounded-lg bg-panel border border-border"
               >
-                <span className="font-medium text-text-primary">{name}</span>
+                <span className="font-medium text-text-primary">{member.name}</span>
                 <div className="flex items-center gap-2 flex-wrap">
                   {otherTeams.length > 0 && (
                     <>
                       <select
-                        value={transferTarget[name] ?? ''}
-                        onChange={(e) => setTransferTarget((prev) => ({ ...prev, [name]: e.target.value }))}
+                        value={transferTarget[member.agentId] ?? ''}
+                        onChange={(e) =>
+                          setTransferTarget((prev) => ({ ...prev, [member.agentId]: e.target.value }))
+                        }
                         className="px-3 py-1.5 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                       >
                         <option value="">Transfer to...</option>
@@ -111,8 +140,8 @@ export default function AdminTeamManagePage() {
                       </select>
                       <button
                         type="button"
-                        onClick={() => handleTransfer(name)}
-                        disabled={!transferTarget[name]}
+                        onClick={() => void handleTransfer(member.name, member.agentId)}
+                        disabled={!transferTarget[member.agentId]}
                         className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-border hover:bg-panel disabled:opacity-50 disabled:cursor-not-allowed text-text-secondary"
                         title="Transfer to another team"
                       >
@@ -123,7 +152,7 @@ export default function AdminTeamManagePage() {
                   )}
                   <button
                     type="button"
-                    onClick={() => handleRemove(name)}
+                    onClick={() => void handleRemove(member.name, member.agentId)}
                     className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-status-error/50 text-status-error hover:bg-status-error/10"
                     title="Remove from team"
                   >

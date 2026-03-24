@@ -2,13 +2,16 @@
 
 import { ChatWindow } from '@/components/chat/chat-window';
 import { useTeams } from '@/contexts/TeamsContext';
-
-const TEAM_A_ID = 'team-a';
+import { useAgents } from '@/contexts/AgentsContext';
 
 export default function AgentTeamChannel() {
-  const { getTeam, getEventsForTeam } = useTeams();
-  const team = getTeam(TEAM_A_ID);
-  const teamEvents = getEventsForTeam(TEAM_A_ID);
+  const { getCurrentAgent } = useAgents();
+  const { teams, getEventsForTeam } = useTeams();
+  const currentAgent = getCurrentAgent();
+  const team = currentAgent
+    ? teams.find((t) => t.members.some((m) => m.agentId === currentAgent.id))
+    : undefined;
+  const teamEvents = team ? getEventsForTeam(team.id) : [];
 
   return (
     <div className="flex flex-col h-full">
@@ -17,8 +20,8 @@ export default function AgentTeamChannel() {
           isInternalChat
           title="# Team Channel"
           subtitle="Team coordination chat"
-          teamName={team?.name ?? 'Team A'}
-          teamMemberNames={team?.members ?? []}
+          teamName={team?.name ?? 'Team'}
+          teamMemberNames={team?.members.map((m) => m.name) ?? []}
           teamEvents={teamEvents}
         />
       </div>
