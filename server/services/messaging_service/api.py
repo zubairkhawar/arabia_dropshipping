@@ -1,14 +1,18 @@
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-from fastapi import APIRouter, WebSocket, Request, Depends, HTTPException, status
+from fastapi import APIRouter, WebSocket, Request, Depends, HTTPException, status, Query
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Conversation, Message, Customer
+from models import Conversation, Message, Customer, Store
+from config import settings
 from services.ai_orchestrator_service.services import AIOrchestrator
+from langchain_bot import ArabiaLangChainBot
+from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 
 router = APIRouter()
 
@@ -87,6 +91,119 @@ def _build_conversation_summary(c: Conversation) -> ConversationSummary:
         last_message=last_msg.content if last_msg else None,
         last_activity_at=last_msg.created_at if last_msg else c.updated_at,
     )
+
+
+def _extract_meta_text_message(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Parse Meta webhook payload and return first inbound text message.
+    """
+    if payload.get("object") != "whatsapp_business_account":
+        return None
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            messages = value.get("messages") or []
+            if not messages:
+                continue
+            contacts = value.get("contacts") or []
+            contact_name = None
+            if contacts and isinstance(contacts[0], dict):
+                profile = contacts[0].get("profile") or {}
+                contact_name = profile.get("name")
+            for msg in messages:
+                if msg.get("type") != "text":
+                    continue
+                return {
+                    "from_phone": msg.get("from"),
+                    "text": (msg.get("text") or {}).get("body", ""),
+                    "wa_message_id": msg.get("id"),
+                    "contact_name": contact_name,
+                }
+    return None
+
+
+def _get_or_create_default_store(db: Session, tenant_id: int) -> Store:
+    store = (
+        db.query(Store)
+        .filter(Store.tenant_id == tenant_id, Store.is_active.is_(True))
+        .order_by(Store.id.asc())
+        .first()
+    )
+    if store:
+        return store
+    store = Store(
+        tenant_id=tenant_id,
+        name="WhatsApp Default Store",
+        store_code=f"tenant-{tenant_id}-whatsapp-default",
+        store_type="custom_api",
+        is_active=True,
+    )
+    db.add(store)
+    db.commit()
+    db.refresh(store)
+    return store
+
+
+def _get_or_create_customer_by_phone(
+    db: Session, tenant_id: int, store_id: int, phone: str, name: Optional[str]
+) -> Customer:
+    customer = (
+        db.query(Customer)
+        .filter(Customer.tenant_id == tenant_id, Customer.phone == phone)
+        .first()
+    )
+    if customer:
+        if name and not customer.name:
+            customer.name = name
+            db.add(customer)
+            db.commit()
+            db.refresh(customer)
+        return customer
+
+    customer = Customer(
+        tenant_id=tenant_id,
+        store_id=store_id,
+        phone=phone,
+        name=name or f"WhatsApp {phone}",
+        customer_data={"source": "meta_whatsapp_cloud"},
+    )
+    db.add(customer)
+    db.commit()
+    db.refresh(customer)
+    return customer
+
+
+def _get_or_create_active_whatsapp_conversation(
+    db: Session, tenant_id: int, store_id: int, customer_id: int
+) -> Conversation:
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.tenant_id == tenant_id,
+            Conversation.store_id == store_id,
+            Conversation.customer_id == customer_id,
+            Conversation.channel == "whatsapp",
+            Conversation.status == "active",
+        )
+        .order_by(desc(Conversation.updated_at))
+        .first()
+    )
+    if conversation:
+        return conversation
+
+    conversation = Conversation(
+        tenant_id=tenant_id,
+        store_id=store_id,
+        customer_id=customer_id,
+        channel="whatsapp",
+        status="active",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    return conversation
 
 
 @router.get("/conversations", response_model=List[ConversationSummary])
@@ -331,32 +448,115 @@ async def send_conversation_to_ai(
     return _build_conversation_summary(conversation)
 
 
-@router.post("/whatsapp/webhook")
-async def whatsapp_webhook(payload: WhatsAppWebhookPayload, request: Request) -> Dict[str, Any]:
+@router.get("/whatsapp/webhook")
+async def whatsapp_webhook_verify(
+    hub_mode: Optional[str] = Query(None, alias="hub.mode"),
+    hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
+    hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
+):
     """
-    Entry point for WhatsApp provider webhooks (normalized).
-    - Inbound: customer message
-    - Outbound: AI reply (provider-specific send to be implemented separately)
+    Meta Cloud API webhook verification.
+    """
+    expected = settings.meta_whatsapp_verify_token
+    if hub_mode == "subscribe" and expected and hub_verify_token == expected:
+        return PlainTextResponse(hub_challenge or "")
+    raise HTTPException(status_code=403, detail="Webhook verification failed")
 
-    For now this endpoint only returns the AI's reply in the HTTP response
-    so you can test the full pipeline without a real provider.
+
+@router.post("/whatsapp/webhook")
+async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
-    orchestrator = AIOrchestrator()
-    ai_result = await orchestrator.process_message(
-        message=payload.text,
-        channel="whatsapp",
-        phone=payload.from_phone,
-        store_code=payload.store_code,
+    Meta Cloud API webhook receiver:
+    - parse inbound text message
+    - persist inbound message to conversation
+    - generate AI reply with LangChain bot
+    - send outbound reply via Meta Cloud API
+    - persist outbound AI reply
+    """
+    body = await request.json()
+    inbound = _extract_meta_text_message(body)
+    if not inbound:
+        # Non-message webhooks (delivery/read/status) are valid and should ACK.
+        return {"status": "ignored"}
+
+    from_phone = inbound["from_phone"]
+    text = inbound["text"]
+    if not from_phone or not text:
+        return {"status": "ignored"}
+
+    tenant_id = 1
+    store = _get_or_create_default_store(db, tenant_id=tenant_id)
+    customer = _get_or_create_customer_by_phone(
+        db,
+        tenant_id=tenant_id,
+        store_id=store.id,
+        phone=from_phone,
+        name=inbound.get("contact_name"),
+    )
+    conversation = _get_or_create_active_whatsapp_conversation(
+        db,
+        tenant_id=tenant_id,
+        store_id=store.id,
+        customer_id=customer.id,
     )
 
-    # TODO: call your actual WhatsApp provider client here to send ai_result["reply_text"]
-    # TODO: persist conversation + message + AI reply into the database.
+    orchestrator = AIOrchestrator()
+    detected_language = await orchestrator.detect_language(text)
+    customer_context = await orchestrator.fetch_customer_context(phone=from_phone)
+    recent_orders = customer_context.get("recent_orders") or []
+    customer_ctx = customer_context.get("customer") or {}
 
+    db.add(
+        Message(
+            conversation_id=conversation.id,
+            content=text,
+            sender_type="customer",
+            sender_id=None,
+            language=detected_language,
+            created_at=datetime.utcnow(),
+        )
+    )
+
+    bot = ArabiaLangChainBot(db=db)
+    reply_text = await bot.generate_reply(
+        tenant_id=tenant_id,
+        user_message=text,
+        channel="whatsapp",
+        language=detected_language,
+        customer_context=customer_ctx,
+        recent_orders=recent_orders,
+    )
+
+    wa_response: Dict[str, Any] | None = None
+    client = MetaWhatsAppClient()
+    try:
+        wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)
+    except Exception:
+        # Keep webhook resilient; message remains persisted even if delivery fails.
+        wa_response = {"error": "meta_send_failed"}
+
+    db.add(
+        Message(
+            conversation_id=conversation.id,
+            content=reply_text,
+            sender_type="ai",
+            sender_id=None,
+            language=detected_language,
+            created_at=datetime.utcnow(),
+        )
+    )
+    conversation.updated_at = datetime.utcnow()
+    db.add(conversation)
+    db.commit()
+
+    escalate = await orchestrator.should_escalate(text)
     return {
         "status": "ok",
-        "reply_text": ai_result["reply_text"],
-        "escalate": ai_result["escalate"],
-        "language": ai_result["language"],
+        "conversation_id": conversation.id,
+        "reply_text": reply_text,
+        "language": detected_language,
+        "escalate": escalate,
+        "meta_response": wa_response,
     }
 
 

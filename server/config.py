@@ -19,10 +19,16 @@ class Settings(BaseSettings):
     
     # LLM
     openai_api_key: Optional[str] = None
+    openai_model: str = "gpt-4o-mini"
+    openai_temperature: float = 0.2
     
     # WhatsApp
     wati_api_key: Optional[str] = None
     wati_api_url: str = "https://api.wati.io"
+    meta_whatsapp_access_token: Optional[str] = None
+    meta_whatsapp_verify_token: Optional[str] = None
+    meta_whatsapp_phone_number_id: Optional[str] = None
+    meta_graph_api_version: str = "v21.0"
     
     # Application
     environment: str = "development"

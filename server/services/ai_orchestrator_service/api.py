@@ -1,28 +1,96 @@
-from fastapi import APIRouter, HTTPException
+from datetime import datetime
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 import httpx
 import time
+from sqlalchemy.orm import Session
 
 from config import get_openai_api_key, set_openai_api_key_override
 from services.ai_orchestrator_service.services import _clear_llm_cache
+from services.ai_orchestrator_service.services import AIOrchestrator
+from database import get_db
+from langchain_bot import ArabiaLangChainBot
+from models import Conversation, Message
 
 router = APIRouter()
 
 
 class ChatMessage(BaseModel):
+    tenant_id: int = 1
     conversation_id: Optional[int] = None
     message: str
     channel: str  # whatsapp, web, portal
+    phone: Optional[str] = None
+    store_code: Optional[str] = None
     customer_id: Optional[int] = None
     store_id: Optional[int] = None
     language: Optional[str] = None
 
 
 @router.post("/chat")
-async def process_chat_message(message: ChatMessage):
-    """Process incoming chat message through AI orchestrator"""
-    return {"message": "AI chat processing endpoint"}
+async def process_chat_message(message: ChatMessage, db: Session = Depends(get_db)):
+    """
+    Process incoming chat with LangChain bot and return AI reply.
+    """
+    orchestrator = AIOrchestrator()
+    detected_language = message.language or await orchestrator.detect_language(message.message)
+    customer_context = await orchestrator.fetch_customer_context(phone=message.phone)
+    recent_orders = customer_context.get("recent_orders") or []
+    customer = customer_context.get("customer") or {}
+
+    bot = ArabiaLangChainBot(db=db)
+    reply_text = await bot.generate_reply(
+        tenant_id=message.tenant_id,
+        user_message=message.message,
+        channel=message.channel,
+        language=detected_language,
+        customer_context=customer,
+        recent_orders=recent_orders,
+    )
+
+    # If conversation exists, persist user message + AI reply.
+    if message.conversation_id is not None:
+      conversation = (
+          db.query(Conversation)
+          .filter(Conversation.id == message.conversation_id)
+          .first()
+      )
+      if conversation:
+          db.add(
+              Message(
+                  conversation_id=conversation.id,
+                  content=message.message,
+                  sender_type="customer",
+                  sender_id=None,
+                  language=detected_language,
+                  created_at=datetime.utcnow(),
+              )
+          )
+          db.add(
+              Message(
+                  conversation_id=conversation.id,
+                  content=reply_text,
+                  sender_type="ai",
+                  sender_id=None,
+                  language=detected_language,
+                  created_at=datetime.utcnow(),
+              )
+          )
+          conversation.updated_at = datetime.utcnow()
+          db.add(conversation)
+          db.commit()
+
+    escalate = await orchestrator.should_escalate(message.message)
+    return {
+        "reply_text": reply_text,
+        "language": detected_language,
+        "escalate": escalate,
+        "context": {
+            "customer": customer,
+            "recent_orders": recent_orders,
+        },
+    }
 
 
 @router.post("/verify-customer")
