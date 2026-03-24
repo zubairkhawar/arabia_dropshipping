@@ -26,6 +26,7 @@ interface AgentsContextType {
 }
 
 const AgentsContext = createContext<AgentsContextType | undefined>(undefined);
+const AGENT_PASSWORDS_STORAGE_KEY = 'agent-passwords';
 
 // Keep consistent with the rest of the frontend config.
 const API_BASE_URL =
@@ -45,6 +46,27 @@ interface AgentApiModel {
   team: string | null;
 }
 
+function loadStoredPasswords(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(AGENT_PASSWORDS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredPasswords(passwords: Record<string, string>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(AGENT_PASSWORDS_STORAGE_KEY, JSON.stringify(passwords));
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
 export function AgentsProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [currentAgentId, setCurrentAgentId] = useState<string | null>(null);
@@ -57,11 +79,12 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
       return false;
     }
     const data = (await res.json()) as AgentApiModel[];
+    const storedPasswords = loadStoredPasswords();
     const mapped: AgentRecord[] = data.map((a) => ({
       id: String(a.id),
       email: a.email,
       name: a.full_name || a.email.split('@')[0] || 'Agent',
-      password: '',
+      password: storedPasswords[String(a.id)] ?? '',
       avatarUrl: null,
     }));
     setAgents(mapped);
@@ -119,6 +142,9 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           password,
           avatarUrl: null,
         };
+        const storedPasswords = loadStoredPasswords();
+        storedPasswords[String(created.id)] = password;
+        saveStoredPasswords(storedPasswords);
         setAgents((prev) => [...prev, record]);
         setCurrentAgentId(String(created.id));
         return true;
@@ -136,6 +162,11 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
 
       // Optimistic UI update.
       setAgents((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)));
+      if (updates.password !== undefined) {
+        const storedPasswords = loadStoredPasswords();
+        storedPasswords[id] = updates.password;
+        saveStoredPasswords(storedPasswords);
+      }
 
       const payload: { full_name?: string; avatar_url?: string | null } = {};
       if (updates.name !== undefined) payload.full_name = updates.name;
@@ -169,6 +200,11 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
 
       // Optimistic removal.
       setAgents((prev) => prev.filter((a) => a.id !== id));
+      const storedPasswords = loadStoredPasswords();
+      if (storedPasswords[id] !== undefined) {
+        delete storedPasswords[id];
+        saveStoredPasswords(storedPasswords);
+      }
       setCurrentAgentId((prev) => {
         if (prev !== id) return prev;
         const remaining = agents.filter((a) => a.id !== id);

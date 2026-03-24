@@ -9,6 +9,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { buildSingleAgentPdf, filterByMonth } from '@/lib/attendance-pdf';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const NAME_RE = /^[A-Za-z]+$/;
 
 function formatAvgResponse(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -44,8 +45,10 @@ export default function AdminAgents() {
   const [listCollapsed, setListCollapsed] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [password, setPassword] = useState('');
+  const [createError, setCreateError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -76,20 +79,52 @@ export default function AdminAgents() {
     return getDemoPerformanceFromAttendance(attendanceDayData, schedule.workingDays, selectedAgent.id);
   }, [attendanceDayData, schedule.workingDays, selectedAgent]);
 
+  const toTitle = (value: string) => {
+    const v = value.trim().toLowerCase();
+    if (!v) return '';
+    return v.charAt(0).toUpperCase() + v.slice(1);
+  };
+
+  const validateCreateForm = (emailValue: string, first: string, last: string, pass: string): string | null => {
+    if (!emailValue || !first || !last || !pass) return 'Email, first name, last name and password are required.';
+    if (!NAME_RE.test(first) || !NAME_RE.test(last)) {
+      return 'First and last name can only include letters (A-Z).';
+    }
+    if (pass.length < 8) return 'Password must be at least 8 characters.';
+    if (/\s/.test(pass)) return 'Password must not contain spaces.';
+    if (!/[A-Z]/.test(pass)) return 'Password must include at least one uppercase letter.';
+    if (!/[a-z]/.test(pass)) return 'Password must include at least one lowercase letter.';
+    if (!/\d/.test(pass)) return 'Password must include at least one number.';
+    if (!/[^A-Za-z0-9]/.test(pass)) return 'Password must include at least one special character.';
+    return null;
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedEmail = email.trim();
-    const trimmedName = name.trim();
+    const normalizedFirstName = toTitle(firstName);
+    const normalizedLastName = toTitle(lastName);
+    const fullName = `${normalizedFirstName} ${normalizedLastName}`.trim();
     const trimmedPassword = password.trim();
-    if (!trimmedEmail || !trimmedName || !trimmedPassword) return;
-    const ok = await addAgent(trimmedEmail, trimmedName, trimmedPassword);
+    const validationError = validateCreateForm(trimmedEmail, normalizedFirstName, normalizedLastName, trimmedPassword);
+    if (validationError) {
+      setCreateError(validationError);
+      toast(validationError);
+      return;
+    }
+    setCreateError('');
+    setFirstName(normalizedFirstName);
+    setLastName(normalizedLastName);
+    const ok = await addAgent(trimmedEmail, fullName, trimmedPassword);
     if (!ok) {
       toast('Failed to create agent. Check backend/API and try again.');
       return;
     }
     setEmail('');
-    setName('');
+    setFirstName('');
+    setLastName('');
     setPassword('');
+    setCreateError('');
     setShowCreateModal(false);
     toast('Agent added');
   };
@@ -256,9 +291,16 @@ export default function AdminAgents() {
                           if (e.key === 'Enter') {
                             const v = nameDraft.trim();
                             if (v) {
-                              void updateAgent(selectedAgent.id, { name: v }).then((ok) => {
+                              const parts = v.split(' ').filter(Boolean);
+                              if (parts.length !== 2 || !parts.every((p) => NAME_RE.test(p))) {
+                                toast('Name must include first and last name using letters only.');
+                                return;
+                              }
+                              const normalized = `${toTitle(parts[0])} ${toTitle(parts[1])}`;
+                              void updateAgent(selectedAgent.id, { name: normalized }).then((ok) => {
                                 if (!ok) toast('Failed to update agent name');
                               });
+                              setNameDraft(normalized);
                               setEditingName(false);
                             }
                           }
@@ -273,9 +315,16 @@ export default function AdminAgents() {
                         onClick={() => {
                           const v = nameDraft.trim();
                           if (v) {
-                            void updateAgent(selectedAgent.id, { name: v }).then((ok) => {
+                            const parts = v.split(' ').filter(Boolean);
+                            if (parts.length !== 2 || !parts.every((p) => NAME_RE.test(p))) {
+                              toast('Name must include first and last name using letters only.');
+                              return;
+                            }
+                            const normalized = `${toTitle(parts[0])} ${toTitle(parts[1])}`;
+                            void updateAgent(selectedAgent.id, { name: normalized }).then((ok) => {
                               if (!ok) toast('Failed to update agent name');
                             });
+                            setNameDraft(normalized);
                             setEditingName(false);
                           }
                         }}
@@ -344,12 +393,15 @@ export default function AdminAgents() {
                   <p className="text-xs text-text-muted mb-0.5">Password</p>
                   <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 rounded border border-border bg-panel">
                     <code className="text-xs font-mono min-w-0 flex-1 truncate">
-                      {showPassword ? selectedAgent.password : '••••••••'}
+                      {showPassword
+                        ? selectedAgent.password || 'Not available (only shown when set at creation on this browser)'
+                        : '••••••••'}
                     </code>
                     <button
                       type="button"
+                      disabled={!selectedAgent.password}
                       onClick={() => setShowPassword((v) => !v)}
-                      className="p-1 rounded hover:bg-white text-text-muted"
+                      className="p-1 rounded hover:bg-white text-text-muted disabled:opacity-50 disabled:cursor-not-allowed"
                       aria-label={showPassword ? 'Hide password' : 'Show password'}
                     >
                       {showPassword ? (
@@ -360,12 +412,13 @@ export default function AdminAgents() {
                     </button>
                     <button
                       type="button"
+                      disabled={!selectedAgent.password}
                       onClick={() => {
                         if (navigator.clipboard?.writeText) {
                           navigator.clipboard.writeText(selectedAgent.password).catch(() => undefined);
                         }
                       }}
-                      className="p-1 rounded hover:bg-white text-text-muted"
+                      className="p-1 rounded hover:bg-white text-text-muted disabled:opacity-50 disabled:cursor-not-allowed"
                       aria-label="Copy password"
                     >
                       <Copy className="w-3.5 h-3.5" />
@@ -557,8 +610,9 @@ export default function AdminAgents() {
             <div className="mb-4">
               <p className="text-sm font-semibold text-text-primary">Create agent account</p>
               <p className="text-xs text-text-secondary mt-1">
-                Set email, name, and initial password. A unique agent ID will be generated by the
-                system. Share the credentials with the agent to give them access to the agent portal.
+                Set email, first name, last name, and initial password. A unique agent ID will be
+                generated by the system. Share the credentials with the agent to give them access to
+                the agent portal.
               </p>
             </div>
             <form onSubmit={handleCreate} className="space-y-3 text-sm">
@@ -577,13 +631,34 @@ export default function AdminAgents() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-text-primary mb-1">
-                  Name
+                  First name
                 </label>
                 <input
                   type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Agent name"
+                  value={firstName}
+                  onChange={(e) => {
+                    setCreateError('');
+                    setFirstName(e.target.value.replace(/\s+/g, ''));
+                  }}
+                  onBlur={() => setFirstName((prev) => toTitle(prev))}
+                  placeholder="First name"
+                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-text-primary mb-1">
+                  Last name
+                </label>
+                <input
+                  type="text"
+                  value={lastName}
+                  onChange={(e) => {
+                    setCreateError('');
+                    setLastName(e.target.value.replace(/\s+/g, ''));
+                  }}
+                  onBlur={() => setLastName((prev) => toTitle(prev))}
+                  placeholder="Last name"
                   className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
                   required
                 />
@@ -593,14 +668,23 @@ export default function AdminAgents() {
                   Password
                 </label>
                 <input
-                  type="text"
+                  type="password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setCreateError('');
+                    setPassword(e.target.value);
+                  }}
                   placeholder="Set initial password"
                   className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
                   required
                 />
+                <p className="mt-1 text-[11px] text-text-muted">
+                  Min 8 chars, including uppercase, lowercase, number, and special character.
+                </p>
               </div>
+              {createError ? (
+                <p className="text-xs text-status-error">{createError}</p>
+              ) : null}
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"

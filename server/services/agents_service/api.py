@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import List, Optional
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -12,6 +13,34 @@ from services.auth_service.services import get_password_hash
 
 
 router = APIRouter()
+NAME_PART_RE = re.compile(r"^[A-Za-z]+$")
+
+
+def _normalize_full_name(value: str) -> str:
+    parts = [p for p in value.strip().split(" ") if p]
+    if len(parts) < 2:
+        raise ValueError("First and last name are required")
+    if len(parts) > 2:
+        raise ValueError("Only first and last name are allowed")
+    if not all(NAME_PART_RE.match(p) for p in parts):
+        raise ValueError("Name can only contain alphabetic characters")
+    return " ".join(p[:1].upper() + p[1:].lower() for p in parts)
+
+
+def _validate_password(value: str) -> str:
+    if len(value) < 8:
+        raise ValueError("Password must be at least 8 characters")
+    if re.search(r"\s", value):
+        raise ValueError("Password must not contain spaces")
+    if not re.search(r"[A-Z]", value):
+        raise ValueError("Password must include at least one uppercase letter")
+    if not re.search(r"[a-z]", value):
+        raise ValueError("Password must include at least one lowercase letter")
+    if not re.search(r"\d", value):
+        raise ValueError("Password must include at least one number")
+    if not re.search(r"[^A-Za-z0-9]", value):
+        raise ValueError("Password must include at least one special character")
+    return value
 
 
 class AgentOut(BaseModel):
@@ -31,9 +60,19 @@ class AgentOut(BaseModel):
 class AgentCreate(BaseModel):
     email: EmailStr
     password: str
-    full_name: Optional[str] = None
+    full_name: str
     tenant_id: int
     team: Optional[str] = None
+
+    @field_validator("full_name")
+    @classmethod
+    def validate_full_name(cls, value: str) -> str:
+        return _normalize_full_name(value)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return _validate_password(value)
 
 
 class AgentUpdate(BaseModel):
@@ -41,6 +80,13 @@ class AgentUpdate(BaseModel):
     full_name: Optional[str] = None
     team: Optional[str] = None
     avatar_url: Optional[str] = None
+
+    @field_validator("full_name")
+    @classmethod
+    def validate_full_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return _normalize_full_name(value)
 
 
 @router.get("", response_model=List[AgentOut])
