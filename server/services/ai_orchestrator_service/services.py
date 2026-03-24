@@ -1,4 +1,5 @@
-from typing import Optional, Dict, Any
+import re
+from typing import Optional, Dict, Any, Set
 
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
@@ -41,13 +42,133 @@ class AIOrchestrator:
         return AIOrchestrator._llm_cache
 
     async def detect_language(self, text: str) -> str:
-        """Very lightweight language detection stub for routing / prompts."""
-        # For now just do a simple heuristic; can be replaced with model/tool.
-        if any("\u0600" <= ch <= "\u06FF" for ch in text):
+        """
+        Detect language for customer chat routing.
+        Returns one of: arabic | english | roman_urdu
+        """
+        source = (text or "").strip()
+        if not source:
+            return "english"
+
+        # Arabic script block (Arabic + supplemental ranges)
+        if any(
+            ("\u0600" <= ch <= "\u06FF")
+            or ("\u0750" <= ch <= "\u077F")
+            or ("\u08A0" <= ch <= "\u08FF")
+            for ch in source
+        ):
             return "arabic"
-        # Simple roman-urdu heuristic
-        if any(word in text.lower() for word in ["yar", "acha", "krna", "karo"]):
+
+        lowered = source.lower()
+        # Normalize punctuation so we can score words reliably.
+        normalized = re.sub(r"[^a-z0-9\s]", " ", lowered)
+        tokens = [t for t in normalized.split() if t]
+        token_set = set(tokens)
+
+        # Common Roman Urdu / Roman Hindi words and variants.
+        roman_ur_words: Set[str] = {
+            "kya",
+            "kaisa",
+            "kaise",
+            "haal",
+            "hain",
+            "hai",
+            "han",
+            "hun",
+            "ho",
+            "rhy",
+            "rahy",
+            "rahe",
+            "rha",
+            "raha",
+            "kr",
+            "kar",
+            "krna",
+            "karna",
+            "karo",
+            "kerna",
+            "ap",
+            "aap",
+            "tum",
+            "mera",
+            "meri",
+            "mujhe",
+            "mjy",
+            "please",
+            "plz",
+            "bhai",
+            "yar",
+            "yaar",
+            "acha",
+            "achha",
+            "theek",
+            "thik",
+            "thk",
+            "nahi",
+            "nhi",
+            "nahin",
+            "hanji",
+            "ji",
+            "shukriya",
+            "jazakallah",
+            "order",
+            "kab",
+            "kis",
+            "kyun",
+            "q",
+            "qa",
+        }
+        roman_ur_bigrams = {
+            ("kya", "haal"),
+            ("kya", "kar"),
+            ("kya", "kr"),
+            ("kr", "rhy"),
+            ("kar", "rahe"),
+            ("kaise", "ho"),
+            ("ap", "ka"),
+            ("aap", "ka"),
+        }
+
+        roman_score = 0
+        english_score = 0
+
+        for token in tokens:
+            if token in roman_ur_words:
+                roman_score += 2
+            # lightweight english hints
+            if token in {
+                "hello",
+                "hi",
+                "thanks",
+                "thank",
+                "please",
+                "where",
+                "when",
+                "order",
+                "delivery",
+                "status",
+                "update",
+                "support",
+                "agent",
+                "help",
+            }:
+                english_score += 1
+
+        for i in range(len(tokens) - 1):
+            pair = (tokens[i], tokens[i + 1])
+            if pair in roman_ur_bigrams:
+                roman_score += 3
+
+        # Strong pattern for the user's examples:
+        # "kya haal hain", "kya kr rhy ho"
+        if "kya" in token_set and ("haal" in token_set or "kr" in token_set or "kar" in token_set):
+            roman_score += 3
+        if {"rhy", "ho"} <= token_set or {"rahe", "ho"} <= token_set:
+            roman_score += 2
+
+        if roman_score >= max(2, english_score + 1):
             return "roman_urdu"
+
         return "english"
 
     async def fetch_customer_context(self, phone: Optional[str]) -> Dict[str, Any]:

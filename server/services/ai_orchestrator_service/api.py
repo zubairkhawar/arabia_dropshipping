@@ -28,6 +28,10 @@ class ChatMessage(BaseModel):
     language: Optional[str] = None
 
 
+class LanguageDetectRequest(BaseModel):
+    message: str
+
+
 @router.post("/chat")
 async def process_chat_message(message: ChatMessage, db: Session = Depends(get_db)):
     """
@@ -100,9 +104,11 @@ async def verify_customer():
 
 
 @router.post("/detect-language")
-async def detect_language():
-    """Detect language of incoming message"""
-    return {"message": "Language detection endpoint"}
+async def detect_language(payload: LanguageDetectRequest):
+    """Detect message language: arabic | english | roman_urdu."""
+    orchestrator = AIOrchestrator()
+    language = await orchestrator.detect_language(payload.message)
+    return {"language": language}
 
 
 @router.post("/escalate")
