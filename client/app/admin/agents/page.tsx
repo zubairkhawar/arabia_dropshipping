@@ -48,6 +48,9 @@ export default function AdminAgents() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [createError, setCreateError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -97,8 +100,16 @@ export default function AdminAgents() {
     return v.charAt(0).toUpperCase() + v.slice(1);
   };
 
-  const validateCreateForm = (emailValue: string, first: string, last: string, pass: string): string | null => {
-    if (!emailValue || !first || !last || !pass) return 'Email, first name, last name and password are required.';
+  const validateCreateForm = (
+    emailValue: string,
+    first: string,
+    last: string,
+    pass: string,
+    confirmPass: string,
+  ): string | null => {
+    if (!emailValue || !first || !last || !pass || !confirmPass) {
+      return 'Email, first name, last name, password and confirm password are required.';
+    }
     if (!NAME_RE.test(first) || !NAME_RE.test(last)) {
       return 'First and last name can only include letters (A-Z).';
     }
@@ -108,6 +119,7 @@ export default function AdminAgents() {
     if (!/[a-z]/.test(pass)) return 'Password must include at least one lowercase letter.';
     if (!/\d/.test(pass)) return 'Password must include at least one number.';
     if (!/[^A-Za-z0-9]/.test(pass)) return 'Password must include at least one special character.';
+    if (pass !== confirmPass) return 'Password and confirm password must match.';
     return null;
   };
 
@@ -118,7 +130,13 @@ export default function AdminAgents() {
     const normalizedLastName = toTitle(lastName);
     const fullName = `${normalizedFirstName} ${normalizedLastName}`.trim();
     const trimmedPassword = password.trim();
-    const validationError = validateCreateForm(trimmedEmail, normalizedFirstName, normalizedLastName, trimmedPassword);
+    const validationError = validateCreateForm(
+      trimmedEmail,
+      normalizedFirstName,
+      normalizedLastName,
+      trimmedPassword,
+      confirmPassword,
+    );
     if (validationError) {
       setCreateError(validationError);
       toast(validationError);
@@ -136,6 +154,9 @@ export default function AdminAgents() {
     setFirstName('');
     setLastName('');
     setPassword('');
+    setConfirmPassword('');
+    setShowCreatePassword(false);
+    setShowConfirmPassword(false);
     setCreateError('');
     setShowCreateModal(false);
     requestAnimationFrame(() => toast('Agent created successfully'));
@@ -143,12 +164,15 @@ export default function AdminAgents() {
 
   const handleDeleteClick = (id: string, label: string) => {
     setDeleteAgentConfirm({ id, label });
+    toast(`Delete confirmation opened for ${label}`);
   };
 
   const handleDeleteConfirm = async () => {
     if (!deleteAgentConfirm) return;
     const ok = await removeAgent(deleteAgentConfirm.id);
-    toast(ok ? 'Agent removed' : 'Failed to remove agent');
+    requestAnimationFrame(() => {
+      toast(ok ? 'Agent deleted successfully' : 'Failed to remove agent');
+    });
     setDeleteAgentConfirm(null);
   };
 
@@ -167,7 +191,7 @@ export default function AdminAgents() {
         dayData,
         periodLabel,
       });
-      toast('Report downloaded');
+      requestAnimationFrame(() => toast('Attendance report downloaded'));
     } catch (e) {
       toast('Failed to generate report');
     } finally {
@@ -314,7 +338,7 @@ export default function AdminAgents() {
                               }
                               const normalized = `${toTitle(parts[0])} ${toTitle(parts[1])}`;
                               void updateAgent(selectedAgent.id, { name: normalized }).then((ok) => {
-                                if (!ok) toast('Failed to update agent name');
+                                toast(ok ? 'Agent name updated' : 'Failed to update agent name');
                               });
                               setNameDraft(normalized);
                               setEditingName(false);
@@ -338,7 +362,7 @@ export default function AdminAgents() {
                             }
                             const normalized = `${toTitle(parts[0])} ${toTitle(parts[1])}`;
                             void updateAgent(selectedAgent.id, { name: normalized }).then((ok) => {
-                              if (!ok) toast('Failed to update agent name');
+                              toast(ok ? 'Agent name updated' : 'Failed to update agent name');
                             });
                             setNameDraft(normalized);
                             setEditingName(false);
@@ -391,7 +415,9 @@ export default function AdminAgents() {
                       type="button"
                       onClick={() => {
                         if (navigator.clipboard?.writeText) {
-                          navigator.clipboard.writeText(selectedAgent.id).catch(() => undefined);
+                          navigator.clipboard.writeText(selectedAgent.id)
+                            .then(() => toast('Agent ID copied'))
+                            .catch(() => toast('Failed to copy Agent ID'));
                         }
                       }}
                       className="p-1 rounded hover:bg-white text-text-muted"
@@ -416,7 +442,13 @@ export default function AdminAgents() {
                     <button
                       type="button"
                       disabled={!selectedAgent.password}
-                      onClick={() => setShowPassword((v) => !v)}
+                      onClick={() =>
+                        setShowPassword((v) => {
+                          const next = !v;
+                          toast(next ? 'Password shown' : 'Password hidden');
+                          return next;
+                        })
+                      }
                       className="p-1 rounded hover:bg-white text-text-muted disabled:opacity-50 disabled:cursor-not-allowed"
                       aria-label={showPassword ? 'Hide password' : 'Show password'}
                     >
@@ -431,7 +463,9 @@ export default function AdminAgents() {
                       disabled={!selectedAgent.password}
                       onClick={() => {
                         if (navigator.clipboard?.writeText) {
-                          navigator.clipboard.writeText(selectedAgent.password).catch(() => undefined);
+                          navigator.clipboard.writeText(selectedAgent.password)
+                            .then(() => toast('Password copied'))
+                            .catch(() => toast('Failed to copy password'));
                         }
                       }}
                       className="p-1 rounded hover:bg-white text-text-muted disabled:opacity-50 disabled:cursor-not-allowed"
@@ -596,7 +630,10 @@ export default function AdminAgents() {
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setDeleteAgentConfirm(null)}
+                  onClick={() => {
+                    setDeleteAgentConfirm(null);
+                    toast('Delete cancelled');
+                  }}
                 className="px-4 py-2 rounded-lg border border-border text-xs font-medium text-text-primary hover:bg-panel"
               >
                 Cancel
@@ -683,20 +720,64 @@ export default function AdminAgents() {
                 <label className="block text-xs font-medium text-text-primary mb-1">
                   Password
                 </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => {
-                    setCreateError('');
-                    setPassword(e.target.value);
-                  }}
-                  placeholder="Set initial password"
-                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                  required
-                />
+                <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 rounded border border-border bg-white">
+                  <input
+                    type={showCreatePassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => {
+                      setCreateError('');
+                      setPassword(e.target.value);
+                    }}
+                    placeholder="Set initial password"
+                    className="flex-1 min-w-0 bg-transparent focus:outline-none text-sm"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCreatePassword((v) => !v)}
+                    className="p-1 rounded hover:bg-panel text-text-muted"
+                    aria-label={showCreatePassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showCreatePassword ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
                 <p className="mt-1 text-[11px] text-text-muted">
                   Min 8 chars, including uppercase, lowercase, number, and special character.
                 </p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-text-primary mb-1">
+                  Confirm password
+                </label>
+                <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 rounded border border-border bg-white">
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => {
+                      setCreateError('');
+                      setConfirmPassword(e.target.value);
+                    }}
+                    placeholder="Confirm initial password"
+                    className="flex-1 min-w-0 bg-transparent focus:outline-none text-sm"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword((v) => !v)}
+                    className="p-1 rounded hover:bg-panel text-text-muted"
+                    aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
               </div>
               {createError ? (
                 <p className="text-xs text-status-error">{createError}</p>
@@ -704,7 +785,11 @@ export default function AdminAgents() {
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowCreateModal(false)}
+                  onClick={() => {
+                    setShowCreateModal(false);
+                    setCreateError('');
+                    toast('Create agent cancelled');
+                  }}
                   className="px-3 py-1.5 rounded-lg border border-border text-xs text-text-secondary hover:bg-panel"
                 >
                   Cancel
