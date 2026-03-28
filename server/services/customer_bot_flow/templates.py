@@ -59,6 +59,33 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "يمكنك أيضاً كتابة سؤالك 💬"
         ),
     },
+    # After a greeting (Salam / hi / hello) on new-customer menu — server-only, no LLM / no kb_wrap.
+    "new_menu_after_greeting": {
+        "roman_urdu": (
+            "Walaykum assalam! 🌙\n\n"
+            "Hum aapki kaise madad kar sakte hain?\n\n"
+            "1️⃣ Dropshipping ke baray mein maloomat\n"
+            "2️⃣ Products dekhna\n"
+            "3️⃣ Support se baat karna\n\n"
+            "Aap apna sawal bhi likh sakte hain 💬"
+        ),
+        "english": (
+            "Hello! 👋\n\n"
+            "How can we help you today?\n\n"
+            "1️⃣ Learn about dropshipping\n"
+            "2️⃣ View products\n"
+            "3️⃣ Talk to support\n\n"
+            "You can also type your question 💬"
+        ),
+        "arabic": (
+            "وعليكم السلام ورحمة الله 🌙\n\n"
+            "كيف يمكننا مساعدتك؟\n\n"
+            "1️⃣ التعرف على الدروبشيبينغ\n"
+            "2️⃣ عرض المنتجات\n"
+            "3️⃣ التحدث مع الدعم\n\n"
+            "يمكنك أيضاً كتابة سؤالك 💬"
+        ),
+    },
     "verify": {
         "roman_urdu": (
             "🔐 Apna account verify karne ke liye code enter karein:\n\n"

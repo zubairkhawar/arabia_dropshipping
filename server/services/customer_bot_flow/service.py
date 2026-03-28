@@ -58,6 +58,43 @@ def _merge_flow(meta: Dict[str, Any], flow: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _looks_like_greeting(text: str) -> bool:
+    """
+    Short salam / hi / hello style messages on the new-customer menu should not
+    go through the LLM with kb_wrap (that is for real questions).
+    """
+    s = (text or "").strip().lower()
+    if not s or len(s) > 55 or "?" in s:
+        return False
+    tokens = [t for t in re.sub(r"[^\w\s\u0600-\u06FF]", " ", s).split() if t]
+    if len(tokens) > 6:
+        return False
+    blob = " ".join(tokens)
+    if any(
+        x in blob
+        for x in (
+            "salam",
+            "salaam",
+            "assalam",
+            "asslam",
+            "alaikum",
+            "alikum",
+            "walaikum",
+            "walaykum",
+        )
+    ):
+        return True
+    if blob in ("hi", "hey", "hello", "hi there", "hey there", "namaste"):
+        return True
+    if re.match(r"^good (morning|evening|afternoon)$", blob):
+        return True
+    if any("\u0600" <= ch <= "\u06FF" for ch in s) and len(tokens) <= 4:
+        # Short Arabic-only nicety e.g. مرحبا
+        if any(w in blob for w in ("marhaba", "مرحب", "السلام", "سلام")):
+            return True
+    return False
+
+
 def _is_escalation_trigger(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t:
@@ -393,6 +430,9 @@ async def process_customer_bot_message(
                 team=TEAM_NEW_CUSTOMER,
                 esc=True,
             )
+        if _looks_like_greeting(text):
+            f = {**flow, "step": "new_main_menu", "lang": flow_lang}
+            return save(f, _t(flow_lang, MSGS["new_menu_after_greeting"]))
         # Free-form question → AI, no store API
         f = {**flow, "step": "new_main_menu", "lang": flow_lang}
         return ai_forward(text, f, skip_api=True)
