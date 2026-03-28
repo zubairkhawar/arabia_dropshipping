@@ -15,8 +15,9 @@ class StoreIntegrationClient:
 
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
         # These defaults can be overridden per-tenant / per-store later
-        self.base_url = base_url or settings.client_api_base_url
-        self.api_key = api_key or settings.client_api_key
+        raw = base_url if base_url is not None else settings.client_api_base_url
+        self.base_url = (raw or "").strip() or None
+        self.api_key = api_key if api_key is not None else settings.client_api_key
 
     def _headers(self) -> Dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -29,6 +30,8 @@ class StoreIntegrationClient:
         GET /customers?phone={phone}
         Returns the first matching customer or None.
         """
+        if not self.base_url:
+            return None
         async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
             resp = await client.get("/customers", params={"phone": phone})
             resp.raise_for_status()
@@ -40,6 +43,8 @@ class StoreIntegrationClient:
         """
         GET /customers/{customer_id}/orders?limit={limit}
         """
+        if not self.base_url:
+            return []
         async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
             resp = await client.get(f"/customers/{customer_id}/orders", params={"limit": limit})
             resp.raise_for_status()
@@ -50,6 +55,8 @@ class StoreIntegrationClient:
         """
         GET /orders/by-number/{order_number}
         """
+        if not self.base_url:
+            return None
         async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
             resp = await client.get(f"/orders/by-number/{order_number}")
             if resp.status_code == 404:

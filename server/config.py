@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     meta_whatsapp_waba_id: Optional[str] = None
     meta_graph_api_version: str = "v21.0"
     
+    # Optional: merchant store HTTP API (for AI context / order lookups)
+    client_api_base_url: Optional[str] = None
+    client_api_key: Optional[str] = None
+
     # Application
     environment: str = "development"
     debug: bool = True
