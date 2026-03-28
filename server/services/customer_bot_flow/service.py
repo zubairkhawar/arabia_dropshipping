@@ -292,9 +292,10 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(f, _t(flow_lang, MSGS["verify"]))
+        # Unclear reply (e.g. "hi") — send the fixed entry template again, not generic fallback.
         return save(
             {**flow, "step": "awaiting_customer_type", "lang": flow_lang},
-            _t(flow_lang, MSGS["fallback"]),
+            _t(flow_lang, MSGS["entry"]),
         )
 
     if step == "existing_awaiting_verification":
@@ -327,7 +328,7 @@ async def process_customer_bot_message(
             return save(f, _t(flow_lang, MSGS["experience"]))
         return save(
             {**flow, "step": "existing_verified_menu", "lang": flow_lang},
-            _t(flow_lang, MSGS["fallback"]),
+            _t(flow_lang, MSGS["verified_menu"]),
         )
 
     if step == "existing_awaiting_order_id":
@@ -368,7 +369,7 @@ async def process_customer_bot_message(
             )
         return save(
             {**flow, "step": "existing_awaiting_experience", "lang": flow_lang},
-            _t(flow_lang, MSGS["fallback"]),
+            _t(flow_lang, MSGS["experience"]),
         )
 
     if step == "new_main_menu":
