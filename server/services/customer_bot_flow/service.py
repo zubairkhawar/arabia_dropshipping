@@ -95,6 +95,58 @@ def _looks_like_greeting(text: str) -> bool:
     return False
 
 
+def _looks_like_order_status_question(text: str) -> bool:
+    """Order / tracking intent while user is still on the new-customer menu."""
+    t = (text or "").strip().lower()
+    if len(t) < 5:
+        return False
+    phrases = (
+        "order",
+        "status",
+        "track",
+        "tracking",
+        "delivery",
+        "shipment",
+        "ship",
+        "dispatch",
+        "parcel",
+        "mera order",
+        "mere order",
+        "order id",
+        "order ka",
+        "order ki",
+        "btao",
+        "batao",
+        "bata",
+        "pata",
+        "kahan",
+        "kab aayega",
+        "kab milega",
+        "shipped",
+        "package",
+    )
+    return any(p in t for p in phrases)
+
+
+def _is_likely_order_id_only(text: str) -> bool:
+    s = (text or "").strip()
+    if len(s) < 4 or len(s) > 20:
+        return False
+    return bool(re.fullmatch(r"[\d\-\s#]+", s))
+
+
+def _state_back_to_customer_pick(flow: Dict[str, Any]) -> Dict[str, Any]:
+    """Let user choose 2 (existing) for order flow after wrong-path message."""
+    return {
+        **flow,
+        "customer_kind": None,
+        "verified": False,
+        "step": "awaiting_customer_type",
+        "intro_shown": True,
+        "experience_team": None,
+    }
+
+
 def _is_escalation_trigger(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t:
@@ -222,12 +274,20 @@ async def process_customer_bot_message(
             handled=False,
         )
 
+    meta = _normalize_meta(conversation)
+    flow = _get_flow(meta)
+
     lang = await orchestrator.detect_language(user_message)
     if not (user_message or "").strip():
         lang = "roman_urdu"
-
-    meta = _normalize_meta(conversation)
-    flow = _get_flow(meta)
+    sticky = flow.get("lang")
+    if isinstance(sticky, str) and sticky.strip():
+        t0 = (user_message or "").strip()
+        if t0 and (
+            len(t0) <= 8
+            or bool(re.fullmatch(r"[\d\-\s#]+", t0))
+        ):
+            lang = sticky
     step = flow.get("step") or "awaiting_customer_type"
     flow_lang = lang
 
@@ -429,6 +489,12 @@ async def process_customer_bot_message(
                 _t(flow_lang, MSGS["connecting"]),
                 team=TEAM_NEW_CUSTOMER,
                 esc=True,
+            )
+        if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
+            f = _state_back_to_customer_pick(flow)
+            return save(
+                f,
+                _t(flow_lang, MSGS["new_customer_order_use_existing_flow"]),
             )
         if _looks_like_greeting(text):
             f = {**flow, "step": "new_main_menu", "lang": flow_lang}

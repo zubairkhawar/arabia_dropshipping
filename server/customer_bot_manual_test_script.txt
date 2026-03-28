@@ -1,0 +1,57 @@
+Manual WhatsApp / chat test script — Arabia customer bot (templates + flows)
+Use one conversation; send each line in order (or reset by clearing bot_flow in DB if needed).
+
+--- A. New customer path (Roman Urdu style) ---
+1) Salam
+   → Walaykum assalam + new menu (1/2/3)
+
+2) 1
+   → Same new menu (you already chose new) OR if from entry: new welcome — script assumes you start from ENTRY:
+   RESET TIP: If testing from scratch, first send anything to get entry, then 1.
+
+Clean path from zero:
+A1) Hi
+   → Entry: New vs Existing (1/2)
+A2) 1
+   → New customer welcome menu (1/2/3)
+A3) Salam
+   → Walaykum assalam + menu again (greeting template)
+A4) Mujhay mera order status btao
+   → Template: order only via Existing (2) — NOT kb_wrap
+A5) 2
+   → Verify prompt
+A6) 1234
+   → Verified menu (track / account / agent)
+A7) 1
+   → Ask Order ID
+A8) 2134
+   → Order found OR not found (DB/API)
+
+--- B. English ---
+B1) Hello
+   → Entry in English
+B2) 1
+   → New welcome English
+B3) What is my order status?
+   → Redirect template English (use existing flow)
+
+--- C. Arabic (Arabic script) ---
+C1) مرحبا
+   → Entry Arabic
+C2) 1
+   → New menu Arabic
+
+--- D. Escalation ---
+On new menu type: support
+   → Connecting + assign new_customer team (if agent online)
+
+--- E. Existing customer short path ---
+E1) From entry: 2
+E2) Any code for verify
+E3) 1 / 2 / 3 on verified menu
+
+--- F. Products / learn (needs OpenAI) ---
+From new menu: 1 → AI + kb_wrap (dropshipping)
+From new menu: 2 → Products hint template
+
+Optional: GET https://YOUR_API/api/ai/customer-bot-templates for full JSON copy.

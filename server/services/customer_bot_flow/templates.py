@@ -86,6 +86,36 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "يمكنك أيضاً كتابة سؤالك 💬"
         ),
     },
+    # New-customer path: order questions / order IDs need Existing customer flow (server-only).
+    "new_customer_order_use_existing_flow": {
+        "roman_urdu": (
+            "📦 Order ka status **Existing customer** flow se milta hai (verify → Order track).\n\n"
+            "Aap abhi **New customer** menu par hain — yahan se order lookup nahi hota.\n\n"
+            "Order ke liye:\n"
+            "1️⃣ Neeche **2** likhein (*Existing customer*)\n"
+            "2️⃣ Verify complete karein\n"
+            "3️⃣ Phir menu se **Order track** choose karein aur Order ID bhejein\n\n"
+            "Agar aap waqai naye customer hain aur dropshipping / products ke baray mein poochna hai to isi menu se **1 / 2 / 3** reply karein."
+        ),
+        "english": (
+            "📦 Order status is only available in the **Existing customer** flow (verify → Track order).\n\n"
+            "You are on the **New customer** menu — we do not look up orders here.\n\n"
+            "To track an order:\n"
+            "1️⃣ Reply **2** (*Existing customer*)\n"
+            "2️⃣ Complete verification\n"
+            "3️⃣ Choose **Track order** from the menu and enter your Order ID\n\n"
+            "If you are truly a new lead and want info about dropshipping or products, keep using **1 / 2 / 3** on this menu."
+        ),
+        "arabic": (
+            "📦 حالة الطلب متاحة فقط في مسار **عميل حالي** (تحقق ← تتبع الطلب).\n\n"
+            "أنت الآن في قائمة **عميل جديد** — لا نبحث عن الطلبات من هنا.\n\n"
+            "لتتبع الطلب:\n"
+            "1️⃣ اكتب **2** (*عميل حالي*)\n"
+            "2️⃣ أكمل التحقق\n"
+            "3️⃣ اختر **تتبع الطلب** من القائمة ثم أرسل رقم الطلب\n\n"
+            "إذا كنت عميلاً جديداً وتريد معلومات عن الدروبشيبينغ أو المنتجات، استمر باستخدام **1 / 2 / 3** في هذه القائمة."
+        ),
+    },
     "verify": {
         "roman_urdu": (
             "🔐 Apna account verify karne ke liye code enter karein:\n\n"
