@@ -18,10 +18,14 @@ class StoreIntegrationClient:
         raw = base_url if base_url is not None else settings.client_api_base_url
         self.base_url = (raw or "").strip() or None
         self.api_key = api_key if api_key is not None else settings.client_api_key
+        bt = settings.client_api_bearer_token
+        self.bearer_token = (bt.strip() if isinstance(bt, str) and bt.strip() else None)
 
     def _headers(self) -> Dict[str, str]:
         headers = {"Accept": "application/json"}
-        if self.api_key:
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+        elif self.api_key:
             headers["X-API-Key"] = self.api_key
         return headers
 
@@ -63,4 +67,23 @@ class StoreIntegrationClient:
                 return None
             resp.raise_for_status()
             return resp.json()
+
+    async def get_order_by_id(self, order_id: str) -> Optional[Dict[str, Any]]:
+        """
+        GET /orders/{order_id} (e.g. Arabia backend /v1/orders/123432).
+        """
+        if not self.base_url:
+            return None
+        oid = (order_id or "").strip()
+        if not oid:
+            return None
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
+                resp = await client.get(f"/orders/{oid}")
+                if resp.status_code == 404:
+                    return None
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPError:
+            return None
 

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # Optional: merchant store HTTP API (for AI context / order lookups)
     client_api_base_url: Optional[str] = None
     client_api_key: Optional[str] = None
+    client_api_bearer_token: Optional[str] = None
 
     # Application
     environment: str = "development"

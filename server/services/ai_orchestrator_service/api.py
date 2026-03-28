@@ -39,7 +39,10 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
     """
     orchestrator = AIOrchestrator()
     detected_language = message.language or await orchestrator.detect_language(message.message)
-    customer_context = await orchestrator.fetch_customer_context(phone=message.phone)
+    customer_context = await orchestrator.fetch_customer_context(
+        phone=message.phone,
+        message_text=message.message,
+    )
     recent_orders = customer_context.get("recent_orders") or []
     customer = customer_context.get("customer") or {}
 

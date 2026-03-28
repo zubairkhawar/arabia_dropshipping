@@ -14,6 +14,31 @@ def _clear_llm_cache() -> None:
     AIOrchestrator._llm_cache_key = None
 
 
+def _extract_order_id_from_message(message: str, phone: Optional[str]) -> Optional[str]:
+    """
+    Best-effort order reference from free text (e.g. "order 123432", "#123432").
+    Avoids treating the full WhatsApp phone number as an order id when possible.
+    """
+    if not (message or "").strip():
+        return None
+    phone_digits = re.sub(r"\D", "", phone or "")
+    for pattern in (
+        r"(?i)\b(?:order|ord)\s*[#:\-]?\s*(\d{4,14})\b",
+        r"#\s*(\d{4,14})\b",
+    ):
+        m = re.search(pattern, message)
+        if m:
+            return m.group(1)
+    for m in re.finditer(r"\b(\d{5,12})\b", message):
+        cand = m.group(1)
+        if phone_digits and cand == phone_digits:
+            continue
+        if len(phone_digits) >= 10 and cand in phone_digits and len(cand) >= 8:
+            continue
+        return cand
+    return None
+
+
 class AIOrchestrator:
     """
     Central place where we orchestrate:
@@ -171,26 +196,34 @@ class AIOrchestrator:
 
         return "english"
 
-    async def fetch_customer_context(self, phone: Optional[str]) -> Dict[str, Any]:
+    async def fetch_customer_context(
+        self,
+        phone: Optional[str],
+        message_text: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Resolve customer and a small slice of recent order context using client's API.
+        Resolve customer and recent orders via the merchant API, plus a single order
+        lookup when the user message mentions an order id (e.g. GET /v1/orders/{id}).
         """
-        if not phone:
-            return {}
+        customer: Optional[Dict[str, Any]] = None
+        orders: list = []
 
-        customer = await self.store_client.get_customer_by_phone(phone)
-        if not customer:
-            return {}
+        if phone:
+            customer = await self.store_client.get_customer_by_phone(phone)
+            if customer and customer.get("id"):
+                orders = await self.store_client.get_recent_orders_for_customer(
+                    customer_id=str(customer["id"]),
+                    limit=3,
+                )
 
-        customer_id = customer.get("id")
-        orders = []
-        if customer_id:
-            orders = await self.store_client.get_recent_orders_for_customer(
-                customer_id=customer_id, limit=3
-            )
+        order_id = _extract_order_id_from_message(message_text or "", phone)
+        if order_id:
+            detail = await self.store_client.get_order_by_id(order_id)
+            if detail:
+                orders = [detail] + [o for o in orders if str(o.get("id", o)) != str(detail.get("id", detail))]
 
         return {
-            "customer": customer,
+            "customer": customer or {},
             "recent_orders": orders,
         }
 
@@ -210,7 +243,7 @@ class AIOrchestrator:
         - context: minimal context we used
         """
         language = await self.detect_language(message)
-        customer_context = await self.fetch_customer_context(phone=phone)
+        customer_context = await self.fetch_customer_context(phone=phone, message_text=message)
 
         # TODO: plug in knowledge base retrieval here. For now we just pass metadata.
         kb_snippets: str = ""

@@ -502,7 +502,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
 
     orchestrator = AIOrchestrator()
     detected_language = await orchestrator.detect_language(text)
-    customer_context = await orchestrator.fetch_customer_context(phone=from_phone)
+    customer_context = await orchestrator.fetch_customer_context(
+        phone=from_phone,
+        message_text=text,
+    )
     recent_orders = customer_context.get("recent_orders") or []
     customer_ctx = customer_context.get("customer") or {}
 
