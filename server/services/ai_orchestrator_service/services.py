@@ -93,6 +93,12 @@ class AIOrchestrator:
         # Common Roman Urdu / Roman Hindi words and variants.
         roman_ur_words: Set[str] = {
             "kya",
+            "kahan",
+            "kahaan",
+            "mujhay",
+            "mujhe",
+            "salam",
+            "assalam",
             "kaisa",
             "kaise",
             "haal",
@@ -117,7 +123,6 @@ class AIOrchestrator:
             "tum",
             "mera",
             "meri",
-            "mujhe",
             "mjy",
             "please",
             "plz",
@@ -314,6 +319,17 @@ Keep answers concise and friendly.
 
     async def should_escalate(self, message: str) -> bool:
         """Determine if conversation should be escalated to agent."""
-        escalation_keywords = ["agent", "human", "support", "talk to", "speak with"]
-        message_lower = message.lower()
-        return any(keyword in message_lower for keyword in escalation_keywords)
+        message_lower = (message or "").lower()
+        phrases = (
+            "agent",
+            "human",
+            "support",
+            "help",
+            "talk to",
+            "speak with",
+            "talk to human",
+            "baat karni hai",
+            "madad",
+            "representative",
+        )
+        return any(p in message_lower for p in phrases)

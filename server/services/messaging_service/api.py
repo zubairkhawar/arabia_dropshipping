@@ -13,6 +13,8 @@ from config import settings
 from services.ai_orchestrator_service.services import AIOrchestrator
 from langchain_bot import ArabiaLangChainBot
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
+from services.customer_bot_flow import format_kb_reply, process_customer_bot_message
+from services.agent_routing_service.api import assign_from_bot_flow
 
 router = APIRouter()
 
@@ -501,13 +503,101 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     )
 
     orchestrator = AIOrchestrator()
-    detected_language = await orchestrator.detect_language(text)
-    customer_context = await orchestrator.fetch_customer_context(
+    bot = ArabiaLangChainBot(db=db)
+
+    if conversation.agent_id:
+        detected_language = await orchestrator.detect_language(text)
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                content=text,
+                sender_type="customer",
+                sender_id=None,
+                language=detected_language,
+                created_at=datetime.utcnow(),
+            )
+        )
+        conversation.updated_at = datetime.utcnow()
+        db.add(conversation)
+        db.commit()
+        return {
+            "status": "ok",
+            "conversation_id": conversation.id,
+            "skipped": "human_agent",
+            "reply_text": "",
+            "language": detected_language,
+            "escalate": False,
+            "meta_response": None,
+        }
+
+    flow = await process_customer_bot_message(
+        db=db,
+        conversation=conversation,
+        user_message=text,
+        tenant_id=tenant_id,
+        orchestrator=orchestrator,
         phone=from_phone,
-        message_text=text,
     )
-    recent_orders = customer_context.get("recent_orders") or []
-    customer_ctx = customer_context.get("customer") or {}
+
+    if flow.merge_metadata:
+        conversation.conversation_metadata = flow.merge_metadata
+
+    detected_language = await orchestrator.detect_language(text)
+    bf_lang = (flow.merge_metadata.get("bot_flow") or {}).get("lang")
+    if isinstance(bf_lang, str) and bf_lang.strip():
+        detected_language = bf_lang
+
+    if not flow.handled:
+        customer_context = await orchestrator.fetch_customer_context(
+            phone=from_phone,
+            message_text=text,
+        )
+        recent_orders = customer_context.get("recent_orders") or []
+        customer_ctx = customer_context.get("customer") or {}
+        reply_text = await bot.generate_reply(
+            tenant_id=tenant_id,
+            user_message=text,
+            channel="whatsapp",
+            language=detected_language,
+            customer_context=customer_ctx,
+            recent_orders=recent_orders,
+        )
+    elif flow.use_ai:
+        if flow.skip_store_api:
+            customer_ctx = {}
+            recent_orders = []
+        else:
+            customer_context = await orchestrator.fetch_customer_context(
+                phone=from_phone,
+                message_text=text,
+            )
+            recent_orders = customer_context.get("recent_orders") or []
+            customer_ctx = customer_context.get("customer") or {}
+        reply_text = await bot.generate_reply(
+            tenant_id=tenant_id,
+            user_message=flow.ai_user_message,
+            channel="whatsapp",
+            language=detected_language,
+            customer_context=customer_ctx,
+            recent_orders=recent_orders,
+        )
+        if flow.skip_store_api:
+            reply_text = format_kb_reply(bf_lang or detected_language, reply_text)
+    else:
+        reply_text = flow.reply_text
+
+    if flow.assign_team:
+        kind = (flow.merge_metadata.get("bot_flow") or {}).get("customer_kind")
+        assign_from_bot_flow(
+            db,
+            tenant_id=tenant_id,
+            conversation_id=conversation.id,
+            store_id=store.id,
+            customer_id=customer.id,
+            routed_team=flow.assign_team,
+            is_existing_customer=(kind == "existing"),
+        )
+        db.refresh(conversation)
 
     db.add(
         Message(
@@ -519,25 +609,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             created_at=datetime.utcnow(),
         )
     )
-
-    bot = ArabiaLangChainBot(db=db)
-    reply_text = await bot.generate_reply(
-        tenant_id=tenant_id,
-        user_message=text,
-        channel="whatsapp",
-        language=detected_language,
-        customer_context=customer_ctx,
-        recent_orders=recent_orders,
-    )
-
-    wa_response: Dict[str, Any] | None = None
-    client = MetaWhatsAppClient()
-    try:
-        wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)
-    except Exception:
-        # Keep webhook resilient; message remains persisted even if delivery fails.
-        wa_response = {"error": "meta_send_failed"}
-
     db.add(
         Message(
             conversation_id=conversation.id,
@@ -552,7 +623,15 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     db.add(conversation)
     db.commit()
 
-    escalate = await orchestrator.should_escalate(text)
+    wa_response: Dict[str, Any] | None = None
+    client = MetaWhatsAppClient()
+    if reply_text:
+        try:
+            wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)
+        except Exception:
+            wa_response = {"error": "meta_send_failed"}
+
+    escalate = flow.escalate or await orchestrator.should_escalate(text)
     return {
         "status": "ok",
         "conversation_id": conversation.id,

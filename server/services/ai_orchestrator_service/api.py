@@ -12,6 +12,8 @@ from services.ai_orchestrator_service.services import AIOrchestrator
 from database import get_db
 from langchain_bot import ArabiaLangChainBot
 from models import Conversation, Message
+from services.customer_bot_flow import format_kb_reply, process_customer_bot_message
+from services.agent_routing_service.api import assign_from_bot_flow
 
 router = APIRouter()
 
@@ -35,68 +37,186 @@ class LanguageDetectRequest(BaseModel):
 @router.post("/chat")
 async def process_chat_message(message: ChatMessage, db: Session = Depends(get_db)):
     """
-    Process incoming chat with LangChain bot and return AI reply.
+    Process incoming chat with structured onboarding flow when a conversation exists,
+    then LangChain for knowledge/AI segments; otherwise legacy AI with store context.
     """
     orchestrator = AIOrchestrator()
-    detected_language = message.language or await orchestrator.detect_language(message.message)
-    customer_context = await orchestrator.fetch_customer_context(
-        phone=message.phone,
-        message_text=message.message,
-    )
-    recent_orders = customer_context.get("recent_orders") or []
-    customer = customer_context.get("customer") or {}
-
     bot = ArabiaLangChainBot(db=db)
-    reply_text = await bot.generate_reply(
-        tenant_id=message.tenant_id,
+
+    conversation: Conversation | None = None
+    if message.conversation_id is not None:
+        conversation = (
+            db.query(Conversation)
+            .filter(Conversation.id == message.conversation_id)
+            .first()
+        )
+
+    if conversation and conversation.agent_id:
+        detected_language = message.language or await orchestrator.detect_language(
+            message.message
+        )
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                content=message.message,
+                sender_type="customer",
+                sender_id=None,
+                language=detected_language,
+                created_at=datetime.utcnow(),
+            )
+        )
+        conversation.updated_at = datetime.utcnow()
+        db.add(conversation)
+        db.commit()
+        return {
+            "reply_text": "",
+            "language": detected_language,
+            "escalate": False,
+            "human_agent_active": True,
+            "context": {"customer": {}, "recent_orders": []},
+        }
+
+    flow = await process_customer_bot_message(
+        db=db,
+        conversation=conversation,
         user_message=message.message,
-        channel=message.channel,
-        language=detected_language,
-        customer_context=customer,
-        recent_orders=recent_orders,
+        tenant_id=message.tenant_id,
+        orchestrator=orchestrator,
+        phone=message.phone,
     )
 
-    # If conversation exists, persist user message + AI reply.
-    if message.conversation_id is not None:
-      conversation = (
-          db.query(Conversation)
-          .filter(Conversation.id == message.conversation_id)
-          .first()
-      )
-      if conversation:
-          db.add(
-              Message(
-                  conversation_id=conversation.id,
-                  content=message.message,
-                  sender_type="customer",
-                  sender_id=None,
-                  language=detected_language,
-                  created_at=datetime.utcnow(),
-              )
-          )
-          db.add(
-              Message(
-                  conversation_id=conversation.id,
-                  content=reply_text,
-                  sender_type="ai",
-                  sender_id=None,
-                  language=detected_language,
-                  created_at=datetime.utcnow(),
-              )
-          )
-          conversation.updated_at = datetime.utcnow()
-          db.add(conversation)
-          db.commit()
+    if conversation and flow.merge_metadata:
+        conversation.conversation_metadata = flow.merge_metadata
 
-    escalate = await orchestrator.should_escalate(message.message)
+    detected_language = message.language or await orchestrator.detect_language(message.message)
+    bf_lang = (flow.merge_metadata.get("bot_flow") or {}).get("lang")
+    if isinstance(bf_lang, str) and bf_lang.strip():
+        detected_language = bf_lang
+
+    if not flow.handled:
+        customer_context = await orchestrator.fetch_customer_context(
+            phone=message.phone,
+            message_text=message.message,
+        )
+        recent_orders = customer_context.get("recent_orders") or []
+        customer = customer_context.get("customer") or {}
+        reply_text = await bot.generate_reply(
+            tenant_id=message.tenant_id,
+            user_message=message.message,
+            channel=message.channel,
+            language=detected_language,
+            customer_context=customer,
+            recent_orders=recent_orders,
+        )
+        if message.conversation_id is not None and conversation:
+            db.add(
+                Message(
+                    conversation_id=conversation.id,
+                    content=message.message,
+                    sender_type="customer",
+                    sender_id=None,
+                    language=detected_language,
+                    created_at=datetime.utcnow(),
+                )
+            )
+            db.add(
+                Message(
+                    conversation_id=conversation.id,
+                    content=reply_text,
+                    sender_type="ai",
+                    sender_id=None,
+                    language=detected_language,
+                    created_at=datetime.utcnow(),
+                )
+            )
+            conversation.updated_at = datetime.utcnow()
+            db.add(conversation)
+            db.commit()
+        escalate = await orchestrator.should_escalate(message.message)
+        return {
+            "reply_text": reply_text,
+            "language": detected_language,
+            "escalate": escalate,
+            "context": {"customer": customer, "recent_orders": recent_orders},
+        }
+
+    if flow.use_ai:
+        if flow.skip_store_api:
+            customer: dict = {}
+            recent_orders: list = []
+        else:
+            customer_context = await orchestrator.fetch_customer_context(
+                phone=message.phone,
+                message_text=message.message,
+            )
+            recent_orders = customer_context.get("recent_orders") or []
+            customer = customer_context.get("customer") or {}
+        reply_text = await bot.generate_reply(
+            tenant_id=message.tenant_id,
+            user_message=flow.ai_user_message,
+            channel=message.channel,
+            language=detected_language,
+            customer_context=customer,
+            recent_orders=recent_orders,
+        )
+        if flow.skip_store_api:
+            reply_text = format_kb_reply(bf_lang or detected_language, reply_text)
+    else:
+        reply_text = flow.reply_text
+        if (flow.merge_metadata.get("bot_flow") or {}).get("customer_kind") == "new":
+            customer, recent_orders = {}, []
+        else:
+            customer_context = await orchestrator.fetch_customer_context(
+                phone=message.phone,
+                message_text=message.message,
+            )
+            recent_orders = customer_context.get("recent_orders") or []
+            customer = customer_context.get("customer") or {}
+
+    if conversation and flow.assign_team:
+        kind = (flow.merge_metadata.get("bot_flow") or {}).get("customer_kind")
+        assign_from_bot_flow(
+            db,
+            tenant_id=message.tenant_id,
+            conversation_id=conversation.id,
+            store_id=conversation.store_id,
+            customer_id=conversation.customer_id,
+            routed_team=flow.assign_team,
+            is_existing_customer=(kind == "existing"),
+        )
+        db.refresh(conversation)
+
+    if conversation:
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                content=message.message,
+                sender_type="customer",
+                sender_id=None,
+                language=detected_language,
+                created_at=datetime.utcnow(),
+            )
+        )
+        db.add(
+            Message(
+                conversation_id=conversation.id,
+                content=reply_text,
+                sender_type="ai",
+                sender_id=None,
+                language=detected_language,
+                created_at=datetime.utcnow(),
+            )
+        )
+        conversation.updated_at = datetime.utcnow()
+        db.add(conversation)
+        db.commit()
+
+    escalate = flow.escalate or await orchestrator.should_escalate(message.message)
     return {
         "reply_text": reply_text,
         "language": detected_language,
         "escalate": escalate,
-        "context": {
-            "customer": customer,
-            "recent_orders": recent_orders,
-        },
+        "context": {"customer": customer, "recent_orders": recent_orders},
     }
 
 

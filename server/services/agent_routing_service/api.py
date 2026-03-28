@@ -1,8 +1,9 @@
 from typing import List, Optional
 from enum import Enum
+import random
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
@@ -42,6 +43,14 @@ class AssignRequest(BaseModel):
     customer_id: int
     routed_team: Optional[str] = None  # Team chosen by AI after qualification
     is_existing_customer: bool = False
+    prefer_team_first: bool = Field(
+        default=False,
+        description="When True, try routed_team before previous-agent / store mapping (bot handoff).",
+    )
+
+
+# Hard cap per product spec (also respects Agent.max_concurrent_chats when lower).
+MAX_ROUTING_CHATS_PER_AGENT = 7
 
 
 class AssignResponse(BaseModel):
@@ -105,6 +114,31 @@ def _get_previous_agent_for_customer(
     return None
 
 
+def _active_assigned_conversations(db: Session, agent_id: int) -> int:
+    n = (
+        db.query(func.count(Conversation.id))
+        .filter(
+            Conversation.agent_id == agent_id,
+            Conversation.status == "active",
+        )
+        .scalar()
+    )
+    return int(n or 0)
+
+
+def _agent_capacity_limit(agent: Agent) -> int:
+    raw = (
+        agent.max_concurrent_chats
+        if agent.max_concurrent_chats is not None
+        else MAX_ROUTING_CHATS_PER_AGENT
+    )
+    return min(MAX_ROUTING_CHATS_PER_AGENT, max(1, int(raw)))
+
+
+def _agent_has_capacity(db: Session, agent: Agent) -> bool:
+    return _active_assigned_conversations(db, agent.id) < _agent_capacity_limit(agent)
+
+
 def _get_store_mapped_agent(
     db: Session, tenant_id: int, store_id: int
 ) -> Optional[Agent]:
@@ -125,7 +159,7 @@ def _get_store_mapped_agent(
 def _get_random_available_agent(
     db: Session, tenant_id: int, team: Optional[str] = None
 ) -> Optional[Agent]:
-    """Pick a random online agent, optionally filtered by team."""
+    """Pick a random online agent under capacity, optionally filtered by team."""
     query = db.query(Agent).filter(
         Agent.tenant_id == tenant_id,
         Agent.status == AgentStatus.online.value,
@@ -133,27 +167,17 @@ def _get_random_available_agent(
     if team:
         query = query.filter(Agent.team == team)
 
-    agents = query.all()
-    if not agents:
+    eligible = [a for a in query.all() if _agent_has_capacity(db, a)]
+    if not eligible:
         return None
-
-    # Use database random ordering for simple load balancing
-    agent = (
-        query.order_by(func.random())  # type: ignore[arg-type]
-        .limit(1)
-        .first()
-    )
-    return agent
+    return random.choice(eligible)
 
 
-@router.post("/assign", response_model=AssignResponse)
-async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_db)):
+def perform_conversation_assignment(
+    db: Session, payload: AssignRequest
+) -> Optional[AssignResponse]:
     """
-    Assign conversation to an available agent following routing rules:
-
-    1. Old customer → previous agent if exists.
-    2. Store mapped to an agent → mapped agent.
-    3. Otherwise → random online agent in routed team (if provided) or any team.
+    Core assignment rules. Returns None if conversation does not exist.
     """
     conversation = (
         db.query(Conversation)
@@ -164,9 +188,8 @@ async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_
         .first()
     )
     if not conversation:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+        return None
 
-    # If conversation already has an agent, keep ownership
     if conversation.agent_id:
         return AssignResponse(
             conversation_id=conversation.id,
@@ -174,53 +197,92 @@ async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_
             reason="conversation_already_assigned",
         )
 
-    # Case 1: Old customer → previous agent
+    def _commit(agent: Agent, reason: str) -> AssignResponse:
+        conversation.agent_id = agent.id
+        db.add(conversation)
+        db.commit()
+        return AssignResponse(
+            conversation_id=conversation.id,
+            agent_id=agent.id,
+            reason=reason,
+        )
+
+    if payload.prefer_team_first and payload.routed_team:
+        team_first = _get_random_available_agent(
+            db, payload.tenant_id, team=payload.routed_team
+        )
+        if team_first:
+            return _commit(team_first, "bot_routed_team")
+
     previous_agent = _get_previous_agent_for_customer(
         db, payload.tenant_id, payload.customer_id
     )
-    if previous_agent:
-        conversation.agent_id = previous_agent.id
-        db.add(conversation)
-        db.commit()
-        return AssignResponse(
-            conversation_id=conversation.id,
-            agent_id=previous_agent.id,
-            reason="previous_agent_for_customer",
-        )
+    if previous_agent and _agent_has_capacity(db, previous_agent):
+        return _commit(previous_agent, "previous_agent_for_customer")
 
-    # Case 3: Store-based mapping
     mapped_agent = _get_store_mapped_agent(db, payload.tenant_id, payload.store_id)
-    if mapped_agent:
-        conversation.agent_id = mapped_agent.id
-        db.add(conversation)
-        db.commit()
-        return AssignResponse(
-            conversation_id=conversation.id,
-            agent_id=mapped_agent.id,
-            reason="store_mapped_agent",
-        )
+    if mapped_agent and _agent_has_capacity(db, mapped_agent):
+        return _commit(mapped_agent, "store_mapped_agent")
 
-    # Case 2/4: New customer or no mapping → random available agent
     candidate = _get_random_available_agent(
         db, payload.tenant_id, team=payload.routed_team
     )
     if not candidate:
-        # No available agent, handler stays with AI
+        candidate = _get_random_available_agent(db, payload.tenant_id, team=None)
+    if not candidate:
         return AssignResponse(
             conversation_id=conversation.id,
             agent_id=None,
             reason="no_available_agent",
         )
 
-    conversation.agent_id = candidate.id
-    db.add(conversation)
-    db.commit()
+    return _commit(candidate, "random_available_agent")
 
-    return AssignResponse(
-        conversation_id=conversation.id,
-        agent_id=candidate.id,
-        reason="random_available_agent",
+
+def assign_from_bot_flow(
+    db: Session,
+    *,
+    tenant_id: int,
+    conversation_id: int,
+    store_id: int,
+    customer_id: int,
+    routed_team: Optional[str],
+    is_existing_customer: bool = False,
+) -> AssignResponse:
+    """Assign after customer-bot handoff; prefers the routed team when set."""
+    payload = AssignRequest(
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        store_id=store_id,
+        customer_id=customer_id,
+        routed_team=routed_team,
+        is_existing_customer=is_existing_customer,
+        prefer_team_first=bool(routed_team),
     )
+    result = perform_conversation_assignment(db, payload)
+    if result is None:
+        return AssignResponse(
+            conversation_id=conversation_id,
+            agent_id=None,
+            reason="conversation_not_found",
+        )
+    return result
+
+
+@router.post("/assign", response_model=AssignResponse)
+async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_db)):
+    """
+    Assign conversation to an available agent following routing rules:
+
+    1. Old customer → previous agent if exists (when under capacity).
+    2. Store mapped to an agent → mapped agent (when under capacity).
+    3. Otherwise → random online agent in routed team (if provided) or any team.
+    Each agent accepts at most min(7, max_concurrent_chats) active conversations.
+    """
+    result = perform_conversation_assignment(db, payload)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    return result
 
 
 @router.post("/transfer", response_model=AssignResponse)
