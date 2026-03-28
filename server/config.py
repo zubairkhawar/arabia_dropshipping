@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     meta_whatsapp_access_token: Optional[str] = None
     meta_whatsapp_verify_token: Optional[str] = None
     meta_whatsapp_phone_number_id: Optional[str] = None
+    meta_whatsapp_waba_id: Optional[str] = None
     meta_graph_api_version: str = "v21.0"
     
     # Application
