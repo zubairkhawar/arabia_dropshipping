@@ -195,6 +195,7 @@ async def process_customer_bot_message(
     flow_lang = lang
 
     store_client = StoreIntegrationClient()
+    escalate_for_ai_turn = await orchestrator.should_escalate(user_message)
 
     def save(
         f: Dict[str, Any],
@@ -226,7 +227,7 @@ async def process_customer_bot_message(
             ai_user_message=msg,
             skip_store_api=skip_api,
             assign_team=None,
-            escalate=await orchestrator.should_escalate(user_message),
+            escalate=escalate_for_ai_turn,
             handled=True,
         )
 
