@@ -44,6 +44,12 @@ class MetaWhatsAppClient:
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
         }
+        logger.info(
+            "Sending WhatsApp message using:\nPHONE_NUMBER_ID = %s\nTO = %s\n(body length: %s chars)",
+            self.phone_number_id,
+            to_phone,
+            len(text or ""),
+        )
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code >= 400:
