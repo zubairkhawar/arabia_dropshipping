@@ -33,15 +33,23 @@ class StoreIntegrationClient:
         """
         GET /customers?phone={phone}
         Returns the first matching customer or None.
+        Treats 404 and other client errors as missing customer so webhooks do not crash
+        when the merchant API has no such route (e.g. only /orders/{id} is implemented).
         """
         if not self.base_url:
             return None
-        async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
-            resp = await client.get("/customers", params={"phone": phone})
-            resp.raise_for_status()
-            data = resp.json()
-            items: List[Dict[str, Any]] = data.get("data") or []
-            return items[0] if items else None
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
+                resp = await client.get("/customers", params={"phone": phone})
+                if resp.status_code == 404:
+                    return None
+                if resp.status_code >= 400:
+                    return None
+                data = resp.json()
+                items: List[Dict[str, Any]] = data.get("data") or []
+                return items[0] if items else None
+        except httpx.HTTPError:
+            return None
 
     async def get_recent_orders_for_customer(self, customer_id: str, limit: int = 3) -> List[Dict[str, Any]]:
         """
@@ -49,11 +57,17 @@ class StoreIntegrationClient:
         """
         if not self.base_url:
             return []
-        async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
-            resp = await client.get(f"/customers/{customer_id}/orders", params={"limit": limit})
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("data") or []
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
+                resp = await client.get(f"/customers/{customer_id}/orders", params={"limit": limit})
+                if resp.status_code == 404:
+                    return []
+                if resp.status_code >= 400:
+                    return []
+                data = resp.json()
+                return data.get("data") or []
+        except httpx.HTTPError:
+            return []
 
     async def get_order_by_number(self, order_number: str) -> Optional[Dict[str, Any]]:
         """
@@ -83,7 +97,10 @@ class StoreIntegrationClient:
                 if resp.status_code == 404:
                     return None
                 resp.raise_for_status()
-                return resp.json()
+                payload = resp.json()
+                if isinstance(payload, dict) and "data" in payload:
+                    return payload.get("data")
+                return payload
         except httpx.HTTPError:
             return None
 
