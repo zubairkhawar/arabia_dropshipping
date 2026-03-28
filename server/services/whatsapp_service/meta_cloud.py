@@ -1,8 +1,11 @@
+import logging
 from typing import Any, Dict, Optional
 
 import httpx
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class MetaWhatsAppClient:
@@ -43,5 +46,11 @@ class MetaWhatsAppClient:
         }
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta WhatsApp messages API HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
             resp.raise_for_status()
             return resp.json()

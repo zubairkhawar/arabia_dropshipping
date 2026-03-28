@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -15,6 +16,8 @@ from langchain_bot import ArabiaLangChainBot
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 from services.customer_bot_flow import format_kb_reply, process_customer_bot_message
 from services.agent_routing_service.api import assign_from_bot_flow
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -626,10 +629,26 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     wa_response: Dict[str, Any] | None = None
     client = MetaWhatsAppClient()
     if reply_text:
-        try:
-            wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)
-        except Exception:
-            wa_response = {"error": "meta_send_failed"}
+        if not client.is_configured():
+            logger.warning(
+                "WhatsApp reply not sent: Meta Cloud API env missing. "
+                "Set META_WHATSAPP_ACCESS_TOKEN and META_WHATSAPP_PHONE_NUMBER_ID on the host."
+            )
+            wa_response = {"error": "meta_not_configured"}
+        else:
+            try:
+                wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)
+                logger.info(
+                    "WhatsApp outbound sent to=%s conversation_id=%s",
+                    from_phone[-6:] if from_phone else "?",
+                    conversation.id,
+                )
+            except Exception:
+                logger.exception(
+                    "WhatsApp send_text_message failed (conversation_id=%s)",
+                    conversation.id,
+                )
+                wa_response = {"error": "meta_send_failed"}
 
     escalate = flow.escalate or await orchestrator.should_escalate(text)
     return {
