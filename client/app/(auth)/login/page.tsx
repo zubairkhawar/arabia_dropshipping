@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import Link from 'next/link';
 
 const ADMIN_EMAIL = 'arabiadropshipping05@gmail.com';
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'https://arabia-dropshipping.onrender.com';
@@ -81,16 +80,10 @@ export default function LoginPage() {
             </p>
           </div>
         </div>
-        <div className="flex flex-col items-center justify-center gap-2">
+        <div className="flex items-center justify-center">
           <p className="text-xs text-text-muted">
             © {new Date().getFullYear()} Arabia Dropshipping. All rights reserved.
           </p>
-          <Link
-            href="/privacy-policy"
-            className="text-xs text-primary hover:underline"
-          >
-            Privacy Policy
-          </Link>
         </div>
       </div>
 
@@ -220,11 +213,6 @@ export default function LoginPage() {
               </>
             )}
           </div>
-        </div>
-        <div className="mt-8 flex justify-center lg:hidden">
-          <Link href="/privacy-policy" className="text-xs text-primary hover:underline">
-            Privacy Policy
-          </Link>
         </div>
       </div>
     </div>
