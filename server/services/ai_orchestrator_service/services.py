@@ -269,6 +269,10 @@ If the user asks specifically for a real agent, check if escalation is needed,
 but DO NOT promise an agent unless the message clearly requires it.
 Respond in the same language as the user (arabic, english, or roman urdu).
 Keep answers concise and friendly.
+
+Do NOT compose welcome messages, new/existing customer prompts, numbered menus,
+verification or handoff lines, or order-ID prompts — the API sends those as fixed
+templates. Only answer substantive support questions in free text.
 """
         )
 
