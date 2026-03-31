@@ -124,10 +124,10 @@ export default function AdminKnowledgeBase() {
         typeof s.metadata?.schema_notes === 'string' ? s.metadata.schema_notes : undefined,
       viewUrl:
         s.type === 'url'
-          ? s.url
+          ? (s.url ?? undefined)
           : typeof s.metadata?.file_data_url === 'string'
             ? s.metadata.file_data_url
-            : null,
+            : undefined,
     };
   }, []);
 
