@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 
 const DAYS_PER_WEEK = 7;
 const CELL_BASE = 'rounded-sm';
@@ -110,17 +110,81 @@ export function useAgentAttendanceData(
   agentId: string | undefined,
   workingDays: number[] = [1, 2, 3, 4, 5, 6]
 ): { dayData: DayAttendance[]; averageDailyHours: number } {
-  return useMemo(() => {
-    if (!agentId) return { dayData: [], averageDailyHours: 0 };
-    const dayData = getDayAttendance(agentId, workingDays);
+  const API_BASE =
+    process.env.NEXT_PUBLIC_API_URL ||
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    'https://arabia-dropshipping.onrender.com';
+  const TENANT_ID = 1;
+  const [dayData, setDayData] = useState<DayAttendance[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!agentId) {
+        setDayData([]);
+        return;
+      }
+      try {
+        const url = new URL(`${API_BASE}/api/routing/agents/${Number(agentId)}/attendance`);
+        url.searchParams.set('tenant_id', String(TENANT_ID));
+        url.searchParams.set('days', '240');
+        const res = await fetch(url.toString());
+        if (!res.ok) throw new Error('attendance fetch failed');
+        const data = (await res.json()) as {
+          days: Array<{
+            date: string;
+            total_minutes: number;
+            sessions: Array<{ start_at: string; end_at: string | null }>;
+          }>;
+        };
+        const mappedByDate = new Map(
+          (data.days || []).map((d) => [
+            d.date,
+            {
+              hoursWorked: Math.round((d.total_minutes / 60) * 100) / 100,
+              sessions: (d.sessions || []).map((s) => {
+                const st = new Date(s.start_at);
+                const en = new Date(s.end_at || s.start_at);
+                return {
+                  startMinutes: st.getHours() * 60 + st.getMinutes(),
+                  endMinutes: en.getHours() * 60 + en.getMinutes(),
+                };
+              }),
+            },
+          ]),
+        );
+        const base = getDayAttendance(agentId, workingDays).map((d) => {
+          const key = d.date.toISOString().slice(0, 10);
+          const real = mappedByDate.get(key);
+          if (!real) return { ...d, hoursWorked: 0, sessions: [] };
+          return {
+            ...d,
+            hoursWorked: real.hoursWorked,
+            sessions: real.sessions,
+          };
+        });
+        if (!cancelled) setDayData(base);
+      } catch {
+        if (!cancelled) setDayData(getDayAttendance(agentId, workingDays));
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, workingDays]);
+
+  const averageDailyHours = useMemo(() => {
+    if (!agentId) return 0;
     const workingSet = new Set(workingDays);
     const withHours = dayData.filter(
       (d) => workingSet.has(d.date.getDay()) && d.hoursWorked > 0
     );
     const totalHours = withHours.reduce((s, d) => s + d.hoursWorked, 0);
-    const averageDailyHours = withHours.length > 0 ? totalHours / withHours.length : 0;
-    return { dayData, averageDailyHours };
-  }, [agentId, workingDays]);
+    return withHours.length > 0 ? totalHours / withHours.length : 0;
+  }, [agentId, dayData, workingDays]);
+
+  return { dayData, averageDailyHours };
 }
 
 function heatmapColor(hoursWorked: number, isOffDay: boolean): string {

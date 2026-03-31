@@ -283,3 +283,14 @@ class InternalDmMessage(Base):
     sender_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentAttendanceSession(Base):
+    __tablename__ = "agent_attendance_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    ended_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

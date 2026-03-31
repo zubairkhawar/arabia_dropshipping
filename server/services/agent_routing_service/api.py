@@ -1,6 +1,7 @@
 from typing import List, Optional
 from enum import Enum
 import random
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
 from database import get_db
-from models import Agent, Conversation, Customer, Store, StoreAgentMapping
+from models import Agent, Conversation, Customer, Store, StoreAgentMapping, AgentAttendanceSession
 
 
 router = APIRouter()
@@ -65,6 +66,22 @@ class TransferRequest(BaseModel):
     target_team: Optional[str] = None
 
 
+class AttendanceSessionOut(BaseModel):
+    start_at: datetime
+    end_at: Optional[datetime] = None
+
+
+class AttendanceDayOut(BaseModel):
+    date: str
+    total_minutes: int
+    sessions: List[AttendanceSessionOut]
+
+
+class AttendanceResponse(BaseModel):
+    agent_id: int
+    days: List[AttendanceDayOut]
+
+
 @router.get("/agents", response_model=List[AgentOut])
 async def list_agents(tenant_id: int, db: Session = Depends(get_db)):
     """List all agents with their status for a tenant."""
@@ -83,7 +100,56 @@ async def update_agent_status(
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-    agent.status = payload.status.value
+    previous_status = agent.status
+    next_status = payload.status.value
+    now = datetime.utcnow()
+    was_active = previous_status in (
+        AgentStatus.online.value,
+        AgentStatus.busy.value,
+    )
+    is_active = next_status in (
+        AgentStatus.online.value,
+        AgentStatus.busy.value,
+    )
+
+    if not was_active and is_active:
+        open_session = (
+            db.query(AgentAttendanceSession)
+            .filter(
+                AgentAttendanceSession.tenant_id == agent.tenant_id,
+                AgentAttendanceSession.agent_id == agent.id,
+                AgentAttendanceSession.ended_at.is_(None),
+            )
+            .order_by(AgentAttendanceSession.started_at.desc())
+            .first()
+        )
+        if not open_session:
+            db.add(
+                AgentAttendanceSession(
+                    tenant_id=agent.tenant_id,
+                    agent_id=agent.id,
+                    started_at=now,
+                    ended_at=None,
+                    created_at=now,
+                )
+            )
+
+    if was_active and not is_active:
+        open_session = (
+            db.query(AgentAttendanceSession)
+            .filter(
+                AgentAttendanceSession.tenant_id == agent.tenant_id,
+                AgentAttendanceSession.agent_id == agent.id,
+                AgentAttendanceSession.ended_at.is_(None),
+            )
+            .order_by(AgentAttendanceSession.started_at.desc())
+            .first()
+        )
+        if open_session:
+            open_session.ended_at = now
+            db.add(open_session)
+
+    agent.status = next_status
     if payload.max_concurrent_chats is not None:
         agent.max_concurrent_chats = payload.max_concurrent_chats
     if payload.team is not None:
@@ -93,6 +159,50 @@ async def update_agent_status(
     db.commit()
     db.refresh(agent)
     return agent
+
+
+@router.get("/agents/{agent_id}/attendance", response_model=AttendanceResponse)
+async def get_agent_attendance(
+    agent_id: int,
+    tenant_id: int,
+    days: int = 220,
+    db: Session = Depends(get_db),
+):
+    agent = db.query(Agent).filter(Agent.id == agent_id, Agent.tenant_id == tenant_id).first()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    today = datetime.utcnow().date()
+    start_date = today - timedelta(days=max(1, min(days, 400)) - 1)
+    start_dt = datetime.combine(start_date, datetime.min.time())
+
+    sessions = (
+        db.query(AgentAttendanceSession)
+        .filter(
+            AgentAttendanceSession.tenant_id == tenant_id,
+            AgentAttendanceSession.agent_id == agent_id,
+            AgentAttendanceSession.started_at >= start_dt,
+        )
+        .order_by(AgentAttendanceSession.started_at.asc())
+        .all()
+    )
+
+    by_day: dict[str, AttendanceDayOut] = {}
+    for s in sessions:
+        day = s.started_at.date().isoformat()
+        if day not in by_day:
+            by_day[day] = AttendanceDayOut(date=day, total_minutes=0, sessions=[])
+        end_at = s.ended_at or datetime.utcnow()
+        minutes = max(0, int((end_at - s.started_at).total_seconds() // 60))
+        by_day[day].total_minutes += minutes
+        by_day[day].sessions.append(
+            AttendanceSessionOut(start_at=s.started_at, end_at=s.ended_at)
+        )
+
+    return AttendanceResponse(
+        agent_id=agent_id,
+        days=list(by_day.values()),
+    )
 
 
 def _get_previous_agent_for_customer(
