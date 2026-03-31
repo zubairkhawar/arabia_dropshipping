@@ -13,6 +13,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { usePathname, useRouter } from 'next/navigation';
 
 type AgentStatus = 'active' | 'offline';
+const ACTIVE_SINCE_PREFIX = 'agent-active-since:';
 
 const statusConfig: Record<AgentStatus, { label: string; dotClass: string }> = {
   active: { label: 'Active', dotClass: 'bg-status-success' },
@@ -48,6 +49,8 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState<'success' | 'error' | 'wrong_old' | null>(null);
+  const [activeSinceMs, setActiveSinceMs] = useState<number | null>(null);
+  const [activeElapsedLabel, setActiveElapsedLabel] = useState('00:00');
   const { toast } = useToast();
   const pathname = usePathname();
   const router = useRouter();
@@ -58,6 +61,58 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
     markAsRead,
   } = useNotifications();
   const notificationList = getNotificationsForCurrentAgent();
+
+  useEffect(() => {
+    if (!currentAgentId || typeof window === 'undefined') return;
+    const shouldForceOffline = localStorage.getItem('force_agent_offline_on_next_load') === '1';
+    if (!shouldForceOffline) return;
+    localStorage.removeItem('force_agent_offline_on_next_load');
+    void setAgentStatus(currentAgentId, 'offline');
+    if (slug) setPresence(slug, 'offline');
+    const key = `${ACTIVE_SINCE_PREFIX}${currentAgentId}`;
+    localStorage.removeItem(key);
+  }, [currentAgentId, setAgentStatus, setPresence, slug]);
+
+  useEffect(() => {
+    if (!currentAgentId) {
+      setActiveSinceMs(null);
+      return;
+    }
+    const key = `${ACTIVE_SINCE_PREFIX}${currentAgentId}`;
+    if (agentStatus === 'active') {
+      const raw = typeof window !== 'undefined' ? localStorage.getItem(key) : null;
+      const stored = raw ? Number(raw) : NaN;
+      if (Number.isFinite(stored)) {
+        setActiveSinceMs(stored);
+      } else {
+        const now = Date.now();
+        if (typeof window !== 'undefined') localStorage.setItem(key, String(now));
+        setActiveSinceMs(now);
+      }
+    } else {
+      if (typeof window !== 'undefined') localStorage.removeItem(key);
+      setActiveSinceMs(null);
+      setActiveElapsedLabel('00:00');
+    }
+  }, [agentStatus, currentAgentId]);
+
+  useEffect(() => {
+    if (agentStatus !== 'active' || !activeSinceMs) {
+      setActiveElapsedLabel('00:00');
+      return;
+    }
+    const formatElapsed = () => {
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - activeSinceMs) / 1000));
+      const h = String(Math.floor(elapsedSec / 3600)).padStart(2, '0');
+      const m = String(Math.floor((elapsedSec % 3600) / 60)).padStart(2, '0');
+      return `${h}:${m}`;
+    };
+    setActiveElapsedLabel(formatElapsed());
+    const timer = window.setInterval(() => {
+      setActiveElapsedLabel(formatElapsed());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [agentStatus, activeSinceMs]);
 
   const formatNotifTime = (iso: string) => {
     const d = new Date(iso);
@@ -159,11 +214,18 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
         <div className="relative">
           <button
             onClick={() => setShowStatusMenu(!showStatusMenu)}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors"
+            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors min-w-[172px] justify-between"
           >
-            <span className={`w-2.5 h-2.5 rounded-full ${statusConfig[agentStatus].dotClass}`} />
-            <span className="text-sm font-medium text-text-primary">{statusConfig[agentStatus].label}</span>
-            <ChevronDown className="w-4 h-4 text-text-muted" />
+            <span className="inline-flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full ${statusConfig[agentStatus].dotClass}`} />
+              <span className="text-sm font-medium text-text-primary">{statusConfig[agentStatus].label}</span>
+            </span>
+            <span className="inline-flex items-center gap-2">
+              {agentStatus === 'active' && (
+                <span className="text-xs font-medium text-text-muted tabular-nums min-w-[40px] text-right">{activeElapsedLabel}</span>
+              )}
+              <ChevronDown className="w-4 h-4 text-text-muted" />
+            </span>
           </button>
           {showStatusMenu && (
             <>
@@ -306,7 +368,12 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                   <div className="border-t border-border my-2" />
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={async () => {
+                      if (currentAgentId) {
+                        await setAgentStatus(currentAgentId, 'offline');
+                        const key = `${ACTIVE_SINCE_PREFIX}${currentAgentId}`;
+                        if (typeof window !== 'undefined') localStorage.removeItem(key);
+                      }
                       setShowUserMenu(false);
                       if (typeof window !== 'undefined') {
                         localStorage.clear();

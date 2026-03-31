@@ -1,8 +1,6 @@
 'use client';
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
-import { useAgentProfile } from '@/contexts/AgentProfileContext';
-import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 
 const STORAGE_KEY = 'agent-presence';
 
@@ -52,8 +50,6 @@ interface AgentPresenceContextType {
 const AgentPresenceContext = createContext<AgentPresenceContextType | undefined>(undefined);
 
 export function AgentPresenceProvider({ children }: { children: ReactNode }) {
-  const { fullName } = useAgentProfile();
-  const { isWithinSchedule } = useOnlineSchedule();
   const [presenceMap, setPresenceMap] = useState<Record<string, PresenceStatus>>(loadPresenceFromStorage);
 
   useEffect(() => {
@@ -72,19 +68,6 @@ export function AgentPresenceProvider({ children }: { children: ReactNode }) {
     (slug: string): PresenceStatus => presenceMap[slug] ?? 'offline',
     [presenceMap],
   );
-
-  // When current agent is on the page, mark active only if within admin-defined schedule; else offline.
-  useEffect(() => {
-    const slug = getSlugByName(fullName);
-    if (!slug) return;
-    const apply = () => setPresence(slug, isWithinSchedule() ? 'active' : 'offline');
-    apply();
-    const t = setInterval(apply, 60_000);
-    return () => {
-      clearInterval(t);
-      setPresence(slug, 'offline');
-    };
-  }, [fullName, setPresence, isWithinSchedule]);
 
   return (
     <AgentPresenceContext.Provider

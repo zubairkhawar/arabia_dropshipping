@@ -30,6 +30,7 @@ interface AgentsContextType {
 
 const AgentsContext = createContext<AgentsContextType | undefined>(undefined);
 const AGENT_PASSWORDS_STORAGE_KEY = 'agent-passwords';
+const AUTH_EMAIL_STORAGE_KEY = 'auth_email';
 
 // Keep consistent with the rest of the frontend config.
 const API_BASE_URL =
@@ -99,7 +100,15 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
       createdAt: a.created_at,
     }));
     setAgents(mapped);
+    const authEmail =
+      typeof window !== 'undefined'
+        ? (localStorage.getItem(AUTH_EMAIL_STORAGE_KEY) || '').trim().toLowerCase()
+        : '';
     setCurrentAgentId((prev) => {
+      const byEmail = authEmail
+        ? mapped.find((a) => a.email.trim().toLowerCase() === authEmail)?.id ?? null
+        : null;
+      if (byEmail) return byEmail;
       if (prev && mapped.some((a) => a.id === prev)) return prev;
       return mapped[0]?.id ?? null;
     });

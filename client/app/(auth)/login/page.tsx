@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 
-const ADMIN_EMAIL = 'arabiadropshipping05@gmail.com';
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'https://arabia-dropshipping.onrender.com';
 
 export default function LoginPage() {
@@ -15,16 +14,63 @@ export default function LoginPage() {
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotMessage, setForgotMessage] = useState<string | null>(null);
   const [submittingForgot, setSubmittingForgot] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [submittingLogin, setSubmittingLogin] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmedEmail = email.trim().toLowerCase();
+    setLoginError(null);
+    setSubmittingLogin(true);
+    try {
+      const trimmedEmail = email.trim().toLowerCase();
+      const loginBody = new URLSearchParams();
+      loginBody.set('username', trimmedEmail);
+      loginBody.set('password', password);
 
-    // Simple role routing: one admin email routes to admin panel, others to agent panel.
-    if (trimmedEmail === ADMIN_EMAIL.toLowerCase()) {
-      router.push('/admin/dashboard');
-    } else {
+      const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: loginBody.toString(),
+      });
+
+      if (!loginRes.ok) {
+        const data = await loginRes.json().catch(() => ({}));
+        throw new Error(data.detail || 'Incorrect email or password');
+      }
+
+      const tokenData = (await loginRes.json()) as { access_token: string; token_type: string };
+      const meRes = await fetch(`${API_BASE}/api/auth/me`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+        },
+      });
+      if (!meRes.ok) {
+        throw new Error('Could not load account profile');
+      }
+      const me = (await meRes.json()) as { email: string; role: string };
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('auth_token', tokenData.access_token);
+        localStorage.setItem('auth_token_type', tokenData.token_type || 'bearer');
+        localStorage.setItem('auth_email', me.email || trimmedEmail);
+        localStorage.setItem('auth_role', me.role || 'agent');
+        if ((me.role || '').toLowerCase() === 'agent') {
+          localStorage.setItem('force_agent_offline_on_next_load', '1');
+        }
+      }
+
+      if ((me.role || '').toLowerCase() === 'admin') {
+        router.push('/admin/dashboard');
+        return;
+      }
       router.push('/agent/inbox');
+    } catch (err: any) {
+      setLoginError(err?.message || 'Login failed');
+    } finally {
+      setSubmittingLogin(false);
     }
   };
 
@@ -147,10 +193,14 @@ export default function LoginPage() {
                     </div>
                     <button
                       type="submit"
+                      disabled={submittingLogin}
                       className="w-full bg-primary text-white py-2.5 px-4 rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium"
                     >
-                      Sign In
+                      {submittingLogin ? 'Signing in...' : 'Sign In'}
                     </button>
+                    {loginError && (
+                      <p className="text-xs text-status-error">{loginError}</p>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
