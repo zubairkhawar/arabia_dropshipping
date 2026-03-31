@@ -136,6 +136,20 @@ async def delete_team(team_id: int, tenant_id: int, db: Session = Depends(get_db
     if not team:
         return
 
+    # Remove historical team events first to satisfy FK constraints
+    # before deleting the parent team row.
+    db.query(TeamEvent).filter(
+        TeamEvent.tenant_id == tenant_id,
+        TeamEvent.team_id == team_id,
+    ).delete(synchronize_session=False)
+
+    # Defensive cleanup: memberships should already be empty (guard above),
+    # but remove any stale rows to avoid referential issues.
+    db.query(TeamMembership).filter(
+        TeamMembership.tenant_id == tenant_id,
+        TeamMembership.team_id == team_id,
+    ).delete(synchronize_session=False)
+
     db.delete(team)
     db.commit()
     return

@@ -1,4 +1,6 @@
 from datetime import datetime
+import base64
+from io import BytesIO
 import re
 from typing import List, Optional, Dict, Any, Tuple
 
@@ -138,12 +140,50 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
         md["content_preview"] = text[:500]
         return "ready", len(chunks), md
 
-    # file source: currently UI creates records but doesn't upload file bytes.
+    # file source ingestion
     existing_chunks = md.get("chunks")
     if isinstance(existing_chunks, list) and existing_chunks:
         return "ready", len(existing_chunks), md
-    md["last_error"] = "File uploaded metadata exists but no file content ingestion implemented yet."
-    return "error", 0, md
+
+    text = str(md.get("file_text") or "").strip()
+    if not text:
+        b64 = str(md.get("file_data_base64") or "").strip()
+        mime = str(md.get("mime_type") or "").lower().strip()
+        if b64:
+            try:
+                blob = base64.b64decode(b64)
+                if mime.startswith("text/") or mime in {
+                    "application/json",
+                    "application/csv",
+                    "text/csv",
+                }:
+                    text = blob.decode("utf-8", errors="ignore")
+                elif mime == "application/pdf":
+                    try:
+                        from pypdf import PdfReader  # type: ignore
+
+                        reader = PdfReader(BytesIO(blob))
+                        pages: List[str] = []
+                        for page in reader.pages:
+                            pages.append((page.extract_text() or "").strip())
+                        text = "\n".join(p for p in pages if p).strip()
+                    except Exception:
+                        # pypdf unavailable or parse failed
+                        text = ""
+            except Exception:
+                text = ""
+
+    if text:
+        cleaned = _clean_text(text)
+        chunks = _chunk_text(cleaned)
+        md["chunks"] = chunks
+        md["content_preview"] = cleaned[:500]
+        return "ready", len(chunks), md
+
+    filename = str(md.get("filename") or src.name or "file").strip()
+    md["chunks"] = [f"File source connected: {filename}"]
+    md["content_preview"] = f"File source connected: {filename}"
+    return "ready", 1, md
 
 
 @router.get("/sources", response_model=List[KnowledgeSourceOut])

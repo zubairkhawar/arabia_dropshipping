@@ -18,6 +18,7 @@ interface KnowledgeSource {
   refreshHours?: number;
   headerKeys?: string[];
   schemaNotes?: string;
+  viewUrl?: string;
 }
 
 interface KnowledgeSourceApi {
@@ -58,6 +59,8 @@ export default function AdminKnowledgeBase() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [reindexingId, setReindexingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   const mapSource = useCallback((s: KnowledgeSourceApi): KnowledgeSource => {
     const updated = s.updated_at || s.created_at;
@@ -81,6 +84,12 @@ export default function AdminKnowledgeBase() {
           : [],
       schemaNotes:
         typeof s.metadata?.schema_notes === 'string' ? s.metadata.schema_notes : undefined,
+      viewUrl:
+        s.type === 'url'
+          ? s.url
+          : typeof s.metadata?.file_data_url === 'string'
+            ? s.metadata.file_data_url
+            : null,
     };
   }, []);
 
@@ -138,7 +147,16 @@ export default function AdminKnowledgeBase() {
     const file = e.target.files?.[0];
     if (!file) return;
     setFileName(file.name);
+    setSelectedFile(file);
   };
+
+  const fileToDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('file_read_failed'));
+      reader.readAsDataURL(file);
+    });
 
   const handleFileAdd = async () => {
     const trimmed = fileName.trim();
@@ -148,15 +166,37 @@ export default function AdminKnowledgeBase() {
     }
     setIsSubmittingFile(true);
     try {
+      let fileDataUrl: string | undefined;
+      let fileDataBase64: string | undefined;
+      let fileText: string | undefined;
+      let mimeType: string | undefined;
+      if (selectedFile) {
+        mimeType = selectedFile.type || 'application/octet-stream';
+        fileDataUrl = await fileToDataUrl(selectedFile);
+        const comma = fileDataUrl.indexOf(',');
+        fileDataBase64 = comma >= 0 ? fileDataUrl.slice(comma + 1) : '';
+        if (
+          selectedFile.type.startsWith('text/') ||
+          selectedFile.type === 'application/json' ||
+          selectedFile.type === 'application/csv'
+        ) {
+          fileText = await selectedFile.text();
+        }
+      }
       await createSource({
         name: trimmed,
         type: 'file',
         metadata: {
           filename: trimmed,
+          mime_type: mimeType,
+          file_data_url: fileDataUrl,
+          file_data_base64: fileDataBase64,
+          file_text: fileText,
         },
       });
       toast('File source added');
       setFileName('');
+      setSelectedFile(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch {
       toast('Failed to add file source');
@@ -297,6 +337,8 @@ export default function AdminKnowledgeBase() {
 
   const clearFile = () => {
     setFileName('');
+    setSelectedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
@@ -570,22 +612,53 @@ export default function AdminKnowledgeBase() {
                       </td>
                       <td className="px-4 py-2 text-text-secondary">{s.lastUpdated}</td>
                       <td className="px-4 py-2 text-right">
-                        <button
-                          type="button"
-                          disabled={reindexingId === s.id}
-                          onClick={() => void reindexSource(s.id)}
-                          className="mr-3 text-[11px] text-primary hover:underline disabled:opacity-60 disabled:no-underline"
-                        >
-                          {reindexingId === s.id ? 'Reindexing...' : 'Reindex'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={deletingId === s.id}
-                          onClick={() => void removeSource(s.id)}
-                          className="text-[11px] text-status-error hover:underline disabled:opacity-60 disabled:no-underline"
-                        >
-                          {deletingId === s.id ? 'Deleting...' : 'Delete'}
-                        </button>
+                        <div className="relative inline-block text-left">
+                          <button
+                            type="button"
+                            onClick={() => setOpenMenuId((prev) => (prev === s.id ? null : s.id))}
+                            className="px-2 py-1 rounded hover:bg-panel text-text-secondary"
+                            aria-label="Open actions menu"
+                          >
+                            ⋮
+                          </button>
+                          {openMenuId === s.id ? (
+                            <div className="absolute right-0 mt-1 w-32 bg-white border border-border rounded-lg shadow-md z-20">
+                              <button
+                                type="button"
+                                disabled={!s.viewUrl}
+                                onClick={() => {
+                                  if (s.viewUrl) window.open(s.viewUrl, '_blank', 'noopener,noreferrer');
+                                  setOpenMenuId(null);
+                                }}
+                                className="w-full text-left px-3 py-2 text-[11px] hover:bg-panel disabled:opacity-40"
+                              >
+                                View
+                              </button>
+                              <button
+                                type="button"
+                                disabled={reindexingId === s.id}
+                                onClick={() => {
+                                  void reindexSource(s.id);
+                                  setOpenMenuId(null);
+                                }}
+                                className="w-full text-left px-3 py-2 text-[11px] hover:bg-panel disabled:opacity-40"
+                              >
+                                {reindexingId === s.id ? 'Reindexing...' : 'Reindex'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={deletingId === s.id}
+                                onClick={() => {
+                                  void removeSource(s.id);
+                                  setOpenMenuId(null);
+                                }}
+                                className="w-full text-left px-3 py-2 text-[11px] text-status-error hover:bg-panel disabled:opacity-40"
+                              >
+                                {deletingId === s.id ? 'Deleting...' : 'Delete'}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}
