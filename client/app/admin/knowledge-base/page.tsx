@@ -13,6 +13,11 @@ interface KnowledgeSource {
   chunks: number;
   lastUpdated: string;
   lastError?: string;
+  url?: string | null;
+  authType?: string;
+  refreshHours?: number;
+  headerKeys?: string[];
+  schemaNotes?: string;
 }
 
 interface KnowledgeSourceApi {
@@ -64,6 +69,18 @@ export default function AdminKnowledgeBase() {
       chunks: s.chunk_count,
       lastUpdated: updated ? new Date(updated).toLocaleString() : '-',
       lastError: typeof s.metadata?.last_error === 'string' ? s.metadata.last_error : undefined,
+      url: s.url,
+      authType: typeof s.metadata?.auth_type === 'string' ? s.metadata.auth_type : undefined,
+      refreshHours:
+        typeof s.metadata?.refresh_interval_hours === 'number'
+          ? s.metadata.refresh_interval_hours
+          : undefined,
+      headerKeys:
+        s.metadata?.headers && typeof s.metadata.headers === 'object'
+          ? Object.keys(s.metadata.headers as Record<string, unknown>)
+          : [],
+      schemaNotes:
+        typeof s.metadata?.schema_notes === 'string' ? s.metadata.schema_notes : undefined,
     };
   }, []);
 
@@ -509,7 +526,22 @@ export default function AdminKnowledgeBase() {
                 <tbody className="bg-card divide-y divide-border">
                   {sources.map((s) => (
                     <tr key={s.id}>
-                      <td className="px-4 py-2 text-text-primary">{s.name}</td>
+                      <td className="px-4 py-2 text-text-primary">
+                        <p>{s.name}</p>
+                        {s.type === 'api' ? (
+                          <div className="mt-1 space-y-0.5 text-[10px] text-text-muted">
+                            {s.url ? <p>Base URL: {s.url}</p> : null}
+                            <p>
+                              Auth: {s.authType || 'none'}
+                              {typeof s.refreshHours === 'number' ? ` • Refresh: ${s.refreshHours}h` : ''}
+                            </p>
+                            {s.headerKeys && s.headerKeys.length > 0 ? (
+                              <p>Headers: {s.headerKeys.join(', ')}</p>
+                            ) : null}
+                            {s.schemaNotes ? <p>Schema notes: {s.schemaNotes}</p> : null}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-2 capitalize text-text-secondary">
                         {s.type === 'file' && 'File'}
                         {s.type === 'url' && 'URL'}
