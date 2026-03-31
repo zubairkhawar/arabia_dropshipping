@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Team, TeamMembership, TeamEvent
+from models import Team, TeamMembership, TeamEvent, Notification
 
 
 router = APIRouter()
@@ -192,6 +192,18 @@ async def add_member(
     )
     db.add(membership)
     db.add(
+        Notification(
+            tenant_id=payload.tenant_id,
+            agent_id=payload.agent_id,
+            type="team_assigned",
+            message=f"You have been assigned to team {team.name}",
+            description="You can now receive conversations routed to this team.",
+            from_agent_id=None,
+            conversation_id=None,
+            read=False,
+        )
+    )
+    db.add(
         TeamEvent(
             tenant_id=payload.tenant_id,
             team_id=team_id,
@@ -227,7 +239,29 @@ async def remove_member(
     if not membership:
         return
 
+    team = (
+        db.query(Team)
+        .filter(Team.id == team_id, Team.tenant_id == tenant_id)
+        .first()
+    )
+
     db.delete(membership)
+    db.add(
+        Notification(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            type="team_removed",
+            message=(
+                f"You have been removed from team {team.name}"
+                if team
+                else "You have been removed from your team"
+            ),
+            description="Team-based routing for this team is no longer applied to your account.",
+            from_agent_id=None,
+            conversation_id=None,
+            read=False,
+        )
+    )
     db.add(
         TeamEvent(
             tenant_id=tenant_id,
@@ -247,7 +281,24 @@ async def transfer_member(payload: TeamTransfer, db: Session = Depends(get_db)):
     """
     Transfer an agent from one team to another.
     """
+    from_team_name: Optional[str] = None
+    to_team_name: Optional[str] = None
+    to_team = (
+        db.query(Team)
+        .filter(Team.id == payload.to_team_id, Team.tenant_id == payload.tenant_id)
+        .first()
+    )
+    if not to_team:
+        raise HTTPException(status_code=404, detail="Target team not found")
+    to_team_name = to_team.name
+
     if payload.from_team_id:
+        from_team = (
+            db.query(Team)
+            .filter(Team.id == payload.from_team_id, Team.tenant_id == payload.tenant_id)
+            .first()
+        )
+        from_team_name = from_team.name if from_team else None
         db.query(TeamMembership).filter(
             TeamMembership.tenant_id == payload.tenant_id,
             TeamMembership.team_id == payload.from_team_id,
@@ -261,6 +312,22 @@ async def transfer_member(payload: TeamTransfer, db: Session = Depends(get_db)):
         created_at=datetime.utcnow(),
     )
     db.add(membership)
+    db.add(
+        Notification(
+            tenant_id=payload.tenant_id,
+            agent_id=payload.agent_id,
+            type="team_changed",
+            message=(
+                f"Your team assignment changed from {from_team_name} to {to_team_name}"
+                if from_team_name
+                else f"Your team assignment changed to {to_team_name}"
+            ),
+            description="Future team-routed conversations will follow your new team.",
+            from_agent_id=None,
+            conversation_id=None,
+            read=False,
+        )
+    )
     db.add(
         TeamEvent(
             tenant_id=payload.tenant_id,

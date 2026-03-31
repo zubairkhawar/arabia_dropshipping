@@ -7,6 +7,7 @@ export interface AgentRecord {
   id: string;
   email: string;
   name: string;
+  status: 'online' | 'busy' | 'offline';
   /**
    * Initial password set by the admin. Only stored on the client for convenience when
    * creating a new agent – the backend never returns plaintext passwords.
@@ -24,6 +25,7 @@ interface AgentsContextType {
   addAgent: (email: string, name: string, password: string) => Promise<boolean>;
   updateAgent: (id: string, updates: Partial<Pick<AgentRecord, 'name' | 'password' | 'avatarUrl'>>) => Promise<boolean>;
   removeAgent: (id: string) => Promise<boolean>;
+  setAgentStatus: (id: string, status: 'online' | 'busy' | 'offline') => Promise<boolean>;
 }
 
 const AgentsContext = createContext<AgentsContextType | undefined>(undefined);
@@ -46,6 +48,11 @@ interface AgentApiModel {
   status: string;
   team: string | null;
   created_at: string;
+}
+
+function normalizeAgentStatus(value: string | null | undefined): 'online' | 'busy' | 'offline' {
+  if (value === 'online' || value === 'busy') return value;
+  return 'offline';
 }
 
 function loadStoredPasswords(): Record<string, string> {
@@ -86,6 +93,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
       id: String(a.id),
       email: a.email,
       name: a.full_name || a.email.split('@')[0] || 'Agent',
+      status: normalizeAgentStatus(a.status),
       password: storedPasswords[String(a.id)] ?? '',
       avatarUrl: null,
       createdAt: a.created_at,
@@ -142,6 +150,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           id: String(created.id),
           email: created.email,
           name: created.full_name || name,
+          status: normalizeAgentStatus(created.status),
           password,
           avatarUrl: null,
           createdAt: created.created_at,
@@ -228,6 +237,30 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
     [agents],
   );
 
+  const setAgentStatus = useCallback(
+    async (id: string, status: 'online' | 'busy' | 'offline') => {
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) return false;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/routing/agents/${numericId}/status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ status }),
+        });
+        if (!res.ok) return false;
+        setAgents((prev) =>
+          prev.map((a) => (a.id === id ? { ...a, status: normalizeAgentStatus(status) } : a)),
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
   return (
     <AgentsContext.Provider
       value={{
@@ -238,6 +271,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         addAgent,
         updateAgent,
         removeAgent,
+        setAgentStatus,
       }}
     >
       {children}
@@ -256,6 +290,7 @@ export function useAgents() {
       addAgent: async () => false,
       updateAgent: async () => false,
       removeAgent: async () => false,
+      setAgentStatus: async () => false,
     };
   }
   return context;

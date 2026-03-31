@@ -15,6 +15,7 @@ from models import (
     TeamMembership,
     TeamEvent,
     Notification,
+    Team,
 )
 from services.auth_service.api import get_current_user
 from services.auth_service.services import get_password_hash
@@ -157,6 +158,53 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
         updated_at=datetime.utcnow(),
     )
     db.add(agent)
+    db.flush()
+    default_team_name = payload.team
+    if payload.team:
+        team = (
+            db.query(Team)
+            .filter(Team.tenant_id == payload.tenant_id, Team.name == payload.team)
+            .first()
+        )
+        if team:
+            exists = (
+                db.query(TeamMembership)
+                .filter(
+                    TeamMembership.tenant_id == payload.tenant_id,
+                    TeamMembership.team_id == team.id,
+                    TeamMembership.agent_id == agent.id,
+                )
+                .first()
+            )
+            if not exists:
+                db.add(
+                    TeamMembership(
+                        tenant_id=payload.tenant_id,
+                        team_id=team.id,
+                        agent_id=agent.id,
+                        created_at=datetime.utcnow(),
+                    )
+                )
+                default_team_name = team.name
+
+    welcome_description = "You can switch your availability from Offline to Active when your shift starts."
+    if default_team_name:
+        welcome_description = (
+            f"You are currently assigned to {default_team_name}. "
+            "You can switch your availability from Offline to Active when your shift starts."
+        )
+    db.add(
+        Notification(
+            tenant_id=payload.tenant_id,
+            agent_id=agent.id,
+            type="system_welcome",
+            message="Welcome to Arabia Dropship Agent Panel",
+            description=welcome_description,
+            from_agent_id=None,
+            conversation_id=None,
+            read=False,
+        )
+    )
     db.commit()
     db.refresh(agent)
 

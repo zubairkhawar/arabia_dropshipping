@@ -34,12 +34,13 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const avatarMenuRef = useRef<HTMLDivElement>(null);
   const { isCollapsed, toggleSidebar } = useSidebar();
   const { avatarUrl, fullName, setAvatarUrl, setFullName } = useAgentProfile();
-  const { currentAgentId, updateAgent, getCurrentAgent } = useAgents();
+  const { currentAgentId, updateAgent, getCurrentAgent, setAgentStatus } = useAgents();
   const currentAgent = getCurrentAgent();
-  const { getPresence, setPresence } = useAgentPresence();
+  const { setPresence } = useAgentPresence();
   const { isWithinSchedule, schedule } = useOnlineSchedule();
   const slug = getSlugByName(fullName);
-  const rawStatus = slug ? getPresence(slug) : 'offline';
+  const rawStatus: AgentStatus =
+    currentAgent?.status === 'online' || currentAgent?.status === 'busy' ? 'active' : 'offline';
   const agentStatus: AgentStatus = isWithinSchedule() ? rawStatus : 'offline';
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -175,6 +176,10 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                       key={status}
                       onClick={() => {
                         if (disabled) return;
+                        const targetBackendStatus = status === 'active' ? 'online' : 'offline';
+                        if (currentAgentId) {
+                          void setAgentStatus(currentAgentId, targetBackendStatus);
+                        }
                         if (slug) setPresence(slug, status);
                         setShowStatusMenu(false);
                       }}

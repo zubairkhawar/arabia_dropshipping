@@ -83,7 +83,10 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:3001",
         "https://arabia-dropshipping.vercel.app",
+        settings.frontend_base_url,
     ],
+    # Accept Vercel preview deployments and custom Vercel aliases.
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
