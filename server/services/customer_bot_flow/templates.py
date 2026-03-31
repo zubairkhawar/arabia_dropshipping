@@ -11,271 +11,209 @@ from typing import Any, Dict
 # Template id → language code → exact message ({placeholders} only where noted).
 BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     "entry": {
-        "roman_urdu": (
-            "👋 Salam! Welcome to *Arabia Dropshipping* 🚀\n\n"
-            "Aap new customer hain ya existing customer?\n\n"
-            "1️⃣ New customer\n"
-            "2️⃣ Existing customer\n\n"
-            "Reply mein 1 ya 2 likh dein 😊"
-        ),
         "english": (
-            "👋 Hi! Welcome to *Arabia Dropshipping* 🚀\n\n"
-            "Are you a:\n\n"
+            "👋 Hi! Welcome to Arabia Dropshipping 🚀\n\n"
+            "Are you:\n\n"
             "1️⃣ New customer\n"
             "2️⃣ Existing customer\n\n"
-            "Please reply with 1 or 2 😊"
+            "Reply with 1 or 2 😊"
         ),
         "arabic": (
-            "👋 مرحباً! أهلاً بك في *Arabia Dropshipping* 🚀\n\n"
+            "👋 السلام عليكم! مرحبًا بك في Arabia Dropshipping 🚀\n\n"
             "هل أنت:\n\n"
             "1️⃣ عميل جديد\n"
             "2️⃣ عميل حالي\n\n"
             "يرجى الرد بـ 1 أو 2 😊"
         ),
+        "roman_urdu": (
+            "👋 Salam! Welcome to Arabia Dropshipping 🚀\n\n"
+            "Aap new customer hain ya existing customer?\n\n"
+            "1️⃣ New customer\n"
+            "2️⃣ Existing customer\n\n"
+            "Reply mein 1 ya 2 likh dein 😊"
+        ),
     },
     "new_welcome": {
-        "roman_urdu": (
-            "✨ Great! Welcome onboard.\n\n"
-            "Hum aapki kaise madad kar sakte hain?\n\n"
-            "1️⃣ Dropshipping ke baray mein maloomat\n"
-            "2️⃣ Products dekhna\n"
-            "3️⃣ Support se baat karna\n\n"
-            "Aap apna sawal bhi likh sakte hain 💬"
-        ),
         "english": (
-            "✨ Great! Welcome onboard.\n\n"
+            "Great! 🎉\n\n"
             "How can we help you today?\n\n"
-            "1️⃣ Learn about dropshipping\n"
-            "2️⃣ View products\n"
-            "3️⃣ Talk to support\n\n"
-            "You can also type your question 💬"
+            "1️⃣ Browse products 🛍️\n"
+            "2️⃣ Get information ℹ️\n"
+            "3️⃣ Talk to support 👨‍💼\n\n"
+            "Or type your question anytime 💬"
         ),
         "arabic": (
-            "✨ رائع! أهلاً بك معنا.\n\n"
-            "كيف يمكننا مساعدتك؟\n\n"
-            "1️⃣ التعرف على الدروبشيبينغ\n"
-            "2️⃣ عرض المنتجات\n"
-            "3️⃣ التحدث مع الدعم\n\n"
-            "يمكنك أيضاً كتابة سؤالك 💬"
+            "رائع! 🎉\n\n"
+            "كيف يمكننا مساعدتك اليوم؟\n\n"
+            "1️⃣ تصفح المنتجات 🛍️\n"
+            "2️⃣ الحصول على معلومات ℹ️\n"
+            "3️⃣ التحدث مع الدعم 👨‍💼\n\n"
+            "أو اكتب سؤالك في أي وقت 💬"
+        ),
+        "roman_urdu": (
+            "Zabardast! 🎉\n\n"
+            "Aap ko kis cheez mein madad chahiye?\n\n"
+            "1️⃣ Products dekhna 🛍️\n"
+            "2️⃣ Maloomat lena ℹ️\n"
+            "3️⃣ Support se baat karna 👨‍💼\n\n"
+            "Ya apna sawal likh dein 💬"
         ),
     },
-    # After a greeting (Salam / hi / hello) on new-customer menu — server-only, no LLM / no kb_wrap.
     "new_menu_after_greeting": {
-        "roman_urdu": (
-            "Walaykum assalam! 🌙\n\n"
-            "Hum aapki kaise madad kar sakte hain?\n\n"
-            "1️⃣ Dropshipping ke baray mein maloomat\n"
-            "2️⃣ Products dekhna\n"
-            "3️⃣ Support se baat karna\n\n"
-            "Aap apna sawal bhi likh sakte hain 💬"
-        ),
         "english": (
             "Hello! 👋\n\n"
             "How can we help you today?\n\n"
-            "1️⃣ Learn about dropshipping\n"
-            "2️⃣ View products\n"
-            "3️⃣ Talk to support\n\n"
-            "You can also type your question 💬"
+            "1️⃣ Browse products 🛍️\n"
+            "2️⃣ Get information ℹ️\n"
+            "3️⃣ Talk to support 👨‍💼\n\n"
+            "Or type your question anytime 💬"
         ),
         "arabic": (
             "وعليكم السلام ورحمة الله 🌙\n\n"
-            "كيف يمكننا مساعدتك؟\n\n"
-            "1️⃣ التعرف على الدروبشيبينغ\n"
-            "2️⃣ عرض المنتجات\n"
-            "3️⃣ التحدث مع الدعم\n\n"
-            "يمكنك أيضاً كتابة سؤالك 💬"
+            "كيف يمكننا مساعدتك اليوم؟\n\n"
+            "1️⃣ تصفح المنتجات 🛍️\n"
+            "2️⃣ الحصول على معلومات ℹ️\n"
+            "3️⃣ التحدث مع الدعم 👨‍💼\n\n"
+            "أو اكتب سؤالك في أي وقت 💬"
+        ),
+        "roman_urdu": (
+            "Walaykum assalam! 🌙\n\n"
+            "Aap ko kis cheez mein madad chahiye?\n\n"
+            "1️⃣ Products dekhna 🛍️\n"
+            "2️⃣ Maloomat lena ℹ️\n"
+            "3️⃣ Support se baat karna 👨‍💼\n\n"
+            "Ya apna sawal likh dein 💬"
         ),
     },
-    # New-customer path: order questions / order IDs need Existing customer flow (server-only).
     "new_customer_order_use_existing_flow": {
-        "roman_urdu": (
-            "📦 Order ka status **Existing customer** flow se milta hai (verify → Order track).\n\n"
-            "Aap abhi **New customer** menu par hain — yahan se order lookup nahi hota.\n\n"
-            "Order ke liye:\n"
-            "1️⃣ Neeche **2** likhein (*Existing customer*)\n"
-            "2️⃣ Verify complete karein\n"
-            "3️⃣ Phir menu se **Order track** choose karein aur Order ID bhejein\n\n"
-            "Agar aap waqai naye customer hain aur dropshipping / products ke baray mein poochna hai to isi menu se **1 / 2 / 3** reply karein."
-        ),
         "english": (
-            "📦 Order status is only available in the **Existing customer** flow (verify → Track order).\n\n"
-            "You are on the **New customer** menu — we do not look up orders here.\n\n"
-            "To track an order:\n"
-            "1️⃣ Reply **2** (*Existing customer*)\n"
-            "2️⃣ Complete verification\n"
-            "3️⃣ Choose **Track order** from the menu and enter your Order ID\n\n"
-            "If you are truly a new lead and want info about dropshipping or products, keep using **1 / 2 / 3** on this menu."
+            "📦 Order status is only available in the Existing customer flow (verify → Track order).\n\n"
+            "Please reply with 2 (Existing customer), complete verification, then choose Track order and send your Order ID."
         ),
         "arabic": (
-            "📦 حالة الطلب متاحة فقط في مسار **عميل حالي** (تحقق ← تتبع الطلب).\n\n"
-            "أنت الآن في قائمة **عميل جديد** — لا نبحث عن الطلبات من هنا.\n\n"
-            "لتتبع الطلب:\n"
-            "1️⃣ اكتب **2** (*عميل حالي*)\n"
-            "2️⃣ أكمل التحقق\n"
-            "3️⃣ اختر **تتبع الطلب** من القائمة ثم أرسل رقم الطلب\n\n"
-            "إذا كنت عميلاً جديداً وتريد معلومات عن الدروبشيبينغ أو المنتجات، استمر باستخدام **1 / 2 / 3** في هذه القائمة."
+            "📦 حالة الطلب متاحة فقط في مسار عميل حالي (تحقق ← تتبع الطلب).\n\n"
+            "يرجى الرد بـ 2 (عميل حالي)، ثم أكمل التحقق واختر تتبع الطلب وأرسل رقم الطلب."
+        ),
+        "roman_urdu": (
+            "📦 Order status sirf Existing customer flow mein milta hai (verify → Order track).\n\n"
+            "Please 2 (Existing customer) reply karein, verify complete karein, phir Order track choose karke Order ID bhejein."
         ),
     },
     "verify": {
-        "roman_urdu": (
-            "🔐 Apna account verify karne ke liye code enter karein:\n\n"
-            "(verification system will be added later — abhi ke liye apna code yahan likh dein.)"
-        ),
-        "english": (
-            "🔐 Please verify your account.\n\n"
-            "Enter the verification code sent to you:\n"
-            "(Full verification will be enabled soon — for now, send any code to continue.)"
-        ),
-        "arabic": (
-            "🔐 يرجى التحقق من حسابك.\n\n"
-            "أدخل رمز التحقق المرسل إليك:\n"
-            "(سيتم تفعيل التحقق الكامل لاحقاً — يمكنك إرسال أي رمز للمتابعة الآن.)"
-        ),
+        "english": "Please enter your verification code 🔐",
+        "arabic": "يرجى إدخال رمز التحقق 🔐",
+        "roman_urdu": "Apna verification code enter karein 🔐",
     },
     "verified_menu": {
-        "roman_urdu": (
-            "✅ Verified successfully!\n\n"
-            "Aap kya karna chahte hain?\n\n"
-            "1️⃣ Order track karein 📦\n"
-            "2️⃣ Account support\n"
-            "3️⃣ Agent se baat karein 👨‍💼"
-        ),
         "english": (
             "✅ Verified successfully!\n\n"
             "How can we assist you?\n\n"
             "1️⃣ Track your order 📦\n"
-            "2️⃣ Account support\n"
-            "3️⃣ Talk to agent 👨‍💼"
+            "2️⃣ Order details 📄\n"
+            "3️⃣ Talk to support 👨‍💼\n\n"
+            "Or type your question 💬"
         ),
         "arabic": (
             "✅ تم التحقق بنجاح!\n\n"
             "كيف يمكننا مساعدتك؟\n\n"
             "1️⃣ تتبع الطلب 📦\n"
-            "2️⃣ دعم الحساب\n"
-            "3️⃣ التحدث مع موظف 👨‍💼"
+            "2️⃣ تفاصيل الطلب 📄\n"
+            "3️⃣ التحدث مع الدعم 👨‍💼"
+        ),
+        "roman_urdu": (
+            "✅ Verification successful!\n\n"
+            "Aap kya karna chahte hain?\n\n"
+            "1️⃣ Order track karein 📦\n"
+            "2️⃣ Order details dekhein 📄\n"
+            "3️⃣ Support se baat karein 👨‍💼"
         ),
     },
     "ask_order": {
-        "roman_urdu": "📦 Apna Order ID likhein:\nExample: 123456",
-        "english": "📦 Please enter your Order ID:\nExample: 123456",
-        "arabic": "📦 يرجى إدخال رقم الطلب:\nمثال: 123456",
+        "english": "📦 Please enter your Order ID:",
+        "arabic": "📦 يرجى إدخال رقم الطلب:",
+        "roman_urdu": "Apna Order ID bhejein 📦",
     },
     "order_found": {
-        "roman_urdu": (
-            "✅ Order mil gaya!\n\n"
-            "📦 Order ID: {order_id}\n"
-            "📍 Status: {status}\n"
-            "🚚 Delivery: {delivery}\n\n"
-            "Shukriya 💙"
-        ),
         "english": (
             "✅ Order found!\n\n"
             "📦 Order ID: {order_id}\n"
             "📍 Status: {status}\n"
-            "🚚 Delivery: {delivery}\n\n"
-            "Thank you 💙"
+            "🚚 Delivery: {delivery}"
         ),
         "arabic": (
             "✅ تم العثور على الطلب!\n\n"
             "📦 رقم الطلب: {order_id}\n"
             "📍 الحالة: {status}\n"
-            "🚚 التوصيل: {delivery}\n\n"
-            "شكراً 💙"
+            "🚚 التوصيل: {delivery}"
+        ),
+        "roman_urdu": (
+            "✅ Order mil gaya!\n\n"
+            "📦 Order ID: {order_id}\n"
+            "📍 Status: {status}\n"
+            "🚚 Delivery: {delivery}"
         ),
     },
     "order_not_found": {
-        "roman_urdu": (
-            "❌ Order nahi mila.\n\n"
-            "Dobara check karein ya *support* likhein."
-        ),
-        "english": (
-            "❌ Order not found.\n\n"
-            "Please double-check or type *support*."
-        ),
-        "arabic": (
-            "❌ لم يتم العثور على الطلب.\n\n"
-            "يرجى التحقق مرة أخرى أو اكتب *support*."
-        ),
+        "english": "Order nahi mila. Dobara check karein ya support likhein.",
+        "arabic": "لم يتم العثور على الطلب. يرجى التحقق مرة أخرى أو اكتب support.",
+        "roman_urdu": "Order nahi mila. Dobara check karein ya support likhein.",
     },
     "connecting": {
-        "roman_urdu": (
-            "👨‍💼 Aap ko agent se connect kiya ja raha hai...\n\n"
-            "Thori dair intezar karein."
-        ),
         "english": (
-            "👨‍💼 Connecting you to a support agent...\n\n"
-            "Please wait a moment."
+            "Sure! Connecting you to a human agent 👨‍💼\n"
+            "Please wait a moment…"
         ),
         "arabic": (
-            "👨‍💼 جاري توصيلك بموظف الدعم...\n\n"
-            "يرجى الانتظار لحظة."
+            "حسنًا! سيتم توصيلك بأحد الموظفين 👨‍💼\n"
+            "يرجى الانتظار قليلاً…"
+        ),
+        "roman_urdu": (
+            "Theek hai! Aap ko agent se connect kiya ja raha hai 👨‍💼\n"
+            "Thora intezar karein…"
         ),
     },
     "experience": {
-        "roman_urdu": (
-            "📊 Aap ka dropshipping experience kitna hai?\n\n"
-            "1️⃣ Less than 1 year\n"
-            "2️⃣ 1–2 years\n"
-            "3️⃣ 3+ years"
-        ),
         "english": (
-            "📊 How much experience do you have in dropshipping?\n\n"
+            "How much experience do you have in dropshipping?\n\n"
             "1️⃣ Less than 1 year\n"
             "2️⃣ 1–2 years\n"
             "3️⃣ 3+ years"
         ),
         "arabic": (
-            "📊 ما مقدار خبرتك في الدروبشيبينغ؟\n\n"
+            "ما مقدار خبرتك في الدروبشيبينغ؟\n\n"
             "1️⃣ أقل من سنة\n"
             "2️⃣ من 1 إلى سنتين\n"
             "3️⃣ أكثر من 3 سنوات"
         ),
+        "roman_urdu": (
+            "Aap ka dropshipping experience kitna hai?\n\n"
+            "1️⃣ 1 saal se kam\n"
+            "2️⃣ 1–2 saal\n"
+            "3️⃣ 3+ saal"
+        ),
     },
     "kb_wrap": {
-        "roman_urdu": "💡 Yeh information aap ke liye:\n\n{body}\n\nMazeed madad ke liye *support* likhein 👨‍💼",
-        "english": "💡 Here's what you need to know:\n\n{body}\n\nNeed more help? Type *support* 👨‍💼",
-        "arabic": "💡 إليك المعلومات:\n\n{body}\n\nلمزيد من المساعدة اكتب *support* 👨‍💼",
+        "english": "💡 Here's what you need to know:\n\n{body}\n\nNeed more help? Type support 👨‍💼",
+        "arabic": "💡 إليك المعلومات:\n\n{body}\n\nلمزيد من المساعدة اكتب support 👨‍💼",
+        "roman_urdu": "💡 Yeh information aap ke liye:\n\n{body}\n\nMazeed madad ke liye support likhein 👨‍💼",
     },
     "products_hint": {
-        "roman_urdu": (
-            "🛍️ Products ke liye hamari website / catalog dekhein (admin se link add karwa sakte hain).\n\n"
-            "Aur sawal ho to likhein ya *support* likhein 👨‍💼"
-        ),
-        "english": (
-            "🛍️ Please browse our website / catalog for products (your admin can add a direct link).\n\n"
-            "Ask another question or type *support* 👨‍💼"
-        ),
-        "arabic": (
-            "🛍️ يمكنك تصفح موقعنا / الكتالوج للمنتجات (يمكن للمسؤول إضافة رابط).\n\n"
-            "اكتب سؤالاً آخر أو *support* 👨‍💼"
-        ),
-    },
-    "account_support": {
-        "roman_urdu": (
-            "💬 Account support ke liye aap ko specialist se connect kiya ja raha hai...\n\n"
-            "Thori dair intezar karein."
-        ),
-        "english": (
-            "💬 Connecting you with account support...\n\n"
-            "Please wait a moment."
-        ),
-        "arabic": (
-            "💬 جاري توصيلك بدعم الحساب...\n\n"
-            "يرجى الانتظار لحظة."
-        ),
+        "english": "Browse products section is available. You can also type your question 💬",
+        "arabic": "يمكنك تصفح قسم المنتجات. ويمكنك أيضاً كتابة سؤالك 💬",
+        "roman_urdu": "Aap products browse kar sakte hain. Ya apna sawal likh dein 💬",
     },
     "fallback": {
-        "roman_urdu": (
-            "🤖 Samajh nahi aaya.\n\n"
-            "Please 1 ya 2 select karein ya apna sawal likhein 😊"
-        ),
         "english": (
-            "🤖 Sorry, I didn't understand that.\n\n"
-            "Please choose an option or type your question."
+            "I didn’t understand that 🤔\n"
+            "Please choose an option or type your question 💬"
         ),
         "arabic": (
-            "🤖 لم أفهم ذلك.\n\n"
-            "يرجى اختيار خيار أو كتابة سؤالك."
+            "لم أفهم ذلك 🤔\n"
+            "يرجى اختيار خيار أو كتابة سؤالك 💬"
+        ),
+        "roman_urdu": (
+            "Mujhay samajh nahi aaya 🤔\n"
+            "Please option select karein ya sawal likhein 💬"
         ),
     },
 }

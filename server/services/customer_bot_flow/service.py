@@ -156,7 +156,9 @@ def _is_escalation_trigger(text: str) -> bool:
         "agent",
         "help",
         "baat karni hai",
+        "baat karna hai",
         "talk to human",
+        "talk to someone",
         "human",
         "talk to",
         "speak with",
@@ -408,19 +410,14 @@ async def process_customer_bot_message(
         return save(flow, _t(flow_lang, MSGS["verify"]))
 
     if step == "existing_verified_menu":
-        choice = _parse_choice(text, {"1": "track", "2": "account", "3": "agent"})
+        choice = _parse_choice(text, {"1": "track", "2": "details", "3": "support"})
         if choice == "track":
             f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
             return save(f, _t(flow_lang, MSGS["ask_order"]))
-        if choice == "account":
-            f = {**flow, "step": "awaiting_agent", "lang": flow_lang}
-            return save(
-                f,
-                _t(flow_lang, MSGS["account_support"]),
-                team=TEAM_INTERMEDIATE,
-                esc=True,
-            )
-        if choice == "agent":
+        if choice == "details":
+            f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
+            return save(f, _t(flow_lang, MSGS["ask_order"]))
+        if choice == "support":
             f = {**flow, "step": "existing_awaiting_experience", "lang": flow_lang}
             return save(f, _t(flow_lang, MSGS["experience"]))
         return save(
@@ -470,18 +467,18 @@ async def process_customer_bot_message(
         )
 
     if step == "new_main_menu":
-        choice = _parse_choice(text, {"1": "learn", "2": "products", "3": "support"})
-        if choice == "learn":
+        choice = _parse_choice(text, {"1": "products", "2": "info", "3": "support"})
+        if choice == "products":
+            f = {**flow, "step": "new_main_menu", "lang": flow_lang}
+            return save(f, _t(flow_lang, MSGS["products_hint"]))
+        if choice == "info":
             f = {**flow, "step": "new_main_menu", "lang": flow_lang}
             return ai_forward(
-                "[Customer selected: learn about dropshipping — answer from knowledge base, concise.] "
+                "[Customer selected: get information — answer from knowledge base, concise.] "
                 + text,
                 f,
                 skip_api=True,
             )
-        if choice == "products":
-            f = {**flow, "step": "new_main_menu", "lang": flow_lang}
-            return save(f, _t(flow_lang, MSGS["products_hint"]))
         if choice == "support":
             f = {**flow, "step": "awaiting_agent", "lang": flow_lang}
             return save(

@@ -332,7 +332,9 @@ templates. Only answer substantive support questions in free text.
             "talk to",
             "speak with",
             "talk to human",
+            "talk to someone",
             "baat karni hai",
+            "baat karna hai",
             "madad",
             "representative",
         )
