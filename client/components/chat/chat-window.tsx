@@ -205,6 +205,16 @@ export function ChatWindow({
       ? inboxConv.conversations.find((c) => c.id === inboxConv.selectedId)
       : undefined;
   const isInboxWithSelection = !!inboxConv && inboxConv.selectedId != null;
+  const headerTitle = isTeamChannel && teamName
+    ? `# Team Channel • ${teamName}`
+    : isInboxPage
+      ? (selectedConv?.customerName || (readOnly ? 'No conversation selected' : title))
+      : title;
+  const headerSubtitle = isTeamChannel && teamMemberNames.length > 0
+    ? teamMemberNames.join(', ')
+    : isInboxPage
+      ? (selectedConv ? `Conversation ${selectedConv.customerId}` : 'Select a conversation to begin monitoring.')
+      : subtitle;
 
   useEffect(() => {
     if (!isInboxWithSelection || isInternalChat) return;
@@ -661,12 +671,10 @@ export function ChatWindow({
             </span>
           )}
           <h3 className="font-medium text-text-primary">
-            {isTeamChannel && teamName ? `# Team Channel • ${teamName}` : title}
+            {headerTitle}
           </h3>
           <p className="text-xs text-text-secondary">
-            {isTeamChannel && teamMemberNames.length > 0
-              ? teamMemberNames.join(', ')
-              : subtitle}
+            {headerSubtitle}
           </p>
         </div>
         <div className="relative flex items-center gap-2">
