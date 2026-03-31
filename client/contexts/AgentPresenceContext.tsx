@@ -1,25 +1,30 @@
 'use client';
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
+import { useTeams } from '@/contexts/TeamsContext';
+import { useAgents } from '@/contexts/AgentsContext';
 
 const STORAGE_KEY = 'agent-presence';
 
 export type PresenceStatus = 'active' | 'offline';
+export interface PresenceMember {
+  agentId: string;
+  slug: string;
+  name: string;
+}
 
-/** Agents grouped by team for DM picker. Slug is used in routes and presence. */
-export const AGENTS_BY_TEAM: { team: string; members: { slug: string; name: string }[] }[] = [
-  { team: 'Team A', members: [{ slug: 'hamza', name: 'Hamza' }, { slug: 'zubair', name: 'Zubair' }] },
-  { team: 'Team B', members: [{ slug: 'ali', name: 'Ali' }, { slug: 'alina', name: 'Alina' }] },
-  { team: 'Team C', members: [{ slug: 'aizal', name: 'Aizal' }, { slug: 'waqar', name: 'Waqar' }] },
-];
+export interface PresenceTeamGroup {
+  team: string;
+  members: PresenceMember[];
+}
 
 export function getSlugByName(name: string): string | null {
-  const normalized = name.trim().toLowerCase();
-  for (const { members } of AGENTS_BY_TEAM) {
-    const m = members.find((x) => x.name.toLowerCase() === normalized);
-    if (m) return m.slug;
-  }
-  return null;
+  const normalized = name.trim();
+  if (!normalized) return null;
+  return normalized
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 function loadPresenceFromStorage(): Record<string, PresenceStatus> {
@@ -44,13 +49,15 @@ function savePresenceToStorage(map: Record<string, PresenceStatus>) {
 interface AgentPresenceContextType {
   getPresence: (slug: string) => PresenceStatus;
   setPresence: (slug: string, status: PresenceStatus) => void;
-  agentsByTeam: typeof AGENTS_BY_TEAM;
+  agentsByTeam: PresenceTeamGroup[];
 }
 
 const AgentPresenceContext = createContext<AgentPresenceContextType | undefined>(undefined);
 
 export function AgentPresenceProvider({ children }: { children: ReactNode }) {
   const [presenceMap, setPresenceMap] = useState<Record<string, PresenceStatus>>(loadPresenceFromStorage);
+  const { teams } = useTeams();
+  const { agents } = useAgents();
 
   useEffect(() => {
     setPresenceMap(loadPresenceFromStorage());
@@ -69,12 +76,42 @@ export function AgentPresenceProvider({ children }: { children: ReactNode }) {
     [presenceMap],
   );
 
+  const teamGroups: PresenceTeamGroup[] = teams
+    .map((team) => ({
+      team: team.name,
+      members: team.members
+        .map((member) => ({
+          agentId: member.agentId,
+          name: member.name,
+          slug: getSlugByName(member.name) || member.agentId,
+        }))
+        .filter((member) => Boolean(member.slug)),
+    }))
+    .filter((group) => group.members.length > 0);
+
+  const assignedAgentIds = new Set(
+    teams.flatMap((team) => team.members.map((member) => member.agentId)),
+  );
+  const unassignedMembers: PresenceMember[] = agents
+    .filter((agent) => !assignedAgentIds.has(agent.id))
+    .map((agent) => ({
+      agentId: agent.id,
+      name: agent.name,
+      slug: getSlugByName(agent.name) || agent.id,
+    }))
+    .filter((member) => Boolean(member.slug));
+
+  const agentsByTeam: PresenceTeamGroup[] =
+    unassignedMembers.length > 0
+      ? [...teamGroups, { team: 'Unassigned', members: unassignedMembers }]
+      : teamGroups;
+
   return (
     <AgentPresenceContext.Provider
       value={{
         getPresence,
         setPresence,
-        agentsByTeam: AGENTS_BY_TEAM,
+        agentsByTeam,
       }}
     >
       {children}
@@ -88,7 +125,7 @@ export function useAgentPresence() {
     return {
       getPresence: (_slug: string) => 'offline' as PresenceStatus,
       setPresence: () => {},
-      agentsByTeam: AGENTS_BY_TEAM,
+      agentsByTeam: [] as PresenceTeamGroup[],
     };
   }
   return context;

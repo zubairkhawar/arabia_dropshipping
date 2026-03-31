@@ -261,3 +261,25 @@ class KnowledgeSource(Base):
     knowledge_metadata = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# Internal agent-to-agent direct messages
+class InternalDmConversation(Base):
+    __tablename__ = "internal_dm_conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    agent_one_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    agent_two_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class InternalDmMessage(Base):
+    __tablename__ = "internal_dm_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("internal_dm_conversations.id"), nullable=False, index=True)
+    sender_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

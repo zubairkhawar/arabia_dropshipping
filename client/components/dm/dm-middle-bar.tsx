@@ -111,7 +111,7 @@ export function DmMiddleBar() {
                               <Link
                                 href={`/agent/dm/${member.slug}`}
                                 onClick={() => {
-                                  addOrUpdateConversation(member.slug, member.name);
+                                  void addOrUpdateConversation(member.agentId, member.slug, member.name);
                                   setShowDropup(false);
                                 }}
                                 className={`flex items-center gap-3 rounded-lg px-3 py-2 transition-colors ${
@@ -200,7 +200,7 @@ export function DmMiddleBar() {
                               <Link
                                 href={`/agent/dm/${member.slug}`}
                                 onClick={() => {
-                                  addOrUpdateConversation(member.slug, member.name);
+                                  void addOrUpdateConversation(member.agentId, member.slug, member.name);
                                   setShowDropup(false);
                                 }}
                                 className={`flex items-center gap-3 rounded-lg px-3 py-2 transition-colors ${

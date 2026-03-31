@@ -20,6 +20,7 @@ from services.teams_service.api import router as teams_router
 from services.notifications_service.api import router as notifications_router
 from services.broadcasts_service.api import router as broadcasts_router
 from services.knowledge_service.api import router as knowledge_router
+from services.internal_dm_service.api import router as internal_dm_router
 
 
 def ensure_admin_user() -> None:
@@ -105,6 +106,7 @@ app.include_router(teams_router, prefix="/api/teams", tags=["teams"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(broadcasts_router, prefix="/api", tags=["broadcasts"])
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["knowledge"])
+app.include_router(internal_dm_router, prefix="/api/internal-dm", tags=["internal-dm"])
 
 
 @app.get("/")

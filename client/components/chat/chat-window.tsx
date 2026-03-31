@@ -34,6 +34,7 @@ import type { TeamEvent } from '@/contexts/TeamsContext';
 import { useTeams } from '@/contexts/TeamsContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { useNotifications } from '@/contexts/NotificationsContext';
+import { useDmChats } from '@/contexts/DmChatsContext';
 
 interface MessageAttachment {
   type: 'file' | 'photo' | 'voice';
@@ -170,6 +171,7 @@ export function ChatWindow({
   const { teams } = useTeams();
   const { agents, getCurrentAgent } = useAgents();
   const notifications = useNotifications();
+  const { getMessagesBySlug, loadMessagesBySlug, sendMessageBySlug } = useDmChats();
 
   const transferTargetOptions = (() => {
     const currentName = agentFullName || getCurrentAgent()?.name || '';
@@ -187,11 +189,15 @@ export function ChatWindow({
   })();
   const isTeamChannel = pathname?.startsWith('/agent/team') || (pathname?.startsWith('/admin/teams') && !!teamName);
   const isDmPage = pathname?.startsWith('/agent/dm');
+  const dmSlug = isDmPage ? (pathname.replace('/agent/dm/', '').split('/')[0] || null) : null;
   const isInboxPage = pathname?.startsWith('/agent/inbox') || pathname?.startsWith('/admin/inbox');
   const showBroadcastInput = broadcastMode && isInternalChat && !!teamName;
 
   const [messages, setMessages] = useState<Message[]>(() => {
     if (isInboxPage && !isInternalChat) {
+      return [];
+    }
+    if (isInternalChat && isDmPage) {
       return [];
     }
     if (isInternalChat && isTeamChannel) {
@@ -223,6 +229,25 @@ export function ChatWindow({
     const stored = inboxConv.getMessages(convId);
     setMessages(stored as Message[]);
   }, [isInboxWithSelection, inboxConv?.selectedId]);
+
+  useEffect(() => {
+    if (!isInternalChat || !isDmPage || !dmSlug) return;
+    void loadMessagesBySlug(dmSlug);
+  }, [isInternalChat, isDmPage, dmSlug, loadMessagesBySlug]);
+
+  useEffect(() => {
+    if (!isInternalChat || !isDmPage || !dmSlug) return;
+    const rows = getMessagesBySlug(dmSlug);
+    const mapped: Message[] = rows.map((m) => ({
+      id: m.id,
+      content: m.content,
+      sender: m.senderName === 'You' ? 'agent' : 'customer',
+      senderName: m.senderName,
+      timestamp: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      sentAt: m.createdAt,
+    }));
+    setMessages(mapped);
+  }, [isInternalChat, isDmPage, dmSlug, getMessagesBySlug]);
   const [inputValue, setInputValue] = useState('');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
@@ -508,6 +533,14 @@ export function ChatWindow({
       replyTo: replyingTo ?? undefined,
       attachment: pendingAttachment ?? undefined,
     };
+    if (isInternalChat && isDmPage && dmSlug) {
+      void sendMessageBySlug(dmSlug, newMsg.content);
+      setInputValue('');
+      setReplyingTo(null);
+      setPendingAttachment(null);
+      setShowMentionDropdown(false);
+      return;
+    }
     setMessages((prev) => [...prev, newMsg]);
     setInputValue('');
     setReplyingTo(null);
