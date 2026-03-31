@@ -20,8 +20,10 @@ async def get_dashboard_analytics(
     """
     High-level dashboard analytics used by the admin dashboard.
     Returns:
+    - total_conversations
+    - total_conversations_change_percent (vs previous period)
     - total_messages
-    - total_messages_change_percent (vs previous period)
+    - total_messages_change_percent (vs previous period, kept for compatibility)
     - total_agents
     - active_agents (online)
     - ai_handled_percent (messages from AI vs total)
@@ -29,6 +31,40 @@ async def get_dashboard_analytics(
     now = datetime.utcnow()
     period_start = now - timedelta(days=days)
     prev_start = period_start - timedelta(days=days)
+
+    # Total conversations current period
+    total_conversations_current = (
+        db.query(func.count(Conversation.id))
+        .filter(
+            Conversation.tenant_id == tenant_id,
+            Conversation.created_at >= period_start,
+            Conversation.created_at <= now,
+        )
+        .scalar()
+        or 0
+    )
+
+    # Total conversations previous period
+    total_conversations_prev = (
+        db.query(func.count(Conversation.id))
+        .filter(
+            Conversation.tenant_id == tenant_id,
+            Conversation.created_at >= prev_start,
+            Conversation.created_at < period_start,
+        )
+        .scalar()
+        or 0
+    )
+
+    if total_conversations_prev == 0:
+        total_conversations_change_percent = (
+            100.0 if total_conversations_current > 0 else 0.0
+        )
+    else:
+        total_conversations_change_percent = (
+            (total_conversations_current - total_conversations_prev)
+            / total_conversations_prev
+        ) * 100.0
 
     # Total messages current period
     total_current = (
@@ -93,6 +129,8 @@ async def get_dashboard_analytics(
     )
 
     return {
+        "total_conversations": total_conversations_current,
+        "total_conversations_change_percent": total_conversations_change_percent,
         "total_messages": total_current,
         "total_messages_change_percent": total_change_percent,
         "ai_handled_percent": ai_handled_percent,

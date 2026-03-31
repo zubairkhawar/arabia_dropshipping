@@ -15,6 +15,8 @@ const API_BASE =
 const TENANT_ID = 1;
 
 interface DashboardAnalyticsApi {
+  total_conversations: number;
+  total_conversations_change_percent: number;
   total_messages: number;
   total_messages_change_percent: number;
   ai_handled_percent: number;
@@ -94,14 +96,15 @@ export default function AdminDashboard() {
     };
   }, [toast]);
 
+  const totalConversations = dashboard?.total_conversations ?? 0;
   const totalMessages = dashboard?.total_messages ?? 0;
   const aiHandledPercent = dashboard?.ai_handled_percent ?? 0;
   const aiHandledMessages = Math.round(totalMessages * (aiHandledPercent / 100));
   const totalAgents = dashboard?.total_agents ?? 0;
   const activeAgents = dashboard?.active_agents ?? 0;
-  const messageChange = dashboard?.total_messages_change_percent ?? 0;
-  const messageChangeType = messageChange >= 0 ? 'positive' : 'negative';
-  const formattedChange = `${messageChange >= 0 ? '+' : ''}${messageChange.toFixed(1)}% from last week`;
+  const conversationsChange = dashboard?.total_conversations_change_percent ?? 0;
+  const conversationsChangeType = conversationsChange >= 0 ? 'positive' : 'negative';
+  const formattedConversationsChange = `${conversationsChange >= 0 ? '+' : ''}${conversationsChange.toFixed(1)}% from last week`;
   const hasLanguageData = useMemo(
     () => languageDistribution.some((l) => l.value > 0),
     [languageDistribution],
@@ -116,10 +119,10 @@ export default function AdminDashboard() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <KPICard
-          title="Total Messages"
-          value={totalMessages.toLocaleString()}
-          change={formattedChange}
-          changeType={messageChangeType}
+          title="Total Conversations"
+          value={totalConversations.toLocaleString()}
+          change={formattedConversationsChange}
+          changeType={conversationsChangeType}
           icon={<MessageCircle className={iconClass} />}
         />
         <KPICard

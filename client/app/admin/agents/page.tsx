@@ -10,6 +10,11 @@ import { buildSingleAgentPdf, filterByMonth } from '@/lib/attendance-pdf';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const NAME_RE = /^[A-Za-z]+$/;
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  'https://arabia-dropshipping.onrender.com';
+const TENANT_ID = 1;
 
 function formatAvgResponse(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -59,6 +64,7 @@ export default function AdminAgents() {
   const [agentReportYear, setAgentReportYear] = useState(() => new Date().getFullYear());
   const [agentReportDownloading, setAgentReportDownloading] = useState(false);
   const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<{ id: string; label: string } | null>(null);
+  const [selectedAgentHasConversations, setSelectedAgentHasConversations] = useState(false);
 
   useEffect(() => {
     if (!selectedId && agents.length > 0) {
@@ -72,6 +78,35 @@ export default function AdminAgents() {
     setEditingName(false);
   }, [selectedId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadConversationPresence(agentId: string) {
+      try {
+        const url = new URL(`${API_BASE}/api/messaging/conversations`);
+        url.searchParams.set('tenant_id', String(TENANT_ID));
+        url.searchParams.set('agent_id', String(Number(agentId)));
+        const res = await fetch(url.toString());
+        if (!res.ok) return;
+        const data = (await res.json()) as { conversations?: unknown[] };
+        if (!cancelled) {
+          setSelectedAgentHasConversations((data.conversations?.length ?? 0) > 0);
+        }
+      } catch {
+        if (!cancelled) {
+          setSelectedAgentHasConversations(false);
+        }
+      }
+    }
+    if (!selectedId) {
+      setSelectedAgentHasConversations(false);
+      return;
+    }
+    void loadConversationPresence(selectedId);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
   const selectedAgent = useMemo(
     () => agents.find((a) => a.id === selectedId) ?? null,
     [agents, selectedId],
@@ -79,6 +114,9 @@ export default function AdminAgents() {
   const { dayData: attendanceDayData } = useAgentAttendanceData(selectedAgent?.id, schedule.workingDays);
   const visibleAttendanceDayData = useMemo(() => {
     if (!selectedAgent) return [];
+    if (!selectedAgentHasConversations) {
+      return attendanceDayData.map((d) => ({ ...d, hoursWorked: 0, sessions: [] }));
+    }
     const created = new Date(selectedAgent.createdAt);
     if (Number.isNaN(created.getTime())) return attendanceDayData;
     // Avoid fake historical attendance for newly created agents: only show after next day.
@@ -88,11 +126,12 @@ export default function AdminAgents() {
     return attendanceDayData.map((d) =>
       d.date < cutoff ? { ...d, hoursWorked: 0, sessions: [] } : d
     );
-  }, [attendanceDayData, selectedAgent]);
+  }, [attendanceDayData, selectedAgent, selectedAgentHasConversations]);
   const performanceMetrics = useMemo(() => {
     if (!selectedAgent) return { uptimePercent: 0, avgResponseTimeSeconds: 0 };
+    if (!selectedAgentHasConversations) return { uptimePercent: 0, avgResponseTimeSeconds: 0 };
     return getDemoPerformanceFromAttendance(visibleAttendanceDayData, schedule.workingDays, selectedAgent.id);
-  }, [visibleAttendanceDayData, schedule.workingDays, selectedAgent]);
+  }, [visibleAttendanceDayData, schedule.workingDays, selectedAgent, selectedAgentHasConversations]);
 
   const toTitle = (value: string) => {
     const v = value.trim().toLowerCase();

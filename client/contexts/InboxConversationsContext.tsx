@@ -152,7 +152,10 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       const res = await fetch(url.toString());
       if (!res.ok) return;
       const rows = (await res.json()) as ConversationSummaryApi[];
-      const mapped = rows.map(mapConversation);
+      const visibleRows = isAgentPortal
+        ? rows
+        : rows.filter((c) => c.agent_id != null);
+      const mapped = visibleRows.map(mapConversation);
       setConversations(mapped);
       setSelectedId((prev) => {
         if (prev && mapped.some((c) => c.id === prev)) return prev;
