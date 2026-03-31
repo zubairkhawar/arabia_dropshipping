@@ -205,10 +205,11 @@ export function ChatWindow({
       ? inboxConv.conversations.find((c) => c.id === inboxConv.selectedId)
       : undefined;
   const isInboxWithSelection = !!inboxConv && inboxConv.selectedId != null;
+  const hasSelectedConversation = !!selectedConv;
   const headerTitle = isTeamChannel && teamName
     ? `# Team Channel • ${teamName}`
     : isInboxPage
-      ? (selectedConv?.customerName || (readOnly ? 'No conversation selected' : title))
+      ? (selectedConv?.customerName || 'No conversation selected')
       : title;
   const headerSubtitle = isTeamChannel && teamMemberNames.length > 0
     ? teamMemberNames.join(', ')
@@ -685,10 +686,12 @@ export function ChatWindow({
             <>
               <button
                 type="button"
+                disabled={isInboxPage && !hasSelectedConversation}
                 onClick={() => {
+                  if (isInboxPage && !hasSelectedConversation) return;
                   setShowMoreMenu((v) => !v);
                 }}
-                className="text-text-secondary hover:text-text-primary p-1.5 rounded"
+                className="text-text-secondary hover:text-text-primary p-1.5 rounded disabled:opacity-40 disabled:cursor-not-allowed"
                 aria-label="More options"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -732,7 +735,7 @@ export function ChatWindow({
                       <Bot className="w-4 h-4" />
                       Send back to AI
                     </button>
-                    {showTransferControls && inboxConv?.selectedId != null && (
+                    {showTransferControls && hasSelectedConversation && (
                       <button
                         type="button"
                         onClick={() => {
@@ -751,7 +754,7 @@ export function ChatWindow({
                     <button
                       type="button"
                       onClick={() => {
-                        if (inboxConv?.selectedId != null) {
+                        if (hasSelectedConversation && inboxConv?.selectedId != null) {
                           const now = new Date();
                           const systemMsg: Message = {
                             id: Math.max(0, ...messages.map((m) => m.id)) + 1,

@@ -102,6 +102,10 @@ export default function AdminKnowledgeBase() {
 
   const mapSource = useCallback((s: KnowledgeSourceApi): KnowledgeSource => {
     const updated = s.updated_at || s.created_at;
+    const viewUrl =
+      s.type === 'url'
+        ? (typeof s.url === 'string' ? s.url : undefined)
+        : (typeof s.metadata?.file_data_url === 'string' ? s.metadata.file_data_url : undefined);
     return {
       id: String(s.id),
       name: s.name,
@@ -122,12 +126,7 @@ export default function AdminKnowledgeBase() {
           : [],
       schemaNotes:
         typeof s.metadata?.schema_notes === 'string' ? s.metadata.schema_notes : undefined,
-      viewUrl:
-        s.type === 'url'
-          ? (s.url ?? undefined)
-          : typeof s.metadata?.file_data_url === 'string'
-            ? s.metadata.file_data_url
-            : undefined,
+      viewUrl,
     };
   }, []);
 
