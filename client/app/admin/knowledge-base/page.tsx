@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useToast } from '@/contexts/ToastContext';
 
 type SourceType = 'file' | 'url' | 'api';
@@ -61,6 +62,43 @@ export default function AdminKnowledgeBase() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!openMenuId) return;
+    const handleMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (menuRef.current && target && !menuRef.current.contains(target)) {
+        setOpenMenuId(null);
+      }
+    };
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenMenuId(null);
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [openMenuId]);
+
+  useEffect(() => {
+    if (!openMenuId) return;
+    const handleScrollOrResize = () => setOpenMenuId(null);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleScrollOrResize);
+    return () => {
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('resize', handleScrollOrResize);
+    };
+  }, [openMenuId]);
 
   const mapSource = useCallback((s: KnowledgeSourceApi): KnowledgeSource => {
     const updated = s.updated_at || s.created_at;
@@ -553,7 +591,7 @@ export default function AdminKnowledgeBase() {
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto -mx-4 sm:mx-0">
+            <div className="overflow-x-auto overflow-y-visible -mx-4 sm:mx-0">
               <table className="min-w-full text-xs border-t border-border">
                 <thead>
                   <tr className="bg-panel text-text-muted">
@@ -615,49 +653,21 @@ export default function AdminKnowledgeBase() {
                         <div className="relative inline-block text-left">
                           <button
                             type="button"
-                            onClick={() => setOpenMenuId((prev) => (prev === s.id ? null : s.id))}
+                            onClick={(e) => {
+                              const btn = e.currentTarget;
+                              const rect = btn.getBoundingClientRect();
+                              if (openMenuId === s.id) {
+                                setOpenMenuId(null);
+                                return;
+                              }
+                              setMenuPosition({ top: rect.bottom + 6, left: rect.right - 128 });
+                              setOpenMenuId(s.id);
+                            }}
                             className="px-2 py-1 rounded hover:bg-panel text-text-secondary"
                             aria-label="Open actions menu"
                           >
                             ⋮
                           </button>
-                          {openMenuId === s.id ? (
-                            <div className="absolute right-0 mt-1 w-32 bg-white border border-border rounded-lg shadow-md z-20">
-                              <button
-                                type="button"
-                                disabled={!s.viewUrl}
-                                onClick={() => {
-                                  if (s.viewUrl) window.open(s.viewUrl, '_blank', 'noopener,noreferrer');
-                                  setOpenMenuId(null);
-                                }}
-                                className="w-full text-left px-3 py-2 text-[11px] hover:bg-panel disabled:opacity-40"
-                              >
-                                View
-                              </button>
-                              <button
-                                type="button"
-                                disabled={reindexingId === s.id}
-                                onClick={() => {
-                                  void reindexSource(s.id);
-                                  setOpenMenuId(null);
-                                }}
-                                className="w-full text-left px-3 py-2 text-[11px] hover:bg-panel disabled:opacity-40"
-                              >
-                                {reindexingId === s.id ? 'Reindexing...' : 'Reindex'}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={deletingId === s.id}
-                                onClick={() => {
-                                  void removeSource(s.id);
-                                  setOpenMenuId(null);
-                                }}
-                                className="w-full text-left px-3 py-2 text-[11px] text-status-error hover:bg-panel disabled:opacity-40"
-                              >
-                                {deletingId === s.id ? 'Deleting...' : 'Delete'}
-                              </button>
-                            </div>
-                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -668,6 +678,52 @@ export default function AdminKnowledgeBase() {
           )}
         </div>
       </div>
+      {mounted && openMenuId && menuPosition && (() => {
+        const source = sources.find((x) => x.id === openMenuId);
+        if (!source) return null;
+        return createPortal(
+          <div
+            ref={menuRef}
+            className="fixed w-32 bg-white border border-border rounded-lg shadow-md z-[1000]"
+            style={{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }}
+          >
+            <button
+              type="button"
+              disabled={!source.viewUrl}
+              onClick={() => {
+                if (source.viewUrl) window.open(source.viewUrl, '_blank', 'noopener,noreferrer');
+                setOpenMenuId(null);
+              }}
+              className="w-full text-left px-3 py-2 text-[11px] hover:bg-panel disabled:opacity-40"
+            >
+              View
+            </button>
+            <button
+              type="button"
+              disabled={reindexingId === source.id}
+              onClick={() => {
+                void reindexSource(source.id);
+                setOpenMenuId(null);
+              }}
+              className="w-full text-left px-3 py-2 text-[11px] hover:bg-panel disabled:opacity-40"
+            >
+              {reindexingId === source.id ? 'Reindexing...' : 'Reindex'}
+            </button>
+            <button
+              type="button"
+              disabled={deletingId === source.id}
+              onClick={() => {
+                void removeSource(source.id);
+                setOpenMenuId(null);
+              }}
+              className="w-full text-left px-3 py-2 text-[11px] text-status-error hover:bg-panel disabled:opacity-40"
+            >
+              {deletingId === source.id ? 'Deleting...' : 'Delete'}
+            </button>
+          </div>,
+          document.body,
+        );
+      })()}
     </div>
   );
 }
