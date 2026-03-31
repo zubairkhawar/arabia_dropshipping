@@ -1,7 +1,9 @@
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+import re
+from typing import List, Optional, Dict, Any, Tuple
 
-from fastapi import APIRouter, Depends, status
+import httpx
+from fastapi import APIRouter, Depends, status, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -51,6 +53,99 @@ def _to_knowledge_source_out(row: KnowledgeSource) -> KnowledgeSourceOut:
     )
 
 
+def _clean_text(raw: str) -> str:
+    # Best-effort HTML/text cleanup without external parser deps.
+    txt = re.sub(r"(?is)<script.*?>.*?</script>", " ", raw)
+    txt = re.sub(r"(?is)<style.*?>.*?</style>", " ", txt)
+    txt = re.sub(r"(?is)<[^>]+>", " ", txt)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt
+
+
+def _chunk_text(text: str, chunk_size: int = 900, overlap: int = 150) -> List[str]:
+    if not text:
+        return []
+    size = max(300, chunk_size)
+    ov = max(0, min(overlap, size // 2))
+    chunks: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        end = min(n, i + size)
+        chunks.append(text[i:end].strip())
+        if end >= n:
+            break
+        i = max(i + 1, end - ov)
+    return [c for c in chunks if c]
+
+
+async def _fetch_url_text(url: str) -> str:
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        content_type = (resp.headers.get("content-type") or "").lower()
+        raw = resp.text if "text" in content_type or "html" in content_type else resp.text
+    return _clean_text(raw)
+
+
+def _build_api_source_text(src: KnowledgeSource) -> str:
+    md = src.knowledge_metadata or {}
+    schema_notes = str(md.get("schema_notes") or "").strip()
+    auth_type = str(md.get("auth_type") or "none").strip()
+    refresh = md.get("refresh_interval_hours")
+    headers = md.get("headers") or {}
+    if isinstance(headers, dict):
+        header_keys = ", ".join(sorted(str(k) for k in headers.keys()))
+    else:
+        header_keys = ""
+    lines = [
+        f"API source: {src.name}",
+        f"Base URL: {src.url or 'N/A'}",
+        f"Auth type: {auth_type or 'none'}",
+        f"Refresh interval hours: {refresh if refresh is not None else 'N/A'}",
+    ]
+    if header_keys:
+        lines.append(f"Header keys: {header_keys}")
+    if schema_notes:
+        lines.append(f"Schema notes: {schema_notes}")
+    return "\n".join(lines)
+
+
+async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[str, Any]]:
+    """
+    Returns: status, chunk_count, metadata_patch
+    """
+    md = dict(src.knowledge_metadata or {})
+    md.pop("last_error", None)
+
+    if src.type == "url":
+        if not src.url:
+            md["last_error"] = "URL source missing url"
+            return "error", 0, md
+        text = await _fetch_url_text(src.url)
+        if not text:
+            md["last_error"] = "No readable content fetched from URL"
+            return "error", 0, md
+        chunks = _chunk_text(text)
+        md["chunks"] = chunks
+        md["content_preview"] = text[:500]
+        return "ready", len(chunks), md
+
+    if src.type == "api":
+        text = _build_api_source_text(src)
+        chunks = _chunk_text(text, chunk_size=700, overlap=80)
+        md["chunks"] = chunks
+        md["content_preview"] = text[:500]
+        return "ready", len(chunks), md
+
+    # file source: currently UI creates records but doesn't upload file bytes.
+    existing_chunks = md.get("chunks")
+    if isinstance(existing_chunks, list) and existing_chunks:
+        return "ready", len(existing_chunks), md
+    md["last_error"] = "File uploaded metadata exists but no file content ingestion implemented yet."
+    return "error", 0, md
+
+
 @router.get("/sources", response_model=List[KnowledgeSourceOut])
 async def list_sources(tenant_id: int, db: Session = Depends(get_db)):
     """
@@ -82,14 +177,46 @@ async def create_source(payload: KnowledgeSourceIn, db: Session = Depends(get_db
         url=payload.url,
         status="indexing",
         chunk_count=0,
-        metadata=payload.metadata or {},
+        knowledge_metadata=payload.metadata or {},
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
     db.add(src)
     db.commit()
     db.refresh(src)
-    # TODO: enqueue background job to fetch/chunk/embed and update status/chunk_count.
+
+    # Practical synchronous ingestion for URL/API so KB becomes usable immediately.
+    status_value, chunk_count, md_patch = await _ingest_source_content(src)
+    src.status = status_value
+    src.chunk_count = chunk_count
+    src.knowledge_metadata = md_patch
+    src.updated_at = datetime.utcnow()
+    db.add(src)
+    db.commit()
+    db.refresh(src)
+
+    return _to_knowledge_source_out(src)
+
+
+@router.post("/sources/{source_id}/reindex", response_model=KnowledgeSourceOut)
+async def reindex_source(source_id: int, db: Session = Depends(get_db)):
+    src = db.query(KnowledgeSource).filter(KnowledgeSource.id == source_id).first()
+    if not src:
+        raise HTTPException(status_code=404, detail="Knowledge source not found")
+    src.status = "indexing"
+    src.updated_at = datetime.utcnow()
+    db.add(src)
+    db.commit()
+    db.refresh(src)
+
+    status_value, chunk_count, md_patch = await _ingest_source_content(src)
+    src.status = status_value
+    src.chunk_count = chunk_count
+    src.knowledge_metadata = md_patch
+    src.updated_at = datetime.utcnow()
+    db.add(src)
+    db.commit()
+    db.refresh(src)
     return _to_knowledge_source_out(src)
 
 

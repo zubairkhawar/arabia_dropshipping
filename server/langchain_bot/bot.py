@@ -57,12 +57,19 @@ class ArabiaLangChainBot:
             )
         return "\n".join(lines)
 
-    def _build_knowledge_context(self, tenant_id: int, max_items: int = 8) -> str:
+    def _build_knowledge_context(
+        self,
+        tenant_id: int,
+        *,
+        user_message: str,
+        max_items: int = 8,
+        max_chunks: int = 8,
+    ) -> str:
         rows = (
             self.db.query(KnowledgeSource)
             .filter(
                 KnowledgeSource.tenant_id == tenant_id,
-                KnowledgeSource.status.in_(["ready", "indexing"]),
+                KnowledgeSource.status == "ready",
             )
             .order_by(KnowledgeSource.updated_at.desc())
             .limit(max_items)
@@ -71,9 +78,21 @@ class ArabiaLangChainBot:
         if not rows:
             return "No knowledge sources connected."
 
+        tokens = set((user_message or "").lower().split())
+        scored_chunks: List[tuple[int, str]] = []
         items: List[str] = []
         for src in rows:
             metadata = src.knowledge_metadata or {}
+            chunk_list = metadata.get("chunks")
+            if isinstance(chunk_list, list):
+                for chunk in chunk_list:
+                    if not isinstance(chunk, str):
+                        continue
+                    low = chunk.lower()
+                    score = sum(1 for t in tokens if len(t) > 2 and t in low)
+                    if score <= 0 and tokens:
+                        continue
+                    scored_chunks.append((score, f"[{src.name}] {chunk[:700]}"))
             if src.type == "api":
                 base_url = src.url or metadata.get("base_url") or "N/A"
                 schema_notes = metadata.get("schema_notes") or ""
@@ -83,6 +102,18 @@ class ArabiaLangChainBot:
             else:
                 filename = metadata.get("filename") or src.name
                 items.append(f"- FILE: {filename} (chunks: {src.chunk_count})")
+        scored_chunks.sort(key=lambda x: x[0], reverse=True)
+        top_chunks = [c for _, c in scored_chunks[:max_chunks]]
+        if top_chunks:
+            return "\n".join(
+                [
+                    "Connected knowledge sources:",
+                    *items,
+                    "",
+                    "Most relevant knowledge excerpts:",
+                    *[f"- {c}" for c in top_chunks],
+                ]
+            )
         return "\n".join(items)
 
     async def generate_reply(
@@ -113,7 +144,10 @@ class ArabiaLangChainBot:
         )
         schedule_context = self._build_schedule_context(tenant_id)
         broadcast_context = self._build_active_broadcast_context(tenant_id)
-        knowledge_context = self._build_knowledge_context(tenant_id)
+        knowledge_context = self._build_knowledge_context(
+            tenant_id,
+            user_message=user_message,
+        )
 
         messages = self.prompt.format_messages(
             current_time=now_utc_iso(),

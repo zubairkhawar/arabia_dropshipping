@@ -9,9 +9,10 @@ interface KnowledgeSource {
   id: string;
   name: string;
   type: SourceType;
-  status: 'indexing' | 'ready';
+  status: 'indexing' | 'ready' | 'error';
   chunks: number;
   lastUpdated: string;
+  lastError?: string;
 }
 
 interface KnowledgeSourceApi {
@@ -50,6 +51,7 @@ export default function AdminKnowledgeBase() {
   const [isSubmittingUrl, setIsSubmittingUrl] = useState(false);
   const [isSubmittingApi, setIsSubmittingApi] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [reindexingId, setReindexingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const mapSource = useCallback((s: KnowledgeSourceApi): KnowledgeSource => {
@@ -58,9 +60,10 @@ export default function AdminKnowledgeBase() {
       id: String(s.id),
       name: s.name,
       type: s.type,
-      status: s.status === 'ready' ? 'ready' : 'indexing',
+      status: s.status === 'ready' ? 'ready' : s.status === 'error' ? 'error' : 'indexing',
       chunks: s.chunk_count,
       lastUpdated: updated ? new Date(updated).toLocaleString() : '-',
+      lastError: typeof s.metadata?.last_error === 'string' ? s.metadata.last_error : undefined,
     };
   }, []);
 
@@ -240,6 +243,27 @@ export default function AdminKnowledgeBase() {
       toast('Failed to delete source');
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const reindexSource = async (id: string) => {
+    setReindexingId(id);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/knowledge/sources/${id}/reindex`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        toast('Failed to reindex source');
+        return;
+      }
+      const updated = (await res.json()) as KnowledgeSourceApi;
+      const mapped = mapSource(updated);
+      setSources((prev) => prev.map((s) => (s.id === id ? mapped : s)));
+      toast(mapped.status === 'ready' ? 'Source reindexed' : 'Reindex completed with warnings');
+    } catch {
+      toast('Failed to reindex source');
+    } finally {
+      setReindexingId(null);
     }
   };
 
@@ -496,17 +520,32 @@ export default function AdminKnowledgeBase() {
                           className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                             s.status === 'ready'
                               ? 'bg-status-success/10 text-status-success'
-                              : 'bg-status-warning/10 text-status-warning'
+                              : s.status === 'error'
+                                ? 'bg-status-error/10 text-status-error'
+                                : 'bg-status-warning/10 text-status-warning'
                           }`}
                         >
-                          {s.status === 'ready' ? 'READY' : 'INDEXING'}
+                          {s.status === 'ready' ? 'READY' : s.status === 'error' ? 'ERROR' : 'INDEXING'}
                         </span>
+                        {s.status === 'error' && s.lastError ? (
+                          <p className="mt-1 text-[10px] text-status-error max-w-[260px] break-words">
+                            {s.lastError}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="px-4 py-2 text-text-secondary">
                         {s.type === 'api' ? 'live' : s.chunks}
                       </td>
                       <td className="px-4 py-2 text-text-secondary">{s.lastUpdated}</td>
                       <td className="px-4 py-2 text-right">
+                        <button
+                          type="button"
+                          disabled={reindexingId === s.id}
+                          onClick={() => void reindexSource(s.id)}
+                          className="mr-3 text-[11px] text-primary hover:underline disabled:opacity-60 disabled:no-underline"
+                        >
+                          {reindexingId === s.id ? 'Reindexing...' : 'Reindex'}
+                        </button>
                         <button
                           type="button"
                           disabled={deletingId === s.id}
