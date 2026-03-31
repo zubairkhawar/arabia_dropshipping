@@ -51,6 +51,20 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
           router.replace('/login');
           return;
         }
+
+        // Ensure this authenticated user still has an actual Agent profile row.
+        const agentMeRes = await fetch(`${API_BASE}/api/agents/me`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!agentMeRes.ok) {
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_token_type');
+          localStorage.removeItem('auth_email');
+          localStorage.removeItem('auth_role');
+          router.replace('/login');
+          return;
+        }
         if (!cancelled) setAuthChecked(true);
       } catch {
         router.replace('/login');
