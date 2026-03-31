@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Search, Bell, User, ChevronDown, LogOut, KeyRound, PanelRightOpen, PanelLeftClose, Camera, ImagePlus, Trash2, X, Copy, Eye, EyeOff } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -30,6 +30,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [showProfilePopup, setShowProfilePopup] = useState(false);
   const [showChangePasswordPopup, setShowChangePasswordPopup] = useState(false);
+  const [showOfflineConfirm, setShowOfflineConfirm] = useState(false);
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
@@ -61,6 +62,18 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
     markAsRead,
   } = useNotifications();
   const notificationList = getNotificationsForCurrentAgent();
+
+  const applyStatusChange = useCallback(
+    (status: AgentStatus) => {
+      const targetBackendStatus = status === 'active' ? 'online' : 'offline';
+      if (currentAgentId) {
+        void setAgentStatus(currentAgentId, targetBackendStatus);
+      }
+      if (slug) setPresence(slug, status);
+      setShowStatusMenu(false);
+    },
+    [currentAgentId, setAgentStatus, setPresence, slug],
+  );
 
   useEffect(() => {
     if (!currentAgentId || typeof window === 'undefined') return;
@@ -238,12 +251,12 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                       key={status}
                       onClick={() => {
                         if (disabled) return;
-                        const targetBackendStatus = status === 'active' ? 'online' : 'offline';
-                        if (currentAgentId) {
-                          void setAgentStatus(currentAgentId, targetBackendStatus);
+                        if (status === 'offline' && agentStatus === 'active') {
+                          setShowStatusMenu(false);
+                          setShowOfflineConfirm(true);
+                          return;
                         }
-                        if (slug) setPresence(slug, status);
-                        setShowStatusMenu(false);
+                        applyStatusChange(status);
                       }}
                       disabled={disabled}
                       title={
@@ -629,6 +642,48 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                     Update password
                   </button>
                 </form>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {showOfflineConfirm && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/40"
+            onClick={() => setShowOfflineConfirm(false)}
+            aria-hidden
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div
+              className="bg-white rounded-xl border border-border shadow-xl w-full max-w-sm pointer-events-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-6 py-5">
+                <h2 className="text-lg font-semibold text-text-primary">Go offline?</h2>
+                <p className="mt-2 text-sm text-text-secondary">
+                  You will stop receiving new routed chats until you set yourself active again.
+                </p>
+                <div className="mt-5 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowOfflineConfirm(false)}
+                    className="px-4 py-2 rounded-lg border border-border text-text-primary hover:bg-panel text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      applyStatusChange('offline');
+                      setShowOfflineConfirm(false);
+                    }}
+                    className="px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary-dark text-sm"
+                  >
+                    Yes, go offline
+                  </button>
+                </div>
               </div>
             </div>
           </div>
