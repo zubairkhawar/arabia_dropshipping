@@ -109,6 +109,9 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         ? mapped.find((a) => a.email.trim().toLowerCase() === authEmail)?.id ?? null
         : null;
       if (byEmail) return byEmail;
+      // If an auth email exists but doesn't map to an agent row, don't silently
+      // switch to another agent account.
+      if (authEmail) return null;
       if (prev && mapped.some((a) => a.id === prev)) return prev;
       return mapped[0]?.id ?? null;
     });
