@@ -72,6 +72,11 @@ interface TeamChannelMessageRow {
   created_at: string;
 }
 
+interface TeamChannelPayload {
+  text?: string;
+  attachment?: MessageAttachment;
+}
+
 export interface ChatWindowProps {
   isInternalChat?: boolean;
   title?: string;
@@ -188,6 +193,16 @@ export function ChatWindow({
     process.env.NEXT_PUBLIC_API_BASE_URL ||
     'https://arabia-dropshipping.onrender.com';
   const TENANT_ID = 1;
+  const encodeTeamMessageContent = (payload: TeamChannelPayload) =>
+    `__TEAM_MSG_JSON__${JSON.stringify(payload)}`;
+  const decodeTeamMessageContent = (raw: string): TeamChannelPayload => {
+    if (!raw.startsWith('__TEAM_MSG_JSON__')) return { text: raw };
+    try {
+      return JSON.parse(raw.replace('__TEAM_MSG_JSON__', '')) as TeamChannelPayload;
+    } catch {
+      return { text: raw };
+    }
+  };
 
   const transferTargetOptions = (() => {
     const currentName = agentFullName || getCurrentAgent()?.name || '';
@@ -273,14 +288,18 @@ export function ChatWindow({
         const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages?tenant_id=${TENANT_ID}`);
         if (!res.ok) throw new Error('Failed to load team messages');
         const rows = (await res.json()) as TeamChannelMessageRow[];
-        const mapped: Message[] = (Array.isArray(rows) ? rows : []).map((m) => ({
-          id: m.id,
-          content: m.content,
-          sender: 'agent',
-          senderName: m.sender_agent_id === currentAgentId ? 'You' : m.sender_name,
-          timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-          sentAt: m.created_at,
-        }));
+        const mapped: Message[] = (Array.isArray(rows) ? rows : []).map((m) => {
+          const payload = decodeTeamMessageContent(m.content);
+          return {
+            id: m.id,
+            content: payload.text || '',
+            sender: 'agent',
+            senderName: m.sender_agent_id === currentAgentId ? 'You' : m.sender_name,
+            timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+            sentAt: m.created_at,
+            attachment: payload.attachment,
+          };
+        });
         setMessages(mapped);
       } catch {
         setMessages([]);
@@ -342,14 +361,15 @@ export function ChatWindow({
   const refreshTeamAssets = async () => {
     if (!teamId) return;
     setTeamAssetsLoading(true);
-    setAssetError(null);
     try {
       const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/assets?tenant_id=${TENANT_ID}`);
       if (!res.ok) throw new Error('Failed to load team assets');
       const rows = await res.json();
       setTeamAssets(Array.isArray(rows) ? rows : []);
     } catch (e: any) {
-      setAssetError(e?.message || 'Failed to load team assets');
+      // Keep panel usable even if backend has no rows/table yet.
+      setTeamAssets([]);
+      setAssetError(null);
     } finally {
       setTeamAssetsLoading(false);
     }
@@ -677,7 +697,10 @@ export function ChatWindow({
           body: JSON.stringify({
             tenant_id: TENANT_ID,
             sender_agent_id: senderId,
-            content: newMsg.content,
+            content: encodeTeamMessageContent({
+              text: text || '',
+              attachment: pendingAttachment ?? undefined,
+            }),
           }),
         });
         if (!res.ok) throw new Error('Failed to send team message');
@@ -686,11 +709,12 @@ export function ChatWindow({
           ...prev,
           {
             id: saved.id,
-            content: saved.content,
+            content: text || (pendingAttachment?.name || ''),
             sender: 'agent',
             senderName: 'You',
             timestamp: new Date(saved.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
             sentAt: saved.created_at,
+            attachment: pendingAttachment ?? undefined,
           },
         ]);
       } catch {
@@ -778,14 +802,18 @@ export function ChatWindow({
         return;
       }
     }
-    const url = URL.createObjectURL(file);
-    setPendingAttachment({
-      type,
-      name: file.name,
-      url,
-    });
-    setShowAttachmentMenu(false);
-    e.target.value = '';
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      setPendingAttachment({
+        type,
+        name: file.name,
+        url: dataUrl,
+      });
+      setShowAttachmentMenu(false);
+      e.target.value = '';
+    };
+    reader.readAsDataURL(file);
   };
 
   const EMOJI_LIST = ['😀', '😂', '❤️', '👍', '👋', '🎉', '🔥', '✨', '😊', '🥳', '🙏', '💯', '😍', '🤔', '👏', '😎', '💪', '🌸', '⭐', '📷'];
@@ -1237,14 +1265,18 @@ export function ChatWindow({
                         {message.attachment && (
                           <div className={`mb-2 rounded-lg overflow-hidden ${outgoing ? 'bg-white/20' : 'bg-black/5'}`}>
                             {message.attachment.type === 'photo' && (
-                              <a href={message.attachment.url} target="_blank" rel="noopener noreferrer" className="block max-w-full">
+                              <button
+                                type="button"
+                                onClick={() => setPreviewImageSrc(message.attachment?.url || null)}
+                                className="block max-w-full text-left"
+                              >
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img
                                   src={message.attachment.url}
                                   alt={message.attachment.name}
                                   className="max-w-full max-h-48 object-cover rounded-lg"
                                 />
-                              </a>
+                              </button>
                             )}
                             {message.attachment.type === 'file' && (
                               <a
@@ -1987,83 +2019,6 @@ export function ChatWindow({
 
                 {activeGroupTab === 'media' && (
                   <div className="space-y-6">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs cursor-pointer hover:bg-panel">
-                        <ImageIcon className="w-4 h-4" />
-                        Upload image
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={async (e) => {
-                            const f = e.target.files?.[0];
-                            if (!f) return;
-                            try {
-                              await handleFileUpload(f, 'image');
-                            } catch (err: any) {
-                              setAssetError(err?.message || 'Upload failed');
-                            } finally {
-                              e.currentTarget.value = '';
-                            }
-                          }}
-                        />
-                      </label>
-                      <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs cursor-pointer hover:bg-panel">
-                        <FileText className="w-4 h-4" />
-                        Upload doc
-                        <input
-                          type="file"
-                          accept=".pdf,.doc,.docx,.txt,.xlsx,.csv,.ppt,.pptx"
-                          className="hidden"
-                          onChange={async (e) => {
-                            const f = e.target.files?.[0];
-                            if (!f) return;
-                            try {
-                              await handleFileUpload(f, 'doc');
-                            } catch (err: any) {
-                              setAssetError(err?.message || 'Upload failed');
-                            } finally {
-                              e.currentTarget.value = '';
-                            }
-                          }}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => setShowAddLink((v) => !v)}
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-panel"
-                      >
-                        <Link2 className="w-4 h-4" />
-                        Add link
-                      </button>
-                    </div>
-                    {showAddLink && (
-                      <div className="rounded-lg border border-border p-3 space-y-2">
-                        <input
-                          type="text"
-                          value={linkTitle}
-                          onChange={(e) => setLinkTitle(e.target.value)}
-                          placeholder="Link title (optional)"
-                          className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                        />
-                        <input
-                          type="url"
-                          value={linkUrl}
-                          onChange={(e) => setLinkUrl(e.target.value)}
-                          placeholder="https://example.com"
-                          className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-                        />
-                        <div className="flex justify-end">
-                          <button
-                            type="button"
-                            onClick={addLinkAsset}
-                            className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs"
-                          >
-                            Save link
-                          </button>
-                        </div>
-                      </div>
-                    )}
                     {assetError && <p className="text-xs text-status-error">{assetError}</p>}
                     <div>
                       <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
@@ -2072,6 +2027,8 @@ export function ChatWindow({
                       <div className="grid grid-cols-4 gap-2">
                         {teamAssetsLoading ? (
                           <p className="text-xs text-text-muted">Loading media...</p>
+                        ) : teamAssets.filter((a) => a.asset_type === 'image').length === 0 ? (
+                          <p className="text-xs text-text-muted col-span-4">No data exists.</p>
                         ) : (
                           teamAssets
                             .filter((a) => a.asset_type === 'image')
@@ -2105,19 +2062,23 @@ export function ChatWindow({
                           Links
                         </h3>
                         <ul className="space-y-2 text-sm">
-                          {teamAssets.filter((a) => a.asset_type === 'link').map((a) => (
-                            <li key={a.id}>
-                              <a
-                                href={a.url || '#'}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="flex items-center gap-2 text-primary hover:underline"
-                              >
-                                <Link2 className="w-4 h-4" />
-                                {a.title || a.url}
-                              </a>
-                            </li>
-                          ))}
+                          {teamAssets.filter((a) => a.asset_type === 'link').length === 0 ? (
+                            <li className="text-xs text-text-muted">No data exists.</li>
+                          ) : (
+                            teamAssets.filter((a) => a.asset_type === 'link').map((a) => (
+                              <li key={a.id}>
+                                <a
+                                  href={a.url || '#'}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="flex items-center gap-2 text-primary hover:underline"
+                                >
+                                  <Link2 className="w-4 h-4" />
+                                  {a.title || a.url}
+                                </a>
+                              </li>
+                            ))
+                          )}
                         </ul>
                       </div>
                       <div>
@@ -2125,18 +2086,22 @@ export function ChatWindow({
                           Docs
                         </h3>
                         <ul className="space-y-2 text-sm">
-                          {teamAssets.filter((a) => a.asset_type === 'doc').map((a) => (
-                            <li key={a.id}>
-                              <a
-                                href={a.content_base64 ? `data:${a.mime_type || 'application/octet-stream'};base64,${a.content_base64}` : '#'}
-                                download={a.file_name || a.title || 'document'}
-                                className="flex items-center gap-2 text-text-primary hover:underline"
-                              >
-                                <FileText className="w-4 h-4 text-text-muted" />
-                                {a.file_name || a.title || 'Document'}
-                              </a>
-                            </li>
-                          ))}
+                          {teamAssets.filter((a) => a.asset_type === 'doc').length === 0 ? (
+                            <li className="text-xs text-text-muted">No data exists.</li>
+                          ) : (
+                            teamAssets.filter((a) => a.asset_type === 'doc').map((a) => (
+                              <li key={a.id}>
+                                <a
+                                  href={a.content_base64 ? `data:${a.mime_type || 'application/octet-stream'};base64,${a.content_base64}` : '#'}
+                                  download={a.file_name || a.title || 'document'}
+                                  className="flex items-center gap-2 text-text-primary hover:underline"
+                                >
+                                  <FileText className="w-4 h-4 text-text-muted" />
+                                  {a.file_name || a.title || 'Document'}
+                                </a>
+                              </li>
+                            ))
+                          )}
                         </ul>
                       </div>
                     </div>
