@@ -246,6 +246,10 @@ class Broadcast(Base):
     starts_at = Column(DateTime, nullable=True)
     ends_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # Delivery: AI context while window is active; one-shot agent notifications / WA on create.
+    target_ai = Column(Boolean, nullable=False, default=True)
+    delivery_notify_agents = Column(Boolean, nullable=False, default=False)
+    delivery_notify_customers_whatsapp = Column(Boolean, nullable=False, default=False)
 
 
 class KnowledgeSource(Base):

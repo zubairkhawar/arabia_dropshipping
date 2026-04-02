@@ -16,6 +16,9 @@ interface Broadcast {
   startsAt: string;
   endsAt: string;
   occasion: string;
+  targetAi: boolean;
+  deliveryNotifyAgents: boolean;
+  deliveryNotifyCustomersWhatsapp: boolean;
 }
 
 function parseBroadcastDate(s: string): number {
@@ -34,6 +37,14 @@ function formatBroadcastDateTime(s: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function broadcastTargetSummary(b: Broadcast): string {
+  const parts: string[] = [];
+  if (b.targetAi) parts.push('AI bot');
+  if (b.deliveryNotifyAgents) parts.push('Agent alerts');
+  if (b.deliveryNotifyCustomersWhatsapp) parts.push('Customers (WhatsApp)');
+  return parts.length ? parts.join(' · ') : '—';
 }
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -78,6 +89,9 @@ export default function AdminSettings() {
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
   const [message, setMessage] = useState('');
+  const [targetAi, setTargetAi] = useState(true);
+  const [deliveryNotifyAgents, setDeliveryNotifyAgents] = useState(false);
+  const [deliveryNotifyCustomersWhatsapp, setDeliveryNotifyCustomersWhatsapp] = useState(false);
   const [scheduleDraft, setScheduleDraft] = useState<OnlineSchedule>(schedule);
   const [scheduleSaving, setScheduleSaving] = useState(false);
 
@@ -101,6 +115,9 @@ export default function AdminSettings() {
           occasion?: string | null;
           starts_at?: string | null;
           ends_at?: string | null;
+          target_ai?: boolean | null;
+          delivery_notify_agents?: boolean | null;
+          delivery_notify_customers_whatsapp?: boolean | null;
         }[];
         setBroadcasts(
           data.map((b) => ({
@@ -110,6 +127,9 @@ export default function AdminSettings() {
             occasion: b.occasion || '',
             startsAt: b.starts_at || '',
             endsAt: b.ends_at || '',
+            targetAi: b.target_ai !== false,
+            deliveryNotifyAgents: !!b.delivery_notify_agents,
+            deliveryNotifyCustomersWhatsapp: !!b.delivery_notify_customers_whatsapp,
           })),
         );
       } catch {
@@ -125,6 +145,10 @@ export default function AdminSettings() {
     e.preventDefault();
     if (!title.trim() || !message.trim() || !startsAt || !endsAt) {
       toast('Fill all required broadcast fields');
+      return;
+    }
+    if (!targetAi && !deliveryNotifyAgents && !deliveryNotifyCustomersWhatsapp) {
+      toast('Choose at least one target: AI bot, agents, and/or customers (WhatsApp)');
       return;
     }
     if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
@@ -143,6 +167,9 @@ export default function AdminSettings() {
           occasion: occasion.trim() || null,
           starts_at: startsAt,
           ends_at: endsAt,
+          target_ai: targetAi,
+          delivery_notify_agents: deliveryNotifyAgents,
+          delivery_notify_customers_whatsapp: deliveryNotifyCustomersWhatsapp,
         }),
       });
       if (!res.ok) {
@@ -155,6 +182,9 @@ export default function AdminSettings() {
         occasion?: string | null;
         starts_at?: string | null;
         ends_at?: string | null;
+        target_ai?: boolean | null;
+        delivery_notify_agents?: boolean | null;
+        delivery_notify_customers_whatsapp?: boolean | null;
       };
       const next: Broadcast = {
         id: String(created.id),
@@ -163,6 +193,9 @@ export default function AdminSettings() {
         startsAt: created.starts_at || startsAt,
         endsAt: created.ends_at || endsAt,
         occasion: created.occasion || occasion.trim(),
+        targetAi: created.target_ai !== false,
+        deliveryNotifyAgents: !!created.delivery_notify_agents,
+        deliveryNotifyCustomersWhatsapp: !!created.delivery_notify_customers_whatsapp,
       };
       setBroadcasts((prev) => [next, ...prev]);
       setTitle('');
@@ -170,6 +203,9 @@ export default function AdminSettings() {
       setStartsAt('');
       setEndsAt('');
       setMessage('');
+      setTargetAi(true);
+      setDeliveryNotifyAgents(false);
+      setDeliveryNotifyCustomersWhatsapp(false);
       toast("Broadcast added");
     } catch {
       toast("Failed to add broadcast");
@@ -522,9 +558,10 @@ export default function AdminSettings() {
               AI Broadcast Messages
             </h3>
             <p className="text-xs text-text-secondary">
-              Configure temporary festival/occasion messages that the AI bot can use when a
-              customer asks for a real agent (for example: Eid, Ramadan, Christmas). The AI
-              will read these as \"agent availability notes\" within the active time window.
+              Configure temporary festival/occasion messages. You can feed them to the AI as
+              agent-availability notes, notify your team, and/or message customers on WhatsApp
+              when you add a broadcast (customers reached are those already in this system with
+              a WhatsApp conversation).
             </p>
           </div>
 
@@ -597,10 +634,65 @@ export default function AdminSettings() {
                 className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
               />
               <p className="mt-1 text-[11px] text-text-muted">
-                This text is what the AI bot will use when a customer asks for a real agent while this
-                broadcast is active.
+                When &quot;AI bot&quot; is selected below, this text is used when a customer asks
+                for a real agent while the broadcast window is active.
               </p>
             </div>
+
+            <fieldset className="space-y-2 rounded-lg border border-border bg-panel/30 p-3">
+              <legend className="px-1 text-xs font-medium text-text-primary">
+                Also apply / send when you add this broadcast
+              </legend>
+              <p className="text-[11px] text-text-muted pb-1">
+                Choose any combination. Agent alerts and WhatsApp sends run once when you click
+                Add broadcast. WhatsApp uses your Meta Cloud API; delivery may fail outside
+                Meta&apos;s messaging rules (e.g. 24-hour session or approved templates).
+              </p>
+              <label className="flex items-start gap-2 text-sm text-text-primary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={targetAi}
+                  onChange={(e) => setTargetAi(e.target.checked)}
+                  className="mt-0.5 rounded border-border"
+                />
+                <span>
+                  <span className="font-medium">AI bot</span>
+                  <span className="block text-[11px] text-text-muted">
+                    Include this message in AI &quot;agent availability&quot; context for the
+                    scheduled window.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-sm text-text-primary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deliveryNotifyAgents}
+                  onChange={(e) => setDeliveryNotifyAgents(e.target.checked)}
+                  className="mt-0.5 rounded border-border"
+                />
+                <span>
+                  <span className="font-medium">Agents (notifications)</span>
+                  <span className="block text-[11px] text-text-muted">
+                    Create an in-app notification for every agent on this tenant.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-sm text-text-primary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deliveryNotifyCustomersWhatsapp}
+                  onChange={(e) => setDeliveryNotifyCustomersWhatsapp(e.target.checked)}
+                  className="mt-0.5 rounded border-border"
+                />
+                <span>
+                  <span className="font-medium">Customers (WhatsApp)</span>
+                  <span className="block text-[11px] text-text-muted">
+                    Send one text per distinct phone that has a WhatsApp thread here (not your
+                    full Shopify customer export unless those users are synced and messaged).
+                  </span>
+                </span>
+              </label>
+            </fieldset>
 
             <div className="flex justify-end">
               <button
@@ -640,6 +732,9 @@ export default function AdminSettings() {
                 <p className="text-[10px] text-text-muted">
                   {formatBroadcastDateTime(activeBroadcast.startsAt)} →{' '}
                   {formatBroadcastDateTime(activeBroadcast.endsAt)}
+                </p>
+                <p className="text-[10px] text-text-secondary">
+                  Targets: {broadcastTargetSummary(activeBroadcast)}
                 </p>
                 <div className="pt-2">
                   <button
@@ -695,6 +790,9 @@ export default function AdminSettings() {
                       </p>
                       <p className="text-[10px] text-text-muted">
                         {formatBroadcastDateTime(b.startsAt)} → {formatBroadcastDateTime(b.endsAt)}
+                      </p>
+                      <p className="text-[10px] text-text-secondary">
+                        Targets: {broadcastTargetSummary(b)}
                       </p>
                       <div className="flex justify-end">
                         <button

@@ -76,6 +76,8 @@ interface TeamChannelMessageRow {
 interface TeamChannelPayload {
   text?: string;
   attachment?: MessageAttachment;
+  replyTo?: { id: number; senderName: string; content: string };
+  reactions?: MessageReaction[];
 }
 
 const isHeicLikeAttachment = (attachment?: MessageAttachment) => {
@@ -83,6 +85,8 @@ const isHeicLikeAttachment = (attachment?: MessageAttachment) => {
   const n = attachment.name.toLowerCase();
   return n.endsWith('.heic') || n.endsWith('.heif');
 };
+
+const TEAM_REACTION_CACHE_PREFIX = 'team-reaction-cache:';
 
 export interface ChatWindowProps {
   isInternalChat?: boolean;
@@ -295,8 +299,10 @@ export function ChatWindow({
         const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages?tenant_id=${TENANT_ID}`);
         if (!res.ok) throw new Error('Failed to load team messages');
         const rows = (await res.json()) as TeamChannelMessageRow[];
+        const cached = readReactionCache();
         const mapped: Message[] = (Array.isArray(rows) ? rows : []).map((m) => {
           const payload = decodeTeamMessageContent(m.content);
+          const cachedReactions = cached[String(m.id)];
           return {
             id: m.id,
             content: payload.text || '',
@@ -306,6 +312,8 @@ export function ChatWindow({
             timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
             sentAt: m.created_at,
             attachment: payload.attachment,
+            replyTo: payload.replyTo,
+            reactions: mergeReactions(payload.reactions, cachedReactions),
           };
         });
         setMessages(mapped);
@@ -314,6 +322,10 @@ export function ChatWindow({
       }
     };
     void loadTeamMessages();
+    const poll = window.setInterval(() => {
+      void loadTeamMessages();
+    }, 3000);
+    return () => window.clearInterval(poll);
   }, [isInternalChat, isTeamChannel, teamId, getCurrentAgent, API_BASE, TENANT_ID]);
   const [inputValue, setInputValue] = useState('');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -460,6 +472,79 @@ export function ChatWindow({
   }, [activeMessageMenuId]);
 
   const viewerAgentId = Number(getCurrentAgent()?.id || 0);
+  const reactionActorId = viewerAgentId ? `agent-${viewerAgentId}` : 'me';
+  const reactionActorName = agentFullName || getCurrentAgent()?.name || 'You';
+  const getReactionCacheKey = () => (teamId ? `${TEAM_REACTION_CACHE_PREFIX}${teamId}` : null);
+  const readReactionCache = (): Record<string, MessageReaction[]> => {
+    if (typeof window === 'undefined') return {};
+    const key = getReactionCacheKey();
+    if (!key) return {};
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as Record<string, MessageReaction[]>;
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+  const writeReactionCache = (messageId: number, reactions: MessageReaction[] | undefined) => {
+    if (typeof window === 'undefined') return;
+    const key = getReactionCacheKey();
+    if (!key) return;
+    const current = readReactionCache();
+    if (!reactions || reactions.length === 0) {
+      delete current[String(messageId)];
+    } else {
+      current[String(messageId)] = reactions;
+    }
+    localStorage.setItem(key, JSON.stringify(current));
+  };
+  const mergeReactions = (
+    serverReactions: MessageReaction[] | undefined,
+    cachedReactions: MessageReaction[] | undefined,
+  ): MessageReaction[] | undefined => {
+    const a = serverReactions ?? [];
+    const b = cachedReactions ?? [];
+    if (a.length === 0 && b.length === 0) return undefined;
+    const byUser = new Map<string, MessageReaction>();
+    for (const r of [...a, ...b]) {
+      const existing = byUser.get(r.userId);
+      if (!existing) {
+        byUser.set(r.userId, r);
+        continue;
+      }
+      const existingTs = new Date(existing.reactedAt).getTime();
+      const nextTs = new Date(r.reactedAt).getTime();
+      if (Number.isFinite(nextTs) && (!Number.isFinite(existingTs) || nextTs >= existingTs)) {
+        byUser.set(r.userId, r);
+      }
+    }
+    return Array.from(byUser.values());
+  };
+
+  const toTeamPayload = (message: Message): TeamChannelPayload => ({
+    text: message.content || '',
+    attachment: message.attachment,
+    replyTo: message.replyTo,
+    reactions: message.reactions,
+  });
+
+  const persistTeamMessagePayload = async (message: Message) => {
+    if (!isInternalChat || !isTeamChannel || !teamId) return;
+    try {
+      await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages/${message.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenant_id: TENANT_ID,
+          content: encodeTeamMessageContent(toTeamPayload(message)),
+        }),
+      });
+    } catch {
+      // Keep optimistic UI even if persistence fails.
+    }
+  };
 
   const getMessageStyle = (message: Message, outgoing: boolean) => {
     if (outgoing) return 'bg-chat-user text-white';
@@ -513,26 +598,24 @@ export function ChatWindow({
   };
 
   const addReaction = (id: number, emoji: string) => {
-    const currentUserId = 'me';
-    const currentUserName = 'You';
-    setMessages((prev) =>
-      prev.map((m) => {
-        if (m.id !== id) return m;
-        const list = m.reactions ?? [];
-        const withoutMe = list.filter((r) => r.userId !== currentUserId);
-        const existing = list.find((r) => r.userId === currentUserId);
-        if (existing?.emoji === emoji) {
-          return { ...m, reactions: withoutMe.length > 0 ? withoutMe : undefined };
-        }
-        return {
-          ...m,
-          reactions: [
-            ...withoutMe,
-            { emoji, userId: currentUserId, userName: currentUserName, reactedAt: new Date().toISOString() },
-          ],
-        };
-      }),
-    );
+    const target = messages.find((m) => m.id === id);
+    if (!target) return;
+    const list = target.reactions ?? [];
+    const withoutMe = list.filter((r) => r.userId !== reactionActorId);
+    const existing = list.find((r) => r.userId === reactionActorId);
+    const updated: Message =
+      existing?.emoji === emoji
+        ? { ...target, reactions: withoutMe.length > 0 ? withoutMe : undefined }
+        : {
+            ...target,
+            reactions: [
+              ...withoutMe,
+              { emoji, userId: reactionActorId, userName: reactionActorName, reactedAt: new Date().toISOString() },
+            ],
+          };
+    setMessages((prev) => prev.map((m) => (m.id === id ? updated : m)));
+    writeReactionCache(id, updated.reactions);
+    void persistTeamMessagePayload(updated);
     setActiveReactionPickerId(null);
     setActiveMessageMenuId(null);
   };
@@ -731,6 +814,7 @@ export function ChatWindow({
             content: encodeTeamMessageContent({
               text: text || '',
               attachment: pendingAttachment ?? undefined,
+              replyTo: replyingTo ?? undefined,
             }),
           }),
         });
@@ -747,6 +831,7 @@ export function ChatWindow({
             timestamp: new Date(saved.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
             sentAt: saved.created_at,
             attachment: pendingAttachment ?? undefined,
+            replyTo: replyingTo ?? undefined,
           },
         ]);
       } catch {
@@ -1225,7 +1310,7 @@ export function ChatWindow({
               const showReactions = activeReactionPickerId === message.id;
               const reactionEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏', '👏', '😁'];
               const reactionList = message.reactions ?? [];
-              const myReaction = reactionList.find((r) => r.userId === 'me')?.emoji;
+              const myReaction = reactionList.find((r) => r.userId === reactionActorId)?.emoji;
               const aggregated = Object.entries(
                 reactionList.reduce<Record<string, number>>((acc, r) => {
                   acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
@@ -1272,10 +1357,13 @@ export function ChatWindow({
 
                       <div className="pr-1 min-w-0 space-y-1">
                         {message.replyTo && (
-                          <div
-                            className={`mb-2 pl-2 border-l-4 rounded border-primary ${
-                              outgoing ? 'bg-white/20' : 'bg-black/5'
+                          <button
+                            type="button"
+                            onClick={() => scrollToMessage(message.replyTo!.id)}
+                            className={`mb-2 w-full text-left pl-2 border-l-4 rounded border-primary cursor-pointer ${
+                              outgoing ? 'bg-white/20 hover:bg-white/25' : 'bg-black/5 hover:bg-black/10'
                             }`}
+                            title="Jump to original message"
                           >
                             <p className={`text-xs font-semibold ${outgoing ? 'text-white' : 'text-primary'}`}>
                               {message.replyTo.senderName}
@@ -1288,7 +1376,7 @@ export function ChatWindow({
                             >
                               {message.replyTo.content}
                             </p>
-                          </div>
+                          </button>
                         )}
                         {!outgoing && (
                           <p className="text-xs font-medium mb-1 opacity-75">{message.senderName}</p>

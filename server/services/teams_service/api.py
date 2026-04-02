@@ -96,6 +96,11 @@ class TeamChannelMessageCreate(BaseModel):
     content: str
 
 
+class TeamChannelMessageUpdate(BaseModel):
+    tenant_id: int
+    content: str
+
+
 MAX_ASSET_BYTES = 10 * 1024 * 1024
 
 
@@ -546,6 +551,44 @@ async def create_team_channel_message(
         content=content,
         created_at=datetime.utcnow(),
     )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return TeamChannelMessageOut(
+        id=row.id,
+        team_id=row.team_id,
+        sender_agent_id=row.sender_agent_id,
+        sender_name=_agent_name(db, row.sender_agent_id),
+        content=row.content,
+        created_at=row.created_at,
+    )
+
+
+@router.patch(
+    "/{team_id}/channel/messages/{message_id}",
+    response_model=TeamChannelMessageOut,
+)
+async def update_team_channel_message(
+    team_id: int,
+    message_id: int,
+    payload: TeamChannelMessageUpdate,
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(TeamChannelMessage)
+        .filter(
+            TeamChannelMessage.id == message_id,
+            TeamChannelMessage.team_id == team_id,
+            TeamChannelMessage.tenant_id == payload.tenant_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message content is required")
+    row.content = content
     db.add(row)
     db.commit()
     db.refresh(row)

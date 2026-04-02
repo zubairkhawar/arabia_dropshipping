@@ -43,6 +43,8 @@ class ArabiaLangChainBot:
         )
         active: List[Broadcast] = []
         for b in rows:
+            if not getattr(b, "target_ai", True):
+                continue
             starts_ok = b.starts_at is None or b.starts_at <= now
             ends_ok = b.ends_at is None or b.ends_at >= now
             if starts_ok and ends_ok:
