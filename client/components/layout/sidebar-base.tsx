@@ -88,7 +88,7 @@ export function SidebarBase({ menuItems, title = 'Arabia' }: SidebarBaseProps) {
         {!isCollapsed && (
           <div className="p-4 border-t border-border">
             <p className="text-xs text-text-muted">
-              © 2024 Arabia Dropshipping
+              © 2026 Arabia Dropshipping
             </p>
           </div>
         )}

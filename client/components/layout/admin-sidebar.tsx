@@ -159,7 +159,7 @@ export function AdminSidebar() {
 
         {!isCollapsed && (
           <div className="p-4 border-t border-border">
-            <p className="text-xs text-text-muted">© 2024 Arabia Dropshipping</p>
+            <p className="text-xs text-text-muted">© 2026 Arabia Dropshipping</p>
           </div>
         )}
       </div>
