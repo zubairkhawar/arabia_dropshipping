@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import { useInboxPanels } from '@/contexts/InboxPanelsContext';
 import { useInboxConversations } from '@/contexts/InboxConversationsContext';
+import { useAgents } from '@/contexts/AgentsContext';
 import { ChevronDown } from 'lucide-react';
 
 type ConversationStatus = 'active' | 'resolved' | 'pending';
@@ -34,6 +35,7 @@ interface AgentAvatar {
   name: string;
   initials: string;
   online: boolean;
+  avatarUrl: string | null;
 }
 
 const defaultConversations: Conversation[] = [
@@ -83,6 +85,7 @@ export function ChatList() {
   const inboxPanels = useInboxPanels();
   const pathname = usePathname();
   const inboxConv = useInboxConversations();
+  const { agents: allAgents, currentAgentId } = useAgents();
   const [localSelectedId, setLocalSelectedId] = useState<number | null>(1);
   const [localConversations] = useState<Conversation[]>(defaultConversations);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -104,24 +107,30 @@ export function ChatList() {
     const uniqueAgents = new Map<string, AgentAvatar>();
     conversations.forEach((conv) => {
       if (conv.handlerType === 'agent' && conv.handlerName && conv.handlerAgentId) {
+        if (currentAgentId && conv.handlerAgentId === currentAgentId) {
+          return;
+        }
+        const knownAgent = allAgents.find((a) => a.id === conv.handlerAgentId);
+        const displayName = knownAgent?.name || conv.handlerName;
         if (!uniqueAgents.has(conv.handlerAgentId)) {
           uniqueAgents.set(conv.handlerAgentId, {
             id: conv.handlerAgentId,
             agentId: conv.handlerAgentId,
-            name: conv.handlerName,
-            initials: conv.handlerName
+            name: displayName,
+            initials: displayName
               .split(' ')
               .map((p) => p[0])
               .join('')
               .slice(0, 2)
               .toUpperCase(),
-            online: conv.status === 'active',
+            online: knownAgent ? knownAgent.status === 'online' || knownAgent.status === 'busy' : conv.status === 'active',
+            avatarUrl: knownAgent?.avatarUrl ?? null,
           });
         }
       }
     });
     return Array.from(uniqueAgents.values());
-  }, [conversations]);
+  }, [conversations, allAgents, currentAgentId]);
 
   const filteredConversations = useMemo(() => {
     let list = conversations;
@@ -164,7 +173,12 @@ export function ChatList() {
                       : 'bg-white text-text-primary hover:bg-white/80 border border-border'
                   }`}
                 >
-                  <span>{agent.initials}</span>
+                  {agent.avatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={agent.avatarUrl} alt={agent.name} className="w-full h-full object-cover rounded-full" />
+                  ) : (
+                    <span>{agent.initials}</span>
+                  )}
                   <span
                     className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-panel ${
                       agent.online ? 'bg-status-success' : 'bg-text-muted'
@@ -173,8 +187,13 @@ export function ChatList() {
                 </button>
                 <div className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-4 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
                   <div className="rounded-2xl bg-white shadow-xl border border-border px-4 py-3 flex items-center gap-3 min-w-[180px]">
-                    <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">
-                      {agent.initials}
+                    <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary overflow-hidden">
+                      {agent.avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={agent.avatarUrl} alt={agent.name} className="w-full h-full object-cover" />
+                      ) : (
+                        agent.initials
+                      )}
                     </div>
                     <div className="flex flex-col">
                       <span className="text-sm font-semibold text-text-primary truncate">

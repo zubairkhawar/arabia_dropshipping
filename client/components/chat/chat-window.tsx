@@ -55,6 +55,7 @@ interface Message {
   content: string;
   sender: 'customer' | 'agent' | 'ai';
   senderName: string;
+  senderAgentId?: number;
   timestamp: string;
   /** ISO date string for actual time and date grouping */
   sentAt?: string;
@@ -301,6 +302,7 @@ export function ChatWindow({
             content: payload.text || '',
             sender: 'agent',
             senderName: m.sender_agent_id === currentAgentId ? 'You' : m.sender_name,
+            senderAgentId: m.sender_agent_id,
             timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
             sentAt: m.created_at,
             attachment: payload.attachment,
@@ -457,15 +459,21 @@ export function ChatWindow({
     setDropdownPlaceAbove(placeAbove);
   }, [activeMessageMenuId]);
 
-  const getMessageStyle = (sender: string, senderName: string) => {
-    if (sender === 'customer') return 'bg-chat-user text-white';
-    if (senderName === 'You') return 'bg-chat-user text-white';
-    if (senderName === 'Admin') return 'bg-primary/15 text-primary border border-primary/30';
-    if (sender === 'agent') return 'bg-chat-agent text-text-primary';
+  const viewerAgentId = Number(getCurrentAgent()?.id || 0);
+
+  const getMessageStyle = (message: Message, outgoing: boolean) => {
+    if (outgoing) return 'bg-chat-user text-white';
+    if (message.senderName === 'Admin') return 'bg-primary/15 text-primary border border-primary/30';
+    if (message.sender === 'agent') return 'bg-chat-agent text-text-primary';
     return 'bg-chat-ai text-text-primary';
   };
 
   const isOutgoingMessage = (message: Message) => {
+    if (isInternalChat && isTeamChannel) {
+      if (broadcastMode && message.senderName === 'Admin') return true;
+      if (viewerAgentId && message.senderAgentId) return message.senderAgentId === viewerAgentId;
+      return message.senderName === 'You';
+    }
     if (isInternalChat) return message.senderName === 'You';
     return message.sender === 'customer' || message.senderName === 'You';
   };
@@ -735,6 +743,7 @@ export function ChatWindow({
             content: text || (pendingAttachment?.name || ''),
             sender: 'agent',
             senderName: 'You',
+            senderAgentId: senderId,
             timestamp: new Date(saved.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
             sentAt: saved.created_at,
             attachment: pendingAttachment ?? undefined,
@@ -1244,10 +1253,7 @@ export function ChatWindow({
                   )}
                   <div className={`relative group max-w-[85%] ${outgoing ? 'flex flex-col items-end' : ''}`}>
                     <div
-                      className={`relative max-w-message-bubble min-w-[8rem] rounded-lg px-3 py-3.5 pl-3 pr-10 ${getMessageStyle(
-                        message.sender,
-                        message.senderName,
-                      )}`}
+                      className={`relative max-w-message-bubble min-w-[8rem] rounded-lg px-3 py-3.5 pl-3 pr-10 ${getMessageStyle(message, outgoing)}`}
                     >
                       {!readOnly && (
                         <button
