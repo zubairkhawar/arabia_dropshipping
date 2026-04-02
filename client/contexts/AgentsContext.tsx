@@ -134,6 +134,20 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
     };
   }, [refreshAgents]);
 
+  useEffect(() => {
+    const handleAuthChanged = () => {
+      void refreshAgents();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('auth-changed', handleAuthChanged);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('auth-changed', handleAuthChanged);
+      }
+    };
+  }, [refreshAgents]);
+
   const getCurrentAgent = useCallback(() => {
     if (!currentAgentId) return null;
     return agents.find((a) => a.id === currentAgentId) ?? null;

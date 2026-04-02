@@ -6,8 +6,8 @@ import { usePathname, useRouter } from 'next/navigation';
 import { MessageSquarePlus, ChevronLeft, ChevronRight, MoreVertical, Search, Trash2 } from 'lucide-react';
 import { useAgentPresence } from '@/contexts/AgentPresenceContext';
 import { useDmChats } from '@/contexts/DmChatsContext';
-import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useDmLayout } from '@/contexts/DmLayoutContext';
+import { useAgents } from '@/contexts/AgentsContext';
 
 const DM_MIDDLE_BAR_WIDTH = 280;
 const DM_MIDDLE_BAR_COLLAPSED_WIDTH = 56;
@@ -17,7 +17,8 @@ export function DmMiddleBar() {
   const router = useRouter();
   const { conversations, addOrUpdateConversation, removeConversation } = useDmChats();
   const { getPresence, agentsByTeam } = useAgentPresence();
-  const { fullName } = useAgentProfile();
+  const { agents, getCurrentAgent } = useAgents();
+  const currentAgentId = getCurrentAgent()?.id ?? null;
   const { middleBarCollapsed, toggleMiddleBar } = useDmLayout();
   const [showDropup, setShowDropup] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -103,9 +104,11 @@ export function DmMiddleBar() {
                       <p className="px-2 py-1 text-xs font-medium text-text-secondary">{group.team}</p>
                       <ul className="space-y-0.5">
                         {group.members.map((member) => {
-                          const status = getPresence(member.slug);
-                          const isCurrentUser =
-                            fullName.trim().toLowerCase() === member.name.trim().toLowerCase();
+                          const status =
+                            agents.find((a) => a.id === member.agentId)?.status === 'online'
+                              ? 'active'
+                              : getPresence(member.slug);
+                          const isCurrentUser = currentAgentId != null && member.agentId === currentAgentId;
                           return (
                             <li key={member.slug}>
                               <Link
@@ -192,9 +195,11 @@ export function DmMiddleBar() {
                       <p className="px-2 py-1 text-xs font-medium text-text-secondary">{group.team}</p>
                       <ul className="space-y-0.5">
                         {group.members.map((member) => {
-                          const status = getPresence(member.slug);
-                          const isCurrentUser =
-                            fullName.trim().toLowerCase() === member.name.trim().toLowerCase();
+                          const status =
+                            agents.find((a) => a.id === member.agentId)?.status === 'online'
+                              ? 'active'
+                              : getPresence(member.slug);
+                          const isCurrentUser = currentAgentId != null && member.agentId === currentAgentId;
                           return (
                             <li key={member.slug}>
                               <Link

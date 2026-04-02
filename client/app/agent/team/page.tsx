@@ -40,6 +40,7 @@ export default function AgentTeamChannel() {
           isInternalChat
           title="# Team Channel"
           subtitle="Team coordination chat"
+          teamId={team?.id}
           teamName={team?.name ?? 'Team'}
           teamMemberNames={team?.members.map((m) => m.name) ?? []}
           teamEvents={teamEvents}

@@ -266,6 +266,7 @@ export default function AdminTeams() {
               isInternalChat
               title="# Team Channel"
               subtitle={`Internal chat for ${selectedTeam.name}`}
+              teamId={selectedTeam.id}
               teamName={selectedTeam.name}
               teamMemberNames={selectedTeam.members.map((m) => m.name)}
               teamEvents={teamEvents}

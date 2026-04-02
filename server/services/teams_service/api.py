@@ -1,12 +1,13 @@
 from datetime import datetime
 from typing import List, Optional, Dict, Any
+import base64
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Team, TeamMembership, TeamEvent, Notification
+from models import Team, TeamMembership, TeamEvent, Notification, TeamAsset, TeamChannelMessage, Agent, User
 
 
 router = APIRouter()
@@ -53,6 +54,49 @@ class TeamTransfer(BaseModel):
     from_team_id: Optional[int] = None
     to_team_id: int
     tenant_id: int
+
+
+class TeamAssetOut(BaseModel):
+    id: int
+    team_id: int
+    asset_type: str
+    title: Optional[str] = None
+    url: Optional[str] = None
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    content_base64: Optional[str] = None
+    created_by_agent_id: Optional[int] = None
+    created_at: datetime
+
+
+class TeamAssetCreate(BaseModel):
+    tenant_id: int
+    asset_type: str
+    title: Optional[str] = None
+    url: Optional[str] = None
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = None
+    content_base64: Optional[str] = None
+    created_by_agent_id: Optional[int] = None
+
+
+class TeamChannelMessageOut(BaseModel):
+    id: int
+    team_id: int
+    sender_agent_id: int
+    sender_name: str
+    content: str
+    created_at: datetime
+
+
+class TeamChannelMessageCreate(BaseModel):
+    tenant_id: int
+    sender_agent_id: int
+    content: str
+
+
+MAX_ASSET_BYTES = 10 * 1024 * 1024
 
 
 @router.get("", response_model=List[TeamOut])
@@ -368,4 +412,149 @@ async def get_team_events(
         )
         for e in events
     ]
+
+
+@router.get("/{team_id}/assets", response_model=List[TeamAssetOut])
+async def list_team_assets(team_id: int, tenant_id: int, db: Session = Depends(get_db)):
+    team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == tenant_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    rows = (
+        db.query(TeamAsset)
+        .filter(TeamAsset.tenant_id == tenant_id, TeamAsset.team_id == team_id)
+        .order_by(TeamAsset.created_at.desc())
+        .all()
+    )
+    return rows
+
+
+@router.post("/{team_id}/assets", response_model=TeamAssetOut, status_code=status.HTTP_201_CREATED)
+async def create_team_asset(team_id: int, payload: TeamAssetCreate, db: Session = Depends(get_db)):
+    team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == payload.tenant_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    kind = (payload.asset_type or "").strip().lower()
+    if kind not in {"image", "doc", "link"}:
+        raise HTTPException(status_code=400, detail="asset_type must be image, doc, or link")
+
+    size_bytes: Optional[int] = None
+    if kind in {"image", "doc"}:
+        if not payload.content_base64:
+            raise HTTPException(status_code=400, detail="content_base64 is required for files")
+        try:
+            decoded = base64.b64decode(payload.content_base64, validate=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 content")
+        size_bytes = len(decoded)
+        if size_bytes > MAX_ASSET_BYTES:
+            raise HTTPException(status_code=400, detail="File size exceeds 10MB limit")
+    elif not payload.url:
+        raise HTTPException(status_code=400, detail="url is required for link assets")
+
+    row = TeamAsset(
+        tenant_id=payload.tenant_id,
+        team_id=team_id,
+        asset_type=kind,
+        title=payload.title,
+        url=payload.url,
+        file_name=payload.file_name,
+        mime_type=payload.mime_type,
+        size_bytes=size_bytes,
+        content_base64=payload.content_base64 if kind in {"image", "doc"} else None,
+        created_by_agent_id=payload.created_by_agent_id,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.delete("/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_team_asset(asset_id: int, tenant_id: int, db: Session = Depends(get_db)):
+    row = (
+        db.query(TeamAsset)
+        .filter(TeamAsset.id == asset_id, TeamAsset.tenant_id == tenant_id)
+        .first()
+    )
+    if not row:
+        return
+    db.delete(row)
+    db.commit()
+    return
+
+
+def _agent_name(db: Session, agent_id: int) -> str:
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        return f"Agent {agent_id}"
+    user = db.query(User).filter(User.id == agent.user_id).first()
+    if user and user.full_name:
+        return user.full_name
+    if user and user.email:
+        return user.email.split("@")[0]
+    return f"Agent {agent_id}"
+
+
+@router.get("/{team_id}/channel/messages", response_model=List[TeamChannelMessageOut])
+async def list_team_channel_messages(
+    team_id: int,
+    tenant_id: int,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == tenant_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    rows = (
+        db.query(TeamChannelMessage)
+        .filter(TeamChannelMessage.tenant_id == tenant_id, TeamChannelMessage.team_id == team_id)
+        .order_by(TeamChannelMessage.created_at.asc())
+        .limit(max(1, min(limit, 1000)))
+        .all()
+    )
+    return [
+        TeamChannelMessageOut(
+            id=r.id,
+            team_id=r.team_id,
+            sender_agent_id=r.sender_agent_id,
+            sender_name=_agent_name(db, r.sender_agent_id),
+            content=r.content,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post("/{team_id}/channel/messages", response_model=TeamChannelMessageOut, status_code=status.HTTP_201_CREATED)
+async def create_team_channel_message(
+    team_id: int,
+    payload: TeamChannelMessageCreate,
+    db: Session = Depends(get_db),
+):
+    team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == payload.tenant_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message content is required")
+    row = TeamChannelMessage(
+        tenant_id=payload.tenant_id,
+        team_id=team_id,
+        sender_agent_id=payload.sender_agent_id,
+        content=content,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return TeamChannelMessageOut(
+        id=row.id,
+        team_id=row.team_id,
+        sender_agent_id=row.sender_agent_id,
+        sender_name=_agent_name(db, row.sender_agent_id),
+        content=row.content,
+        created_at=row.created_at,
+    )
 

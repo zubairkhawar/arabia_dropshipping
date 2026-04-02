@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
 import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X, Download } from 'lucide-react';
 import { AgentActivityBar, useAgentAttendanceData } from '@/components/agents/activity-bar';
@@ -23,11 +23,10 @@ function formatAvgResponse(seconds: number): string {
   return s > 0 ? `${m}.${Math.round((s / 60) * 10)}m` : `${m}m`;
 }
 
-function getDemoPerformanceFromAttendance(
+function getUptimeFromAttendance(
   dayData: { date: Date; hoursWorked: number }[],
   workingDays: number[],
-  agentId: string,
-): { uptimePercent: number; avgResponseTimeSeconds: number } {
+): { uptimePercent: number } {
   const now = new Date();
   const from = new Date(now);
   from.setDate(from.getDate() - 29);
@@ -36,10 +35,7 @@ function getDemoPerformanceFromAttendance(
   const recent = dayData.filter((d) => d.date >= from && d.date <= now && workingSet.has(d.date.getDay()));
   const worked = recent.filter((d) => d.hoursWorked > 0);
   const uptimePercent = recent.length > 0 ? Math.round((worked.length / recent.length) * 100) : 0;
-  const avgHours = worked.length > 0 ? worked.reduce((s, d) => s + d.hoursWorked, 0) / worked.length : 0;
-  const idSeed = agentId.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 12;
-  const avgResponseTimeSeconds = Math.max(20, Math.round(170 - avgHours * 14 + idSeed));
-  return { uptimePercent, avgResponseTimeSeconds };
+  return { uptimePercent };
 }
 
 export default function AdminAgents() {
@@ -64,6 +60,71 @@ export default function AdminAgents() {
   const [agentReportYear, setAgentReportYear] = useState(() => new Date().getFullYear());
   const [agentReportDownloading, setAgentReportDownloading] = useState(false);
   const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<{ id: string; label: string } | null>(null);
+  const [avgResponseTimeSeconds, setAvgResponseTimeSeconds] = useState(0);
+  const loadAvgResponseFromChats = useCallback(async (agentId: string) => {
+    try {
+      const url = new URL(`${API_BASE}/api/messaging/conversations`);
+      url.searchParams.set('tenant_id', String(TENANT_ID));
+      url.searchParams.set('agent_id', String(Number(agentId)));
+      const convRes = await fetch(url.toString());
+      if (!convRes.ok) {
+        setAvgResponseTimeSeconds(0);
+        return;
+      }
+      const convs = (await convRes.json()) as Array<{ id: number }>;
+      if (!Array.isArray(convs) || convs.length === 0) {
+        setAvgResponseTimeSeconds(0);
+        return;
+      }
+
+      const detailResponses = await Promise.all(
+        convs.map((c) => fetch(`${API_BASE}/api/messaging/conversations/${c.id}`)),
+      );
+      const deltas: number[] = [];
+      for (const res of detailResponses) {
+        if (!res.ok) continue;
+        const data = (await res.json()) as {
+          messages: Array<{ sender_type: string; created_at: string }>;
+        };
+        const msgs = (data.messages || []).slice().sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+        );
+        for (let i = 0; i < msgs.length; i += 1) {
+          if (msgs[i].sender_type !== 'customer') continue;
+          for (let j = i + 1; j < msgs.length; j += 1) {
+            if (msgs[j].sender_type === 'agent') {
+              const sec = Math.max(
+                0,
+                Math.floor(
+                  (new Date(msgs[j].created_at).getTime() -
+                    new Date(msgs[i].created_at).getTime()) / 1000,
+                ),
+              );
+              deltas.push(sec);
+              break;
+            }
+          }
+        }
+      }
+      if (deltas.length === 0) {
+        setAvgResponseTimeSeconds(0);
+        return;
+      }
+      const avg = Math.round(deltas.reduce((s, v) => s + v, 0) / deltas.length);
+      setAvgResponseTimeSeconds(avg);
+    } catch {
+      setAvgResponseTimeSeconds(0);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedAgent?.id) {
+      setAvgResponseTimeSeconds(0);
+      return;
+    }
+    void loadAvgResponseFromChats(selectedAgent.id);
+  }, [selectedAgent?.id, loadAvgResponseFromChats]);
+
 
   useEffect(() => {
     if (!selectedId && agents.length > 0) {
@@ -96,8 +157,9 @@ export default function AdminAgents() {
   }, [attendanceDayData, selectedAgent]);
   const performanceMetrics = useMemo(() => {
     if (!selectedAgent) return { uptimePercent: 0, avgResponseTimeSeconds: 0 };
-    return getDemoPerformanceFromAttendance(visibleAttendanceDayData, schedule.workingDays, selectedAgent.id);
-  }, [visibleAttendanceDayData, schedule.workingDays, selectedAgent]);
+    const { uptimePercent } = getUptimeFromAttendance(visibleAttendanceDayData, schedule.workingDays);
+    return { uptimePercent, avgResponseTimeSeconds };
+  }, [visibleAttendanceDayData, schedule.workingDays, selectedAgent, avgResponseTimeSeconds]);
 
   const toTitle = (value: string) => {
     const v = value.trim().toLowerCase();

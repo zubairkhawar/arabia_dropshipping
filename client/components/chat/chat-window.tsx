@@ -63,11 +63,21 @@ interface Message {
   attachment?: MessageAttachment;
 }
 
+interface TeamChannelMessageRow {
+  id: number;
+  team_id: number;
+  sender_agent_id: number;
+  sender_name: string;
+  content: string;
+  created_at: string;
+}
+
 export interface ChatWindowProps {
   isInternalChat?: boolean;
   title?: string;
   subtitle?: string;
   showTransferControls?: boolean;
+  teamId?: string;
   /** For team channel: e.g. "Team A". Shown next to "# Team Channel" in header. */
   teamName?: string;
   /** For team channel: names shown in header subtitle, e.g. "Ali, Hamza, Sarah". */
@@ -159,6 +169,7 @@ export function ChatWindow({
   title = 'Ahmed Ali',
   subtitle = 'Store: My Shopify Store',
   showTransferControls = false,
+  teamId,
   teamName,
   teamMemberNames = [],
   teamEvents = [],
@@ -172,6 +183,11 @@ export function ChatWindow({
   const { agents, getCurrentAgent } = useAgents();
   const notifications = useNotifications();
   const { getMessagesBySlug, loadMessagesBySlug, sendMessageBySlug } = useDmChats();
+  const API_BASE =
+    process.env.NEXT_PUBLIC_API_URL ||
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    'https://arabia-dropshipping.onrender.com';
+  const TENANT_ID = 1;
 
   const transferTargetOptions = (() => {
     const currentName = agentFullName || getCurrentAgent()?.name || '';
@@ -241,18 +257,58 @@ export function ChatWindow({
     const mapped: Message[] = rows.map((m) => ({
       id: m.id,
       content: m.content,
-      sender: m.senderName === 'You' ? 'agent' : 'customer',
+      sender: 'agent',
       senderName: m.senderName,
       timestamp: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
       sentAt: m.createdAt,
     }));
     setMessages(mapped);
   }, [isInternalChat, isDmPage, dmSlug, getMessagesBySlug]);
+
+  useEffect(() => {
+    if (!isInternalChat || !isTeamChannel || !teamId) return;
+    const currentAgentId = Number(getCurrentAgent()?.id || 0);
+    const loadTeamMessages = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages?tenant_id=${TENANT_ID}`);
+        if (!res.ok) throw new Error('Failed to load team messages');
+        const rows = (await res.json()) as TeamChannelMessageRow[];
+        const mapped: Message[] = (Array.isArray(rows) ? rows : []).map((m) => ({
+          id: m.id,
+          content: m.content,
+          sender: 'agent',
+          senderName: m.sender_agent_id === currentAgentId ? 'You' : m.sender_name,
+          timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+          sentAt: m.created_at,
+        }));
+        setMessages(mapped);
+      } catch {
+        setMessages([]);
+      }
+    };
+    void loadTeamMessages();
+  }, [isInternalChat, isTeamChannel, teamId, getCurrentAgent, API_BASE, TENANT_ID]);
   const [inputValue, setInputValue] = useState('');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const [showAgentProfile, setShowAgentProfile] = useState(false);
   const [activeGroupTab, setActiveGroupTab] = useState<'info' | 'media' | 'starred' | 'members'>('info');
+  const [teamAssets, setTeamAssets] = useState<Array<{
+    id: number;
+    asset_type: 'image' | 'doc' | 'link';
+    title?: string;
+    url?: string;
+    file_name?: string;
+    mime_type?: string;
+    size_bytes?: number;
+    content_base64?: string;
+  }>>([]);
+  const [teamAssetsLoading, setTeamAssetsLoading] = useState(false);
+  const [assetError, setAssetError] = useState<string | null>(null);
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [linkTitle, setLinkTitle] = useState('');
+  const [linkUrl, setLinkUrl] = useState('');
+  const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
   const [starredIds, setStarredIds] = useState<number[]>([]);
   const [activeMessageMenuId, setActiveMessageMenuId] = useState<number | null>(null);
   const [activeReactionPickerId, setActiveReactionPickerId] = useState<number | null>(null);
@@ -283,6 +339,74 @@ export function ChatWindow({
   const photoInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
+  const refreshTeamAssets = async () => {
+    if (!teamId) return;
+    setTeamAssetsLoading(true);
+    setAssetError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/assets?tenant_id=${TENANT_ID}`);
+      if (!res.ok) throw new Error('Failed to load team assets');
+      const rows = await res.json();
+      setTeamAssets(Array.isArray(rows) ? rows : []);
+    } catch (e: any) {
+      setAssetError(e?.message || 'Failed to load team assets');
+    } finally {
+      setTeamAssetsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showGroupInfo || activeGroupTab !== 'media' || !teamId) return;
+    void refreshTeamAssets();
+  }, [showGroupInfo, activeGroupTab, teamId]);
+
+  const handleFileUpload = async (file: File, kind: 'image' | 'doc') => {
+    if (!teamId) return;
+    const buf = await file.arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/assets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenant_id: TENANT_ID,
+        asset_type: kind,
+        title: file.name,
+        file_name: file.name,
+        mime_type: file.type || undefined,
+        content_base64: b64,
+        created_by_agent_id: getCurrentAgent()?.id ? Number(getCurrentAgent()!.id) : null,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Upload failed');
+    }
+    await refreshTeamAssets();
+  };
+
+  const addLinkAsset = async () => {
+    if (!teamId || !linkUrl.trim()) return;
+    const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/assets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenant_id: TENANT_ID,
+        asset_type: 'link',
+        title: linkTitle.trim() || linkUrl.trim(),
+        url: linkUrl.trim(),
+        created_by_agent_id: getCurrentAgent()?.id ? Number(getCurrentAgent()!.id) : null,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setAssetError(err.detail || 'Failed to save link');
+      return;
+    }
+    setShowAddLink(false);
+    setLinkTitle('');
+    setLinkUrl('');
+    await refreshTeamAssets();
+  };
   const [mentionFilter, setMentionFilter] = useState('');
   const mentionAnchorRef = useRef<number>(0);
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -315,8 +439,10 @@ export function ChatWindow({
     return 'bg-chat-ai text-text-primary';
   };
 
-  const isOutgoingMessage = (message: Message) =>
-    message.sender === 'customer' || message.senderName === 'You';
+  const isOutgoingMessage = (message: Message) => {
+    if (isInternalChat) return message.senderName === 'You';
+    return message.sender === 'customer' || message.senderName === 'You';
+  };
 
   const addSystemNote = (content: string) => {
     const now = new Date();
@@ -517,7 +643,7 @@ export function ChatWindow({
     setActiveMessageMenuId(null);
   };
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     const text = inputValue.trim();
     const hasContent = text.length > 0 || pendingAttachment;
     if (!hasContent) return;
@@ -539,6 +665,42 @@ export function ChatWindow({
       setReplyingTo(null);
       setPendingAttachment(null);
       setShowMentionDropdown(false);
+      return;
+    }
+    if (isInternalChat && isTeamChannel && teamId) {
+      try {
+        const senderId = Number(getCurrentAgent()?.id || 0);
+        if (!senderId) throw new Error('Agent not found');
+        const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tenant_id: TENANT_ID,
+            sender_agent_id: senderId,
+            content: newMsg.content,
+          }),
+        });
+        if (!res.ok) throw new Error('Failed to send team message');
+        const saved = (await res.json()) as TeamChannelMessageRow;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: saved.id,
+            content: saved.content,
+            sender: 'agent',
+            senderName: 'You',
+            timestamp: new Date(saved.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+            sentAt: saved.created_at,
+          },
+        ]);
+      } catch {
+        addSystemNote('Message failed to send. Please try again.');
+      } finally {
+        setInputValue('');
+        setReplyingTo(null);
+        setPendingAttachment(null);
+        setShowMentionDropdown(false);
+      }
       return;
     }
     setMessages((prev) => [...prev, newMsg]);
@@ -1642,12 +1804,12 @@ export function ChatWindow({
 
       {/* Message Info Modal */}
       {messageInfoId !== null && (() => {
-        const readByList = isInternalChat && teamMemberNames.length > 0
-          ? teamMemberNames.map((name, i) => ({
-              name,
-              readAt: new Date(Date.now() - (i + 1) * 60000 * (i + 2)),
-            }))
-          : [{ name: title?.split(' ')[0] ? title : 'Customer', readAt: new Date() }];
+        const targetMessage = messages.find((m) => m.id === messageInfoId) ?? null;
+        const readerName =
+          targetMessage?.senderName === 'You'
+            ? (agentFullName || getCurrentAgent()?.name || 'You')
+            : (targetMessage?.senderName || title?.split(' ')[0] || 'Customer');
+        const readByList = [{ name: readerName, readAt: new Date() }];
         const formatReadAt = (d: Date) =>
           `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()} ${d.getHours() % 12 || 12}:${d.getMinutes().toString().padStart(2, '0')} ${d.getHours() >= 12 ? 'PM' : 'AM'}`;
         return (
@@ -1825,19 +1987,115 @@ export function ChatWindow({
 
                 {activeGroupTab === 'media' && (
                   <div className="space-y-6">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs cursor-pointer hover:bg-panel">
+                        <ImageIcon className="w-4 h-4" />
+                        Upload image
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const f = e.target.files?.[0];
+                            if (!f) return;
+                            try {
+                              await handleFileUpload(f, 'image');
+                            } catch (err: any) {
+                              setAssetError(err?.message || 'Upload failed');
+                            } finally {
+                              e.currentTarget.value = '';
+                            }
+                          }}
+                        />
+                      </label>
+                      <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs cursor-pointer hover:bg-panel">
+                        <FileText className="w-4 h-4" />
+                        Upload doc
+                        <input
+                          type="file"
+                          accept=".pdf,.doc,.docx,.txt,.xlsx,.csv,.ppt,.pptx"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const f = e.target.files?.[0];
+                            if (!f) return;
+                            try {
+                              await handleFileUpload(f, 'doc');
+                            } catch (err: any) {
+                              setAssetError(err?.message || 'Upload failed');
+                            } finally {
+                              e.currentTarget.value = '';
+                            }
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowAddLink((v) => !v)}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-panel"
+                      >
+                        <Link2 className="w-4 h-4" />
+                        Add link
+                      </button>
+                    </div>
+                    {showAddLink && (
+                      <div className="rounded-lg border border-border p-3 space-y-2">
+                        <input
+                          type="text"
+                          value={linkTitle}
+                          onChange={(e) => setLinkTitle(e.target.value)}
+                          placeholder="Link title (optional)"
+                          className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                        />
+                        <input
+                          type="url"
+                          value={linkUrl}
+                          onChange={(e) => setLinkUrl(e.target.value)}
+                          placeholder="https://example.com"
+                          className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+                        />
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={addLinkAsset}
+                            className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs"
+                          >
+                            Save link
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {assetError && <p className="text-xs text-status-error">{assetError}</p>}
                     <div>
                       <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
                         Media
                       </h3>
                       <div className="grid grid-cols-4 gap-2">
-                        {Array.from({ length: 8 }).map((_, idx) => (
-                          <div
-                            key={idx}
-                            className="aspect-square rounded-lg bg-panel border border-border flex items-center justify-center text-[10px] text-text-muted"
-                          >
-                            Image
-                          </div>
-                        ))}
+                        {teamAssetsLoading ? (
+                          <p className="text-xs text-text-muted">Loading media...</p>
+                        ) : (
+                          teamAssets
+                            .filter((a) => a.asset_type === 'image')
+                            .map((a) => (
+                              <button
+                                type="button"
+                                key={a.id}
+                                onClick={() => setPreviewImageSrc(a.content_base64 ? `data:${a.mime_type || 'image/*'};base64,${a.content_base64}` : null)}
+                                className="aspect-square rounded-lg bg-panel border border-border overflow-hidden"
+                                title={a.file_name || a.title || 'Image'}
+                              >
+                                {a.content_base64 ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={`data:${a.mime_type || 'image/*'};base64,${a.content_base64}`}
+                                    alt={a.file_name || a.title || 'Image'}
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : (
+                                  <span className="text-[10px] text-text-muted">Image</span>
+                                )}
+                              </button>
+                            ))
+                        )}
                       </div>
                     </div>
 
@@ -1847,14 +2105,19 @@ export function ChatWindow({
                           Links
                         </h3>
                         <ul className="space-y-2 text-sm">
-                          <li className="flex items-center gap-2 text-primary cursor-pointer hover:underline">
-                            <Link2 className="w-4 h-4" />
-                            Tracking dashboard
-                          </li>
-                          <li className="flex items-center gap-2 text-primary cursor-pointer hover:underline">
-                            <Link2 className="w-4 h-4" />
-                            Support playbook
-                          </li>
+                          {teamAssets.filter((a) => a.asset_type === 'link').map((a) => (
+                            <li key={a.id}>
+                              <a
+                                href={a.url || '#'}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center gap-2 text-primary hover:underline"
+                              >
+                                <Link2 className="w-4 h-4" />
+                                {a.title || a.url}
+                              </a>
+                            </li>
+                          ))}
                         </ul>
                       </div>
                       <div>
@@ -1862,14 +2125,18 @@ export function ChatWindow({
                           Docs
                         </h3>
                         <ul className="space-y-2 text-sm">
-                          <li className="flex items-center gap-2 text-text-primary">
-                            <FileText className="w-4 h-4 text-text-muted" />
-                            SLA-cheatsheet.pdf
-                          </li>
-                          <li className="flex items-center gap-2 text-text-primary">
-                            <FileText className="w-4 h-4 text-text-muted" />
-                            Escalation-matrix.docx
-                          </li>
+                          {teamAssets.filter((a) => a.asset_type === 'doc').map((a) => (
+                            <li key={a.id}>
+                              <a
+                                href={a.content_base64 ? `data:${a.mime_type || 'application/octet-stream'};base64,${a.content_base64}` : '#'}
+                                download={a.file_name || a.title || 'document'}
+                                className="flex items-center gap-2 text-text-primary hover:underline"
+                              >
+                                <FileText className="w-4 h-4 text-text-muted" />
+                                {a.file_name || a.title || 'Document'}
+                              </a>
+                            </li>
+                          ))}
                         </ul>
                       </div>
                     </div>
@@ -1937,6 +2204,26 @@ export function ChatWindow({
               {title || 'Agent'}
             </h2>
             <p className="text-sm text-text-muted mt-1">Direct message</p>
+          </div>
+        </div>
+      )}
+
+      {previewImageSrc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-6"
+          onClick={() => setPreviewImageSrc(null)}
+        >
+          <div className="relative max-w-5xl max-h-[85vh] w-full flex items-center justify-center">
+            <button
+              type="button"
+              onClick={() => setPreviewImageSrc(null)}
+              className="absolute right-2 top-2 p-2 rounded-full bg-black/50 text-white hover:bg-black/70"
+              aria-label="Close image preview"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={previewImageSrc} alt="Preview" className="max-w-full max-h-[85vh] rounded-lg shadow-2xl" />
           </div>
         </div>
       )}

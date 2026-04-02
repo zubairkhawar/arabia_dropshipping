@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
+import { useNotifications } from '@/contexts/NotificationsContext';
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
@@ -41,6 +42,7 @@ const DmChatsContext = createContext<DmChatsContextType | undefined>(undefined);
 
 export function DmChatsProvider({ children }: { children: ReactNode }) {
   const { getCurrentAgent } = useAgents();
+  const notifications = useNotifications();
   const currentAgentId = getCurrentAgent()?.id ?? null;
   const [conversations, setConversations] = useState<DmConversation[]>([]);
   const [messagesBySlug, setMessagesBySlug] = useState<Record<string, DmMessage[]>>({});
@@ -209,10 +211,21 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
           .map((c) => (c.slug === slug ? { ...c, lastMessageAt: row.created_at } : c))
           .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()),
       );
+      const meName = getCurrentAgent()?.name || 'Agent';
+      const peer = conversations.find((c) => c.slug === slug);
+      if (peer?.peerAgentId) {
+        notifications.addNotification({
+          type: 'personal_message',
+          message: `${meName} sent you a direct message`,
+          description: row.content,
+          fromAgentId: currentAgentId,
+          toAgentId: peer.peerAgentId,
+        });
+      }
     } catch {
       // ignore
     }
-  }, [conversations, currentAgentId]);
+  }, [conversations, currentAgentId, getCurrentAgent, notifications]);
 
   const getMessagesBySlug = useCallback((slug: string) => messagesBySlug[slug] || [], [messagesBySlug]);
   const getConversations = useCallback(() => conversations, [conversations]);

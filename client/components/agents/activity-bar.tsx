@@ -137,29 +137,28 @@ export function useAgentAttendanceData(
             sessions: Array<{ start_at: string; end_at: string | null }>;
           }>;
         };
-        const mappedByDate = new Map(
-          (data.days || []).map((d) => [
-            d.date,
-            {
-              hoursWorked: Math.round((d.total_minutes / 60) * 100) / 100,
-              sessions: (d.sessions || []).map((s) => {
-                const st = new Date(s.start_at);
-                const en = new Date(s.end_at || s.start_at);
-                return {
-                  startMinutes: st.getHours() * 60 + st.getMinutes(),
-                  endMinutes: en.getHours() * 60 + en.getMinutes(),
-                };
-              }),
-            },
-          ]),
-        );
+        const localBucket = new Map<string, { minutes: number; sessions: DaySession[] }>();
+        for (const day of data.days || []) {
+          for (const s of day.sessions || []) {
+            const st = new Date(s.start_at);
+            const en = new Date(s.end_at || new Date().toISOString());
+            const key = `${st.getFullYear()}-${String(st.getMonth() + 1).padStart(2, '0')}-${String(st.getDate()).padStart(2, '0')}`;
+            const existing = localBucket.get(key) || { minutes: 0, sessions: [] };
+            const startMinutes = st.getHours() * 60 + st.getMinutes();
+            const endMinutes = en.getHours() * 60 + en.getMinutes();
+            const delta = Math.max(0, Math.floor((en.getTime() - st.getTime()) / 60000));
+            existing.minutes += delta;
+            existing.sessions.push({ startMinutes, endMinutes });
+            localBucket.set(key, existing);
+          }
+        }
         const base = getDayAttendance(agentId, workingDays).map((d) => {
           const key = d.date.toISOString().slice(0, 10);
-          const real = mappedByDate.get(key);
+          const real = localBucket.get(key);
           if (!real) return { ...d, hoursWorked: 0, sessions: [] };
           return {
             ...d,
-            hoursWorked: real.hoursWorked,
+            hoursWorked: Math.round((real.minutes / 60) * 100) / 100,
             sessions: real.sessions,
           };
         });

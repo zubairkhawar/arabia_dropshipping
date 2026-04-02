@@ -57,9 +57,7 @@ export default function LoginPage() {
         localStorage.setItem('auth_token_type', tokenData.token_type || 'bearer');
         localStorage.setItem('auth_email', me.email || trimmedEmail);
         localStorage.setItem('auth_role', me.role || 'agent');
-        if ((me.role || '').toLowerCase() === 'agent') {
-          localStorage.setItem('force_agent_offline_on_next_load', '1');
-        }
+        window.dispatchEvent(new Event('auth-changed'));
       }
 
       if ((me.role || '').toLowerCase() === 'admin') {

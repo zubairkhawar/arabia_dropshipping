@@ -76,17 +76,6 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   );
 
   useEffect(() => {
-    if (!currentAgentId || typeof window === 'undefined') return;
-    const shouldForceOffline = localStorage.getItem('force_agent_offline_on_next_load') === '1';
-    if (!shouldForceOffline) return;
-    localStorage.removeItem('force_agent_offline_on_next_load');
-    void setAgentStatus(currentAgentId, 'offline');
-    if (slug) setPresence(slug, 'offline');
-    const key = `${ACTIVE_SINCE_PREFIX}${currentAgentId}`;
-    localStorage.removeItem(key);
-  }, [currentAgentId, setAgentStatus, setPresence, slug]);
-
-  useEffect(() => {
     if (!currentAgentId) {
       setActiveSinceMs(null);
       return;
@@ -391,6 +380,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                       if (typeof window !== 'undefined') {
                         localStorage.clear();
                         sessionStorage.clear();
+                        window.dispatchEvent(new Event('auth-changed'));
                       }
                       router.push('/login');
                     }}

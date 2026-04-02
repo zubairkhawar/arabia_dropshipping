@@ -103,11 +103,11 @@ export default function AgentLayout({
     <SidebarProvider>
       <AgentProfileProvider>
         <AgentPresenceProvider>
-          <DmChatsProvider>
-            <NotificationsProvider>
+          <NotificationsProvider>
+            <DmChatsProvider>
               <AgentLayoutContent>{children}</AgentLayoutContent>
-            </NotificationsProvider>
-          </DmChatsProvider>
+            </DmChatsProvider>
+          </NotificationsProvider>
         </AgentPresenceProvider>
       </AgentProfileProvider>
     </SidebarProvider>

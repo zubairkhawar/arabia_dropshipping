@@ -294,3 +294,31 @@ class AgentAttendanceSession(Base):
     started_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     ended_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TeamAsset(Base):
+    __tablename__ = "team_assets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=False, index=True)
+    asset_type = Column(String, nullable=False)  # image | doc | link
+    title = Column(String, nullable=True)
+    url = Column(String, nullable=True)  # for links
+    file_name = Column(String, nullable=True)
+    mime_type = Column(String, nullable=True)
+    size_bytes = Column(Integer, nullable=True)
+    content_base64 = Column(Text, nullable=True)  # for image/doc payloads
+    created_by_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TeamChannelMessage(Base):
+    __tablename__ = "team_channel_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=False, index=True)
+    sender_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
