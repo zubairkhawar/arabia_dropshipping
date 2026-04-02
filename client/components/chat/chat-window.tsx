@@ -77,6 +77,12 @@ interface TeamChannelPayload {
   attachment?: MessageAttachment;
 }
 
+const isHeicLikeAttachment = (attachment?: MessageAttachment) => {
+  if (!attachment) return false;
+  const n = attachment.name.toLowerCase();
+  return n.endsWith('.heic') || n.endsWith('.heif');
+};
+
 export interface ChatWindowProps {
   isInternalChat?: boolean;
   title?: string;
@@ -629,6 +635,23 @@ export function ChatWindow({
     };
   });
 
+  const sharedChatMedia = messages
+    .filter((m) => m.attachment?.type === 'photo' && m.attachment.url)
+    .map((m) => ({
+      id: `chat-media-${m.id}`,
+      name: m.attachment!.name || 'Image',
+      url: m.attachment!.url,
+      isHeic: isHeicLikeAttachment(m.attachment),
+    }));
+
+  const sharedChatDocs = messages
+    .filter((m) => m.attachment?.type === 'file' && m.attachment.url)
+    .map((m) => ({
+      id: `chat-doc-${m.id}`,
+      name: m.attachment!.name || 'Document',
+      url: m.attachment!.url,
+    }));
+
   const handleScrollStickyDate = () => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -791,7 +814,9 @@ export function ChatWindow({
     const file = e.target.files?.[0];
     if (!file) return;
     if (type === 'photo') {
-      if (!file.type.startsWith('image/')) {
+      const lowerName = file.name.toLowerCase();
+      const isHeicLike = lowerName.endsWith('.heic') || lowerName.endsWith('.heif');
+      if (!file.type.startsWith('image/') && !isHeicLike) {
         return;
       }
     } else {
@@ -1265,6 +1290,16 @@ export function ChatWindow({
                         {message.attachment && (
                           <div className={`mb-2 rounded-lg overflow-hidden ${outgoing ? 'bg-white/20' : 'bg-black/5'}`}>
                             {message.attachment.type === 'photo' && (
+                              isHeicLikeAttachment(message.attachment) ? (
+                                <a
+                                  href={message.attachment.url}
+                                  download={message.attachment.name}
+                                  className={`flex items-center gap-2 px-2 py-2 rounded-lg ${outgoing ? 'text-white hover:bg-white/10' : 'text-text-primary hover:bg-black/5'}`}
+                                >
+                                  <ImageIcon className="w-5 h-5 flex-shrink-0" />
+                                  <span className="text-sm truncate">{message.attachment.name}</span>
+                                </a>
+                              ) : (
                               <button
                                 type="button"
                                 onClick={() => setPreviewImageSrc(message.attachment?.url || null)}
@@ -1277,6 +1312,7 @@ export function ChatWindow({
                                   className="max-w-full max-h-48 object-cover rounded-lg"
                                 />
                               </button>
+                              )
                             )}
                             {message.attachment.type === 'file' && (
                               <a
@@ -1708,7 +1744,7 @@ export function ChatWindow({
                 <input
                   ref={photoInputRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/*,.heic,.heif,image/heic,image/heif"
                   className="hidden"
                   onChange={(e) => handleFileSelect(e, 'photo')}
                 />
@@ -2027,31 +2063,57 @@ export function ChatWindow({
                       <div className="grid grid-cols-4 gap-2">
                         {teamAssetsLoading ? (
                           <p className="text-xs text-text-muted">Loading media...</p>
-                        ) : teamAssets.filter((a) => a.asset_type === 'image').length === 0 ? (
+                        ) : teamAssets.filter((a) => a.asset_type === 'image').length === 0 && sharedChatMedia.length === 0 ? (
                           <p className="text-xs text-text-muted col-span-4">No data exists.</p>
                         ) : (
-                          teamAssets
-                            .filter((a) => a.asset_type === 'image')
-                            .map((a) => (
-                              <button
-                                type="button"
-                                key={a.id}
-                                onClick={() => setPreviewImageSrc(a.content_base64 ? `data:${a.mime_type || 'image/*'};base64,${a.content_base64}` : null)}
-                                className="aspect-square rounded-lg bg-panel border border-border overflow-hidden"
-                                title={a.file_name || a.title || 'Image'}
-                              >
-                                {a.content_base64 ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={`data:${a.mime_type || 'image/*'};base64,${a.content_base64}`}
-                                    alt={a.file_name || a.title || 'Image'}
-                                    className="w-full h-full object-cover"
-                                  />
-                                ) : (
-                                  <span className="text-[10px] text-text-muted">Image</span>
-                                )}
-                              </button>
-                            ))
+                          <>
+                            {sharedChatMedia.map((m) => (
+                              m.isHeic ? (
+                                <a
+                                  key={m.id}
+                                  href={m.url}
+                                  download={m.name}
+                                  className="aspect-square rounded-lg bg-panel border border-border flex items-center justify-center p-2 text-center"
+                                  title={m.name}
+                                >
+                                  <span className="text-[10px] text-text-muted break-all">{m.name}</span>
+                                </a>
+                              ) : (
+                                <button
+                                  type="button"
+                                  key={m.id}
+                                  onClick={() => setPreviewImageSrc(m.url)}
+                                  className="aspect-square rounded-lg bg-panel border border-border overflow-hidden"
+                                  title={m.name}
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img src={m.url} alt={m.name} className="w-full h-full object-cover" />
+                                </button>
+                              )
+                            ))}
+                            {teamAssets
+                              .filter((a) => a.asset_type === 'image')
+                              .map((a) => (
+                                <button
+                                  type="button"
+                                  key={a.id}
+                                  onClick={() => setPreviewImageSrc(a.content_base64 ? `data:${a.mime_type || 'image/*'};base64,${a.content_base64}` : null)}
+                                  className="aspect-square rounded-lg bg-panel border border-border overflow-hidden"
+                                  title={a.file_name || a.title || 'Image'}
+                                >
+                                  {a.content_base64 ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img
+                                      src={`data:${a.mime_type || 'image/*'};base64,${a.content_base64}`}
+                                      alt={a.file_name || a.title || 'Image'}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  ) : (
+                                    <span className="text-[10px] text-text-muted">Image</span>
+                                  )}
+                                </button>
+                              ))}
+                          </>
                         )}
                       </div>
                     </div>
@@ -2086,21 +2148,35 @@ export function ChatWindow({
                           Docs
                         </h3>
                         <ul className="space-y-2 text-sm">
-                          {teamAssets.filter((a) => a.asset_type === 'doc').length === 0 ? (
+                          {teamAssets.filter((a) => a.asset_type === 'doc').length === 0 && sharedChatDocs.length === 0 ? (
                             <li className="text-xs text-text-muted">No data exists.</li>
                           ) : (
-                            teamAssets.filter((a) => a.asset_type === 'doc').map((a) => (
-                              <li key={a.id}>
-                                <a
-                                  href={a.content_base64 ? `data:${a.mime_type || 'application/octet-stream'};base64,${a.content_base64}` : '#'}
-                                  download={a.file_name || a.title || 'document'}
-                                  className="flex items-center gap-2 text-text-primary hover:underline"
-                                >
-                                  <FileText className="w-4 h-4 text-text-muted" />
-                                  {a.file_name || a.title || 'Document'}
-                                </a>
-                              </li>
-                            ))
+                            <>
+                              {sharedChatDocs.map((d) => (
+                                <li key={d.id}>
+                                  <a
+                                    href={d.url}
+                                    download={d.name}
+                                    className="flex items-center gap-2 text-text-primary hover:underline"
+                                  >
+                                    <FileText className="w-4 h-4 text-text-muted" />
+                                    {d.name}
+                                  </a>
+                                </li>
+                              ))}
+                              {teamAssets.filter((a) => a.asset_type === 'doc').map((a) => (
+                                <li key={a.id}>
+                                  <a
+                                    href={a.content_base64 ? `data:${a.mime_type || 'application/octet-stream'};base64,${a.content_base64}` : '#'}
+                                    download={a.file_name || a.title || 'document'}
+                                    className="flex items-center gap-2 text-text-primary hover:underline"
+                                  >
+                                    <FileText className="w-4 h-4 text-text-muted" />
+                                    {a.file_name || a.title || 'Document'}
+                                  </a>
+                                </li>
+                              ))}
+                            </>
                           )}
                         </ul>
                       </div>

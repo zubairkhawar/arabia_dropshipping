@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,7 +19,7 @@ class NotificationOut(BaseModel):
     description: str | None
     from_agent_id: int | None
     conversation_id: int | None
-    created_at: str
+    created_at: datetime
     read: bool
 
     class Config:
