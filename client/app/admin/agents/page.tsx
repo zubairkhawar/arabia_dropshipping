@@ -118,15 +118,6 @@ export default function AdminAgents() {
   }, []);
 
   useEffect(() => {
-    if (!selectedAgent?.id) {
-      setAvgResponseTimeSeconds(0);
-      return;
-    }
-    void loadAvgResponseFromChats(selectedAgent.id);
-  }, [selectedAgent?.id, loadAvgResponseFromChats]);
-
-
-  useEffect(() => {
     if (!selectedId && agents.length > 0) {
       setSelectedId(agents[0].id);
     } else if (selectedId && !agents.find((a) => a.id === selectedId)) {
@@ -142,6 +133,13 @@ export default function AdminAgents() {
     () => agents.find((a) => a.id === selectedId) ?? null,
     [agents, selectedId],
   );
+  useEffect(() => {
+    if (!selectedAgent?.id) {
+      setAvgResponseTimeSeconds(0);
+      return;
+    }
+    void loadAvgResponseFromChats(selectedAgent.id);
+  }, [selectedAgent?.id, loadAvgResponseFromChats]);
   const { dayData: attendanceDayData } = useAgentAttendanceData(selectedAgent?.id, schedule.workingDays);
   const visibleAttendanceDayData = useMemo(() => {
     if (!selectedAgent) return [];
