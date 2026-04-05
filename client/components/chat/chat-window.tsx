@@ -80,6 +80,11 @@ interface Message {
   sendFailed?: boolean;
 }
 
+type ThreadMessageEdit =
+  | { source: 'inbox'; id: number; text: string }
+  | { source: 'dm'; id: number; text: string }
+  | { source: 'team'; id: number; text: string };
+
 interface TeamChannelMessageRow {
   id: number;
   team_id: number;
@@ -88,6 +93,9 @@ interface TeamChannelMessageRow {
   sender_name: string;
   content: string;
   created_at: string;
+  reply_to_message_id?: number | null;
+  edited_at?: string | null;
+  deleted_for_everyone_at?: string | null;
 }
 
 interface TeamChannelPayload {
@@ -242,6 +250,7 @@ export function ChatWindow({
     loadOlderDmMessages,
     fetchDmMessagesSince,
     mergeIncomingDmMessage,
+    patchDmMessage,
     dmHasMoreOlder,
     sendMessageBySlug,
     loadingDmSlug,
@@ -381,14 +390,26 @@ export function ChatWindow({
   useEffect(() => {
     if (!isInternalChat || !isDmPage || !dmSlug) return;
     const rows = getMessagesBySlug(dmSlug);
-    const mapped: Message[] = rows.map((m) => ({
-      id: m.id,
-      content: m.content,
-      sender: 'agent',
-      senderName: m.senderName,
-      timestamp: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-      sentAt: m.createdAt,
-    }));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const mapped: Message[] = rows.map((m) => {
+      const parent =
+        m.replyToMessageId != null ? byId.get(m.replyToMessageId) : undefined;
+      return {
+        id: m.id,
+        content: m.content,
+        sender: 'agent' as const,
+        senderName: m.senderName,
+        timestamp: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        sentAt: m.createdAt,
+        replyToMessageId: m.replyToMessageId,
+        replyTo:
+          parent != null
+            ? { id: parent.id, senderName: parent.senderName, content: parent.content }
+            : undefined,
+        editedAt: m.editedAt,
+        deletedForEveryone: m.deletedForEveryone,
+      };
+    });
     setMessages(mapped);
   }, [isInternalChat, isDmPage, dmSlug, getMessagesBySlug]);
 
@@ -464,7 +485,7 @@ export function ChatWindow({
   const copyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [threadSearchOpen, setThreadSearchOpen] = useState(false);
   const [threadSearchQuery, setThreadSearchQuery] = useState('');
-  const [editingInboxMessage, setEditingInboxMessage] = useState<{ id: number; text: string } | null>(null);
+  const [threadMessageEdit, setThreadMessageEdit] = useState<ThreadMessageEdit | null>(null);
 
   useEffect(() => {
     const inThread =
@@ -662,6 +683,7 @@ export function ChatWindow({
 
   const mapTeamRowToMessage = useCallback(
     (m: TeamChannelMessageRow): Message => {
+      const deletedForEveryone = Boolean(m.deleted_for_everyone_at);
       const payload = decodeTeamMessageContent(m.content);
       const cachedReactions = readReactionCache()[String(m.id)];
       const postedByAdmin = !!m.posted_by_admin;
@@ -675,7 +697,7 @@ export function ChatWindow({
       const mentionIds = payload.mentions?.filter((x) => Number.isFinite(Number(x))).map((x) => Number(x));
       return {
         id: m.id,
-        content: payload.text || '',
+        content: deletedForEveryone ? '' : payload.text || '',
         sender: 'agent',
         senderName,
         senderAgentId: m.sender_agent_id ?? undefined,
@@ -683,8 +705,11 @@ export function ChatWindow({
         channelTeamId: m.team_id,
         timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
         sentAt: m.created_at,
-        attachment: payload.attachment,
-        replyTo: payload.replyTo,
+        attachment: deletedForEveryone ? undefined : payload.attachment,
+        replyTo: deletedForEveryone ? undefined : payload.replyTo,
+        replyToMessageId: m.reply_to_message_id ?? undefined,
+        editedAt: m.edited_at ?? undefined,
+        deletedForEveryone: deletedForEveryone || undefined,
         reactions: mergeReactions(payload.reactions, cachedReactions),
         mentionAgentIds: mentionIds && mentionIds.length > 0 ? mentionIds : undefined,
       };
@@ -699,7 +724,7 @@ export function ChatWindow({
       url.searchParams.set('tenant_id', String(TENANT_ID));
       url.searchParams.set('since', sinceIso);
       try {
-        const res = await fetch(url.toString());
+        const res = await fetch(url.toString(), { headers: teamChannelJsonHeaders() });
         if (!res.ok) return;
         const raw = await res.json();
         const rows = (Array.isArray(raw) ? raw : (raw.messages ?? [])) as TeamChannelMessageRow[];
@@ -734,7 +759,7 @@ export function ChatWindow({
       url.searchParams.set('tenant_id', String(TENANT_ID));
       url.searchParams.set('limit', '50');
       url.searchParams.set('before_id', String(oldestId));
-      const res = await fetch(url.toString());
+      const res = await fetch(url.toString(), { headers: teamChannelJsonHeaders() });
       if (!res.ok) return;
       const raw = await res.json();
       const page = Array.isArray(raw) ? { messages: raw, has_more_older: false } : raw;
@@ -851,7 +876,7 @@ export function ChatWindow({
         msgUrl.searchParams.set('limit', '50');
         const readUrl = `${API_BASE}/api/teams/${Number(teamId)}/channel/member-read-states?tenant_id=${TENANT_ID}`;
         const [msgRes, readRes] = await Promise.all([
-          fetch(msgUrl.toString()),
+          fetch(msgUrl.toString(), { headers: teamChannelJsonHeaders() }),
           fetch(readUrl, { headers: teamChannelJsonHeaders() }),
         ]);
         if (!msgRes.ok) throw new Error('Failed to load team messages');
@@ -935,12 +960,18 @@ export function ChatWindow({
 
   const handleDmWs = useCallback(
     (ev: DmWsEvent) => {
-      if (ev.type !== 'NEW_DM_MESSAGE' || !dmSlug) return;
-      const row = ev.message;
-      mergeIncomingDmMessage(dmSlug, row);
-      if (String(row.sender_agent_id) !== String(viewerAgentId) && !dmNearBottomRef.current) {
-        reportDmUnread(dmSlug);
-        setDmNewBelowOpen(true);
+      if (!dmSlug) return;
+      if (ev.type === 'NEW_DM_MESSAGE') {
+        const row = ev.message;
+        mergeIncomingDmMessage(dmSlug, row);
+        if (String(row.sender_agent_id) !== String(viewerAgentId) && !dmNearBottomRef.current) {
+          reportDmUnread(dmSlug);
+          setDmNewBelowOpen(true);
+        }
+        return;
+      }
+      if (ev.type === 'DM_MESSAGE_UPDATED') {
+        mergeIncomingDmMessage(dmSlug, ev.message);
       }
     },
     [dmSlug, mergeIncomingDmMessage, viewerAgentId, reportDmUnread],
@@ -1455,6 +1486,55 @@ export function ChatWindow({
         setActiveMessageMenuId(null);
         return;
       }
+    } else if (isInternalChat && isTeamChannel && teamId) {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/teams/${Number(teamId)}/channel/messages/${id}/for-everyone?tenant_id=${TENANT_ID}`,
+          { method: 'DELETE', headers: teamChannelJsonHeaders() },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          addSystemNote(
+            typeof err.detail === 'string' ? err.detail : 'Could not delete for everyone.',
+          );
+          setActiveMessageMenuId(null);
+          return;
+        }
+        setMessages((prev) =>
+          prev.map((m) => (m.id === id ? { ...m, deletedForEveryone: true, content: '' } : m)),
+        );
+      } catch {
+        addSystemNote('Could not delete for everyone.');
+        setActiveMessageMenuId(null);
+        return;
+      }
+    } else if (isInternalChat && isDmPage && dmSlug) {
+      const conv = getConversationBySlug(dmSlug);
+      if (!conv) {
+        setActiveMessageMenuId(null);
+        return;
+      }
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/internal-dm/messages/${id}/for-everyone?tenant_id=${TENANT_ID}&conversation_id=${encodeURIComponent(conv.id)}`,
+          { method: 'DELETE', headers: teamChannelJsonHeaders() },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          addSystemNote(
+            typeof err.detail === 'string' ? err.detail : 'Could not delete for everyone.',
+          );
+          setActiveMessageMenuId(null);
+          return;
+        }
+        setMessages((prev) =>
+          prev.map((m) => (m.id === id ? { ...m, deletedForEveryone: true, content: '' } : m)),
+        );
+      } catch {
+        addSystemNote('Could not delete for everyone.');
+        setActiveMessageMenuId(null);
+        return;
+      }
     } else {
       setMessages((prev) => prev.filter((m) => m.id !== id));
     }
@@ -1479,6 +1559,41 @@ export function ChatWindow({
         addSystemNote('Could not remove message.');
         setActiveMessageMenuId(null);
         return;
+      }
+    } else if (isInternalChat && isTeamChannel && teamId) {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/teams/${Number(teamId)}/channel/messages/${id}/for-me?tenant_id=${TENANT_ID}`,
+          { method: 'DELETE', headers: teamChannelJsonHeaders() },
+        );
+        if (!res.ok) {
+          addSystemNote('Could not remove message.');
+          setActiveMessageMenuId(null);
+          return;
+        }
+      } catch {
+        addSystemNote('Could not remove message.');
+        setActiveMessageMenuId(null);
+        return;
+      }
+    } else if (isInternalChat && isDmPage && dmSlug) {
+      const conv = getConversationBySlug(dmSlug);
+      if (conv) {
+        try {
+          const res = await fetch(
+            `${API_BASE}/api/internal-dm/messages/${id}/for-me?tenant_id=${TENANT_ID}&conversation_id=${encodeURIComponent(conv.id)}`,
+            { method: 'DELETE', headers: teamChannelJsonHeaders() },
+          );
+          if (!res.ok) {
+            addSystemNote('Could not remove message.');
+            setActiveMessageMenuId(null);
+            return;
+          }
+        } catch {
+          addSystemNote('Could not remove message.');
+          setActiveMessageMenuId(null);
+          return;
+        }
       }
     }
     setDeletedForMeIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
@@ -1506,31 +1621,103 @@ export function ChatWindow({
     inboxConv.appendMessage(convId, im);
   };
 
-  const submitInboxEdit = async () => {
-    if (!editingInboxMessage) return;
-    const convId = inboxConv?.selectedId;
-    if (convId == null || !inboxConv) return;
-    const { id, text } = editingInboxMessage;
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    try {
-      const res = await fetch(`${API_BASE}/api/messaging/messages/${id}`, {
-        method: 'PATCH',
-        headers: teamChannelJsonHeaders(),
-        body: JSON.stringify({ content: trimmed }),
-      });
-      if (!res.ok) {
+  const submitThreadMessageEdit = async () => {
+    if (!threadMessageEdit) return;
+    const trimmed = threadMessageEdit.text.trim();
+    if (!trimmed) {
+      addSystemNote('Message cannot be empty.');
+      return;
+    }
+
+    if (threadMessageEdit.source === 'inbox') {
+      const convId = inboxConv?.selectedId;
+      if (convId == null || !inboxConv) return;
+      const { id } = threadMessageEdit;
+      try {
+        const res = await fetch(`${API_BASE}/api/messaging/messages/${id}`, {
+          method: 'PATCH',
+          headers: teamChannelJsonHeaders(),
+          body: JSON.stringify({ content: trimmed }),
+        });
+        if (!res.ok) {
+          addSystemNote('Could not save edit.');
+          return;
+        }
+        const saved = (await res.json()) as { edited_at?: string | null; content?: string };
+        inboxConv.patchInboxMessage(convId, id, {
+          content: saved.content ?? trimmed,
+          editedAt: saved.edited_at ?? new Date().toISOString(),
+        });
+        setThreadMessageEdit(null);
+      } catch {
         addSystemNote('Could not save edit.');
-        return;
       }
-      const saved = (await res.json()) as { edited_at?: string | null; content?: string };
-      inboxConv.patchInboxMessage(convId, id, {
-        content: saved.content ?? trimmed,
-        editedAt: saved.edited_at ?? new Date().toISOString(),
-      });
-      setEditingInboxMessage(null);
-    } catch {
-      addSystemNote('Could not save edit.');
+      return;
+    }
+
+    if (threadMessageEdit.source === 'dm') {
+      if (!dmSlug) return;
+      const conv = getConversationBySlug(dmSlug);
+      if (!conv) return;
+      const { id } = threadMessageEdit;
+      try {
+        const res = await fetch(`${API_BASE}/api/internal-dm/messages/${id}`, {
+          method: 'PATCH',
+          headers: teamChannelJsonHeaders(),
+          body: JSON.stringify({
+            tenant_id: TENANT_ID,
+            conversation_id: Number(conv.id),
+            content: trimmed,
+          }),
+        });
+        if (!res.ok) {
+          addSystemNote('Could not save edit.');
+          return;
+        }
+        const saved = (await res.json()) as {
+          content: string;
+          edited_at?: string | null;
+        };
+        patchDmMessage(dmSlug, id, {
+          content: saved.content ?? trimmed,
+          editedAt: saved.edited_at ?? new Date().toISOString(),
+        });
+        setThreadMessageEdit(null);
+      } catch {
+        addSystemNote('Could not save edit.');
+      }
+      return;
+    }
+
+    if (threadMessageEdit.source === 'team') {
+      if (!teamId) return;
+      const target = messages.find((m) => m.id === threadMessageEdit.id);
+      if (!target) return;
+      const { id } = threadMessageEdit;
+      try {
+        const payloadJson = encodeTeamMessageContent({
+          ...toTeamPayload(target),
+          text: trimmed,
+        });
+        const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages/${id}`, {
+          method: 'PATCH',
+          headers: teamChannelJsonHeaders(),
+          body: JSON.stringify({
+            tenant_id: TENANT_ID,
+            content: typeof payloadJson === 'string' ? payloadJson : String(payloadJson ?? ''),
+          }),
+        });
+        if (!res.ok) {
+          addSystemNote('Could not save edit.');
+          return;
+        }
+        const saved = (await res.json()) as TeamChannelMessageRow;
+        const mapped = mapTeamRowToMessage(saved);
+        setMessages((prev) => prev.map((m) => (m.id === mapped.id ? mapped : m)));
+        setThreadMessageEdit(null);
+      } catch {
+        addSystemNote('Could not save edit.');
+      }
     }
   };
 
@@ -1551,7 +1738,7 @@ export function ChatWindow({
       attachment: pendingAttachment ?? undefined,
     };
     if (isInternalChat && isDmPage && dmSlug) {
-      void sendMessageBySlug(dmSlug, newMsg.content);
+      void sendMessageBySlug(dmSlug, newMsg.content, replyingTo?.id);
       setInputValue('');
       setReplyingTo(null);
       setPendingAttachment(null);
@@ -1578,6 +1765,9 @@ export function ChatWindow({
           const senderId = Number.parseInt(String(getCurrentAgent()?.id ?? ''), 10);
           if (!Number.isFinite(senderId) || senderId < 1) throw new Error('Agent not found');
           body.sender_agent_id = senderId;
+        }
+        if (typeof replyingTo?.id === 'number' && replyingTo.id > 0) {
+          body.reply_to_message_id = replyingTo.id;
         }
         const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages`, {
           method: 'POST',
@@ -2701,7 +2891,42 @@ export function ChatWindow({
                               type="button"
                               className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                               onClick={() => {
-                                setEditingInboxMessage({ id: message.id, text: message.content });
+                                setThreadMessageEdit({ source: 'inbox', id: message.id, text: message.content });
+                                setActiveMessageMenuId(null);
+                              }}
+                            >
+                              <Pencil className="h-4 w-4 text-[#54656f]" />
+                              Edit
+                            </button>
+                          )}
+                        {isInternalChat &&
+                          isDmPage &&
+                          outgoing &&
+                          !message.deletedForEveryone &&
+                          !message.attachment && (
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
+                              onClick={() => {
+                                setThreadMessageEdit({ source: 'dm', id: message.id, text: message.content });
+                                setActiveMessageMenuId(null);
+                              }}
+                            >
+                              <Pencil className="h-4 w-4 text-[#54656f]" />
+                              Edit
+                            </button>
+                          )}
+                        {isTeamChannel &&
+                          isInternalChat &&
+                          !readOnly &&
+                          outgoing &&
+                          !message.deletedForEveryone &&
+                          !message.attachment && (
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
+                              onClick={() => {
+                                setThreadMessageEdit({ source: 'team', id: message.id, text: message.content });
                                 setActiveMessageMenuId(null);
                               }}
                             >
@@ -3109,10 +3334,10 @@ export function ChatWindow({
         </div>
       )}
 
-      {editingInboxMessage && (
+      {threadMessageEdit && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setEditingInboxMessage(null)}
+          onClick={() => setThreadMessageEdit(null)}
           aria-modal
         >
           <div
@@ -3122,9 +3347,9 @@ export function ChatWindow({
             <h3 className="mb-2 font-semibold text-text-primary">Edit message</h3>
             <textarea
               className="min-h-[100px] w-full resize-y rounded-lg border border-border p-2 text-sm text-text-primary outline-none focus:ring-2 focus:ring-primary"
-              value={editingInboxMessage.text}
+              value={threadMessageEdit.text}
               onChange={(e) =>
-                setEditingInboxMessage({ ...editingInboxMessage, text: e.target.value })
+                setThreadMessageEdit({ ...threadMessageEdit, text: e.target.value })
               }
               aria-label="Edited message text"
             />
@@ -3132,14 +3357,14 @@ export function ChatWindow({
               <button
                 type="button"
                 className="rounded-lg border border-border px-3 py-1.5 text-sm text-text-primary hover:bg-panel"
-                onClick={() => setEditingInboxMessage(null)}
+                onClick={() => setThreadMessageEdit(null)}
               >
                 Cancel
               </button>
               <button
                 type="button"
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-dark"
-                onClick={() => void submitInboxEdit()}
+                onClick={() => void submitThreadMessageEdit()}
               >
                 Save
               </button>

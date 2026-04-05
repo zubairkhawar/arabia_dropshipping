@@ -11,6 +11,19 @@ const API_BASE =
   'https://arabia-dropshipping.onrender.com';
 const TENANT_ID = 1;
 
+function dmAuthHeaders(): Record<string, string> {
+  const h: Record<string, string> = {};
+  if (typeof window !== 'undefined') {
+    const t = localStorage.getItem('auth_token');
+    if (t) h.Authorization = `Bearer ${t}`;
+  }
+  return h;
+}
+
+function dmJsonHeaders(): Record<string, string> {
+  return { 'Content-Type': 'application/json', ...dmAuthHeaders() };
+}
+
 const DM_UNREAD_STORAGE_KEY = 'dm-unread-by-slug:v1';
 
 function readDmUnreadMap(): Record<string, number> {
@@ -34,17 +47,27 @@ function writeDmUnreadMap(m: Record<string, number>) {
   }
 }
 
+type DmApiMessageRow = {
+  id: number;
+  sender_agent_id: number;
+  content: string;
+  created_at: string;
+  reply_to_message_id?: number | null;
+  edited_at?: string | null;
+  deleted_for_everyone_at?: string | null;
+};
+
 function parseDmMessagesPayload(data: unknown): {
-  rows: Array<{ id: number; sender_agent_id: number; content: string; created_at: string }>;
+  rows: DmApiMessageRow[];
   hasMoreOlder: boolean;
 } {
   if (Array.isArray(data)) {
-    return { rows: data, hasMoreOlder: false };
+    return { rows: data as DmApiMessageRow[], hasMoreOlder: false };
   }
   if (data && typeof data === 'object' && 'messages' in data) {
     const o = data as { messages: unknown; has_more_older?: boolean };
     const arr = Array.isArray(o.messages) ? o.messages : [];
-    return { rows: arr as Array<{ id: number; sender_agent_id: number; content: string; created_at: string }>, hasMoreOlder: Boolean(o.has_more_older) };
+    return { rows: arr as DmApiMessageRow[], hasMoreOlder: Boolean(o.has_more_older) };
   }
   return { rows: [], hasMoreOlder: false };
 }
@@ -63,6 +86,9 @@ export interface DmMessage {
   senderAgentId: string;
   senderName: string;
   createdAt: string;
+  replyToMessageId?: number;
+  editedAt?: string;
+  deletedForEveryone?: boolean;
 }
 
 interface DmChatsContextType {
@@ -77,9 +103,10 @@ interface DmChatsContextType {
   loadMessagesBySlug: (slug: string) => Promise<void>;
   loadOlderDmMessages: (slug: string) => Promise<void>;
   fetchDmMessagesSince: (slug: string, sinceIso: string) => Promise<void>;
-  mergeIncomingDmMessage: (slug: string, row: { id: number; sender_agent_id: number; content: string; created_at: string }) => void;
+  mergeIncomingDmMessage: (slug: string, row: DmApiMessageRow) => void;
+  patchDmMessage: (slug: string, messageId: number, patch: Partial<DmMessage>) => void;
   dmHasMoreOlder: (slug: string) => boolean;
-  sendMessageBySlug: (slug: string, content: string) => Promise<void>;
+  sendMessageBySlug: (slug: string, content: string, replyToMessageId?: number) => Promise<void>;
   getConversations: () => DmConversation[];
   refreshConversations: () => Promise<void>;
   isDmListLoading: boolean;
@@ -105,10 +132,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
   const [loadingOlderDmSlug, setLoadingOlderDmSlug] = useState<string | null>(null);
 
   const mapRowsToMessages = useCallback(
-    (
-      slug: string,
-      rows: Array<{ id: number; sender_agent_id: number; content: string; created_at: string }>,
-    ): DmMessage[] => {
+    (slug: string, rows: DmApiMessageRow[]): DmMessage[] => {
       const conv = conversations.find((c) => c.slug === slug);
       const peerName = conv?.name || 'Agent';
       return rows.map((row) => ({
@@ -117,6 +141,9 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         senderName: String(row.sender_agent_id) === String(currentAgentId) ? 'You' : peerName,
         content: row.content,
         createdAt: row.created_at,
+        replyToMessageId: row.reply_to_message_id ?? undefined,
+        editedAt: row.edited_at ?? undefined,
+        deletedForEveryone: Boolean(row.deleted_for_everyone_at),
       }));
     },
     [conversations, currentAgentId],
@@ -138,12 +165,13 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
 
     try {
       const [listRes, messagesRes] = await Promise.all([
-        fetch(listUrl.toString()),
+        fetch(listUrl.toString(), { headers: dmAuthHeaders() }),
         last
           ? fetch(
               `${API_BASE}/api/internal-dm/conversations/${last.conversationId}/messages?agent_id=${encodeURIComponent(
                 String(Number(currentAgentId)),
               )}&limit=50`,
+              { headers: dmAuthHeaders() },
             )
           : Promise.resolve({ ok: false } as Response),
       ]);
@@ -175,18 +203,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         const slugFromList = mapped.find((c) => c.id === last.conversationId)?.slug ?? last.slug;
         const raw = await messagesRes.json();
         const { rows: msgRows, hasMoreOlder } = parseDmMessagesPayload(raw);
-        const conv = mapped.find((c) => c.id === last.conversationId) ?? mapped.find((c) => c.slug === last.slug);
-        const peerName = conv?.name || 'Agent';
-        const mappedMsgs: DmMessage[] = msgRows.map((row) => ({
-          id: row.id,
-          senderAgentId: String(row.sender_agent_id),
-          senderName:
-            String(row.sender_agent_id) === currentAgentId
-              ? 'You'
-              : peerName,
-          content: row.content,
-          createdAt: row.created_at,
-        }));
+        const mappedMsgs: DmMessage[] = mapRowsToMessages(slugFromList, msgRows);
         setMessagesBySlug((prev) => ({ ...prev, [slugFromList]: mappedMsgs }));
         setDmMetaBySlug((prev) => ({ ...prev, [slugFromList]: { hasMoreOlder } }));
         writeLastDmPrefs(last.conversationId, slugFromList);
@@ -207,7 +224,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch(`${API_BASE}/api/internal-dm/conversations/find-or-create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: dmJsonHeaders(),
         body: JSON.stringify({
           tenant_id: TENANT_ID,
           agent_id: Number(currentAgentId),
@@ -318,7 +335,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         url.searchParams.set('agent_id', String(Number(currentAgentId)));
         url.searchParams.set('limit', '50');
         url.searchParams.set('before_id', String(oldestId));
-        const res = await fetch(url.toString());
+        const res = await fetch(url.toString(), { headers: dmAuthHeaders() });
         if (!res.ok) return;
         const raw = await res.json();
         const { rows, hasMoreOlder } = parseDmMessagesPayload(raw);
@@ -354,7 +371,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         const url = new URL(`${API_BASE}/api/internal-dm/conversations/${conversation.id}/messages`);
         url.searchParams.set('agent_id', String(Number(currentAgentId)));
         url.searchParams.set('since', sinceIso);
-        const res = await fetch(url.toString());
+        const res = await fetch(url.toString(), { headers: dmAuthHeaders() });
         if (!res.ok) return;
         const raw = await res.json();
         const { rows } = parseDmMessagesPayload(raw);
@@ -375,10 +392,11 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
   );
 
   const mergeIncomingDmMessage = useCallback(
-    (slug: string, row: { id: number; sender_agent_id: number; content: string; created_at: string }) => {
+    (slug: string, row: DmApiMessageRow) => {
+      let wasNew = false;
       setMessagesBySlug((prev) => {
         const cur = prev[slug] || [];
-        if (cur.some((m) => m.id === row.id)) return prev;
+        wasNew = !cur.some((m) => m.id === row.id);
         const conv = conversations.find((c) => c.slug === slug);
         const peerName = conv?.name || 'Agent';
         const msg: DmMessage = {
@@ -387,14 +405,22 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
           senderName: String(row.sender_agent_id) === String(currentAgentId) ? 'You' : peerName,
           content: row.content,
           createdAt: row.created_at,
+          replyToMessageId: row.reply_to_message_id ?? undefined,
+          editedAt: row.edited_at ?? undefined,
+          deletedForEveryone: Boolean(row.deleted_for_everyone_at),
         };
-        return { ...prev, [slug]: [...cur, msg].sort((a, b) => a.id - b.id) };
+        const next = wasNew
+          ? [...cur, msg].sort((a, b) => a.id - b.id)
+          : cur.map((m) => (m.id === row.id ? msg : m));
+        return { ...prev, [slug]: next };
       });
-      setConversations((prev) =>
-        prev
-          .map((c) => (c.slug === slug ? { ...c, lastMessageAt: row.created_at } : c))
-          .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()),
-      );
+      if (wasNew) {
+        setConversations((prev) =>
+          prev
+            .map((c) => (c.slug === slug ? { ...c, lastMessageAt: row.created_at } : c))
+            .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()),
+        );
+      }
     },
     [conversations, currentAgentId],
   );
@@ -424,27 +450,26 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
   const getDmUnreadCount = useCallback((slug: string) => dmUnreadBySlug[slug] ?? 0, [dmUnreadBySlug]);
 
   const sendMessageBySlug = useCallback(
-    async (slug: string, content: string) => {
+    async (slug: string, content: string, replyToMessageId?: number) => {
       if (!currentAgentId) return;
       const conversation = conversations.find((c) => c.slug === slug);
       if (!conversation) return;
       try {
+        const body: Record<string, number | string> = {
+          conversation_id: Number(conversation.id),
+          sender_agent_id: Number(currentAgentId),
+          content,
+        };
+        if (typeof replyToMessageId === 'number' && replyToMessageId > 0) {
+          body.reply_to_message_id = replyToMessageId;
+        }
         const res = await fetch(`${API_BASE}/api/internal-dm/messages`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            conversation_id: Number(conversation.id),
-            sender_agent_id: Number(currentAgentId),
-            content,
-          }),
+          headers: dmJsonHeaders(),
+          body: JSON.stringify(body),
         });
         if (!res.ok) return;
-        const row = (await res.json()) as {
-          id: number;
-          sender_agent_id: number;
-          content: string;
-          created_at: string;
-        };
+        const row = (await res.json()) as DmApiMessageRow;
         setMessagesBySlug((prev) => {
           const list = prev[slug] || [];
           if (list.some((m) => m.id === row.id)) return prev;
@@ -458,6 +483,9 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
                 senderName: 'You',
                 content: row.content,
                 createdAt: row.created_at,
+                replyToMessageId: row.reply_to_message_id ?? undefined,
+                editedAt: row.edited_at ?? undefined,
+                deletedForEveryone: Boolean(row.deleted_for_everyone_at),
               },
             ].sort((a, b) => a.id - b.id),
           };
@@ -485,6 +513,16 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
     [conversations, currentAgentId, getCurrentAgent, notifications],
   );
 
+  const patchDmMessage = useCallback((slug: string, messageId: number, patch: Partial<DmMessage>) => {
+    setMessagesBySlug((prev) => {
+      const cur = prev[slug] || [];
+      return {
+        ...prev,
+        [slug]: cur.map((m) => (m.id === messageId ? { ...m, ...patch } : m)),
+      };
+    });
+  }, []);
+
   const getMessagesBySlug = useCallback((slug: string) => messagesBySlug[slug] || [], [messagesBySlug]);
   const getConversations = useCallback(() => conversations, [conversations]);
 
@@ -501,6 +539,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         loadOlderDmMessages,
         fetchDmMessagesSince,
         mergeIncomingDmMessage,
+        patchDmMessage,
         dmHasMoreOlder,
         sendMessageBySlug,
         getConversations,
@@ -531,9 +570,10 @@ export function useDmChats() {
       loadMessagesBySlug: async (_slug: string) => {},
       loadOlderDmMessages: async (_slug: string) => {},
       fetchDmMessagesSince: async (_slug: string, _since: string) => {},
-      mergeIncomingDmMessage: (_slug: string, _row: { id: number; sender_agent_id: number; content: string; created_at: string }) => {},
+      mergeIncomingDmMessage: (_slug: string, _row: DmApiMessageRow) => {},
+      patchDmMessage: (_slug: string, _messageId: number, _patch: Partial<DmMessage>) => {},
       dmHasMoreOlder: (_slug: string) => false,
-      sendMessageBySlug: async (_slug: string, _content: string) => {},
+      sendMessageBySlug: async (_slug: string, _content: string, _replyTo?: number) => {},
       getConversations: () => [] as DmConversation[],
       refreshConversations: async () => {},
       isDmListLoading: false,

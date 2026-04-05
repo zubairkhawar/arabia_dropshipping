@@ -15,6 +15,9 @@ export interface TeamChannelWsMessage {
   sender_name: string;
   content: string;
   created_at: string;
+  reply_to_message_id?: number | null;
+  edited_at?: string | null;
+  deleted_for_everyone_at?: string | null;
 }
 
 export type TeamChannelWsEvent =

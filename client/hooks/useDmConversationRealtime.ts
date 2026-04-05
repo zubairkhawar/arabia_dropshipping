@@ -13,9 +13,14 @@ export interface DmWsMessagePayload {
   sender_agent_id: number;
   content: string;
   created_at: string;
+  reply_to_message_id?: number | null;
+  edited_at?: string | null;
+  deleted_for_everyone_at?: string | null;
 }
 
-export type DmWsEvent = { type: 'NEW_DM_MESSAGE'; message: DmWsMessagePayload };
+export type DmWsEvent =
+  | { type: 'NEW_DM_MESSAGE'; message: DmWsMessagePayload }
+  | { type: 'DM_MESSAGE_UPDATED'; message: DmWsMessagePayload };
 
 function wsUrlForDm(conversationId: number, tenantId: number, agentId: number, token: string): string {
   const wsBase = API_BASE.replace(/^http/i, (m) => (m.toLowerCase() === 'https' ? 'wss' : 'ws'));
@@ -76,7 +81,12 @@ export function useDmConversationRealtime(
       ws.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data as string) as DmWsEvent;
-          if (data && typeof data === 'object' && data.type === 'NEW_DM_MESSAGE' && data.message) {
+          if (
+            data &&
+            typeof data === 'object' &&
+            (data.type === 'NEW_DM_MESSAGE' || data.type === 'DM_MESSAGE_UPDATED') &&
+            data.message
+          ) {
             onEventRef.current(data);
           }
         } catch {

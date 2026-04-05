@@ -23,6 +23,7 @@ from config import settings
 from database import SessionLocal, get_db
 from models import (
     Agent,
+    MessageUserDeletion,
     Notification,
     Team,
     TeamAsset,
@@ -158,6 +159,9 @@ class TeamChannelMessageOut(BaseModel):
     sender_name: str
     content: str
     created_at: datetime
+    reply_to_message_id: Optional[int] = None
+    edited_at: Optional[datetime] = None
+    deleted_for_everyone_at: Optional[datetime] = None
 
 
 class TeamChannelMessagesPage(BaseModel):
@@ -179,6 +183,7 @@ class TeamChannelMessageCreate(BaseModel):
     content: str
     sender_agent_id: Optional[int] = None
     posted_by_admin: bool = False
+    reply_to_message_id: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -222,6 +227,16 @@ class TeamChannelMessageCreate(BaseModel):
         raw_content = d.get("content")
         if raw_content is not None and not isinstance(raw_content, str):
             d["content"] = str(raw_content)
+        rt = d.get("reply_to_message_id")
+        if rt is None or rt == "":
+            d["reply_to_message_id"] = None
+        elif isinstance(rt, bool):
+            raise ValueError("reply_to_message_id must be an integer")
+        else:
+            try:
+                d["reply_to_message_id"] = int(rt)
+            except (TypeError, ValueError) as e:
+                raise ValueError("reply_to_message_id must be an integer") from e
         return d
 
 
@@ -755,19 +770,68 @@ async def upsert_team_channel_read_state(
     return Response(status_code=204)
 
 
+def _team_channel_message_to_out(db: Session, r: TeamChannelMessage) -> TeamChannelMessageOut:
+    deleted = bool(getattr(r, "deleted_for_everyone_at", None))
+    text = "[Message deleted]" if deleted else (r.content or "")
+    return TeamChannelMessageOut(
+        id=r.id,
+        team_id=r.team_id,
+        sender_agent_id=r.sender_agent_id,
+        posted_by_admin=bool(getattr(r, "posted_by_admin", False)),
+        sender_name=_team_channel_sender_display(db, r),
+        content=text,
+        created_at=r.created_at,
+        reply_to_message_id=getattr(r, "reply_to_message_id", None),
+        edited_at=getattr(r, "edited_at", None),
+        deleted_for_everyone_at=getattr(r, "deleted_for_everyone_at", None),
+    )
+
+
 def _team_channel_rows_to_out(db: Session, rows: List[TeamChannelMessage]) -> List[TeamChannelMessageOut]:
-    return [
-        TeamChannelMessageOut(
-            id=r.id,
-            team_id=r.team_id,
-            sender_agent_id=r.sender_agent_id,
-            posted_by_admin=bool(getattr(r, "posted_by_admin", False)),
-            sender_name=_team_channel_sender_display(db, r),
-            content=r.content,
-            created_at=r.created_at,
+    return [_team_channel_message_to_out(db, r) for r in rows]
+
+
+def _hidden_team_message_ids(db: Session, user_id: int, mids: List[int]) -> set[int]:
+    if not mids:
+        return set()
+    rows = (
+        db.query(MessageUserDeletion.message_id)
+        .filter(
+            MessageUserDeletion.user_id == user_id,
+            MessageUserDeletion.channel == "team",
+            MessageUserDeletion.message_id.in_(mids),
         )
-        for r in rows
-    ]
+        .all()
+    )
+    return {x[0] for x in rows}
+
+
+def _require_team_channel_viewer(
+    db: Session, tenant_id: int, team_id: int, user: User
+) -> Optional[Agent]:
+    if user.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+    role = (user.role or "").lower()
+    if role == "admin":
+        team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == tenant_id).first()
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        return None
+    ag = db.query(Agent).filter(Agent.user_id == user.id, Agent.tenant_id == tenant_id).first()
+    if not ag:
+        raise HTTPException(status_code=403, detail="Not an agent")
+    mem = (
+        db.query(TeamMembership)
+        .filter(
+            TeamMembership.tenant_id == tenant_id,
+            TeamMembership.team_id == team_id,
+            TeamMembership.agent_id == ag.id,
+        )
+        .first()
+    )
+    if not mem:
+        raise HTTPException(status_code=403, detail="Not a team member")
+    return ag
 
 
 @router.get("/{team_id}/channel/messages", response_model=TeamChannelMessagesPage)
@@ -778,6 +842,7 @@ async def list_team_channel_messages(
     before_id: Optional[int] = Query(None, description="Load older messages with id strictly less than this"),
     since: Optional[datetime] = Query(None, description="ISO UTC: messages strictly after this time (reconnect gap fill)"),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == tenant_id).first()
     if not team:
@@ -787,6 +852,12 @@ async def list_team_channel_messages(
         TeamChannelMessage.team_id == team_id,
     )
 
+    def _filter_hidden(raw: List[TeamChannelMessage]) -> List[TeamChannelMessage]:
+        if current_user is None or not raw:
+            return raw
+        hidden = _hidden_team_message_ids(db, current_user.id, [r.id for r in raw])
+        return [r for r in raw if r.id not in hidden]
+
     if since is not None:
         rows = (
             base.filter(TeamChannelMessage.created_at > since)
@@ -794,6 +865,7 @@ async def list_team_channel_messages(
             .limit(500)
             .all()
         )
+        rows = _filter_hidden(rows)
         return TeamChannelMessagesPage(messages=_team_channel_rows_to_out(db, rows), has_more_older=False)
 
     lim = max(1, min(limit, 200))
@@ -805,6 +877,7 @@ async def list_team_channel_messages(
             .all()
         )
         rows = list(reversed(rows_desc))
+        rows = _filter_hidden(rows)
         min_id = rows[0].id if rows else before_id
         older = (
             db.query(TeamChannelMessage.id)
@@ -822,6 +895,7 @@ async def list_team_channel_messages(
 
     rows_desc = base.order_by(desc(TeamChannelMessage.id)).limit(lim).all()
     rows = list(reversed(rows_desc))
+    rows = _filter_hidden(rows)
     min_id = rows[0].id if rows else None
     older = None
     if min_id is not None:
@@ -853,6 +927,19 @@ async def create_team_channel_message(
     content = (payload.content or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="Message content is required")
+    reply_to_id = payload.reply_to_message_id
+    if reply_to_id is not None:
+        parent = (
+            db.query(TeamChannelMessage)
+            .filter(
+                TeamChannelMessage.id == reply_to_id,
+                TeamChannelMessage.team_id == team_id,
+                TeamChannelMessage.tenant_id == payload.tenant_id,
+            )
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=400, detail="Invalid reply_to_message_id")
     if payload.posted_by_admin:
         if current_user is None:
             raise HTTPException(
@@ -877,6 +964,7 @@ async def create_team_channel_message(
             posted_by_admin=True,
             content=content,
             created_at=datetime.utcnow(),
+            reply_to_message_id=reply_to_id,
         )
     else:
         if payload.sender_agent_id is None:
@@ -891,19 +979,12 @@ async def create_team_channel_message(
             posted_by_admin=False,
             content=content,
             created_at=datetime.utcnow(),
+            reply_to_message_id=reply_to_id,
         )
     db.add(row)
     db.commit()
     db.refresh(row)
-    msg_out = TeamChannelMessageOut(
-        id=row.id,
-        team_id=row.team_id,
-        sender_agent_id=row.sender_agent_id,
-        posted_by_admin=bool(row.posted_by_admin),
-        sender_name=_team_channel_sender_display(db, row),
-        content=row.content,
-        created_at=row.created_at,
-    )
+    msg_out = _team_channel_message_to_out(db, row)
     await hub.broadcast_json(
         payload.tenant_id,
         team_id,
@@ -924,7 +1005,9 @@ async def update_team_channel_message(
     message_id: int,
     payload: TeamChannelMessageUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _require_team_channel_viewer(db, payload.tenant_id, team_id, current_user)
     row = (
         db.query(TeamChannelMessage)
         .filter(
@@ -936,28 +1019,136 @@ async def update_team_channel_message(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Message not found")
+    if getattr(row, "deleted_for_everyone_at", None):
+        raise HTTPException(status_code=400, detail="Message was deleted")
     content = (payload.content or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="Message content is required")
+    role = (current_user.role or "").lower()
+    ag = (
+        db.query(Agent)
+        .filter(Agent.user_id == current_user.id, Agent.tenant_id == payload.tenant_id)
+        .first()
+    )
+    allowed = False
+    if role == "admin":
+        allowed = True
+    elif ag and row.sender_agent_id == ag.id and not bool(getattr(row, "posted_by_admin", False)):
+        allowed = True
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Cannot edit this message")
     row.content = content
+    row.edited_at = datetime.utcnow()
     db.add(row)
     db.commit()
     db.refresh(row)
-    msg_out = TeamChannelMessageOut(
-        id=row.id,
-        team_id=row.team_id,
-        sender_agent_id=row.sender_agent_id,
-        posted_by_admin=bool(getattr(row, "posted_by_admin", False)),
-        sender_name=_team_channel_sender_display(db, row),
-        content=row.content,
-        created_at=row.created_at,
-    )
+    msg_out = _team_channel_message_to_out(db, row)
     await hub.broadcast_json(
         row.tenant_id,
         team_id,
         {"type": "MESSAGE_UPDATED", "message": msg_out.model_dump(mode="json")},
     )
     return msg_out
+
+
+@router.delete(
+    "/{team_id}/channel/messages/{message_id}/for-me",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_team_channel_message_for_me(
+    team_id: int,
+    message_id: int,
+    tenant_id: int = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_team_channel_viewer(db, tenant_id, team_id, current_user)
+    row = (
+        db.query(TeamChannelMessage)
+        .filter(
+            TeamChannelMessage.id == message_id,
+            TeamChannelMessage.team_id == team_id,
+            TeamChannelMessage.tenant_id == tenant_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    exists = (
+        db.query(MessageUserDeletion)
+        .filter(
+            MessageUserDeletion.message_id == message_id,
+            MessageUserDeletion.user_id == current_user.id,
+            MessageUserDeletion.channel == "team",
+        )
+        .first()
+    )
+    if not exists:
+        db.add(
+            MessageUserDeletion(
+                channel="team",
+                message_id=message_id,
+                user_id=current_user.id,
+                deleted_by_role=(current_user.role or "").lower(),
+            )
+        )
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete(
+    "/{team_id}/channel/messages/{message_id}/for-everyone",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_team_channel_message_for_everyone(
+    team_id: int,
+    message_id: int,
+    tenant_id: int = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_team_channel_viewer(db, tenant_id, team_id, current_user)
+    row = (
+        db.query(TeamChannelMessage)
+        .filter(
+            TeamChannelMessage.id == message_id,
+            TeamChannelMessage.team_id == team_id,
+            TeamChannelMessage.tenant_id == tenant_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if getattr(row, "deleted_for_everyone_at", None):
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    role = (current_user.role or "").lower()
+    ag = (
+        db.query(Agent)
+        .filter(Agent.user_id == current_user.id, Agent.tenant_id == tenant_id)
+        .first()
+    )
+    allowed = False
+    if role == "admin":
+        allowed = True
+    elif ag and bool(getattr(row, "posted_by_admin", False)):
+        allowed = False
+    elif ag and row.sender_agent_id == ag.id:
+        if (datetime.utcnow() - row.created_at).total_seconds() <= 300:
+            allowed = True
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Cannot delete this message for everyone")
+    row.content = "[Message deleted]"
+    row.deleted_for_everyone_at = datetime.utcnow()
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    msg_out = _team_channel_message_to_out(db, row)
+    await hub.broadcast_json(
+        row.tenant_id,
+        team_id,
+        {"type": "MESSAGE_UPDATED", "message": msg_out.model_dump(mode="json")},
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.websocket("/ws/channel/{team_id}")
