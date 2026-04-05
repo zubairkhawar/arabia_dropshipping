@@ -41,7 +41,8 @@ const footerItems: SidebarLink[] = [
 function portalUnreadForPath(path: string, unread: { inbox: number; team_channel: number; dm: number }): number {
   if (path === '/agent/inbox') return unread.inbox;
   if (path === '/agent/team') return unread.team_channel;
-  if (path.startsWith('/agent/dm')) return unread.dm;
+  // DM unread is shown per conversation in the middle bar, not on this nav item.
+  if (path === '/agent/dm' || path.startsWith('/agent/dm/')) return 0;
   return 0;
 }
 

@@ -255,14 +255,12 @@ export function ChatWindow({
     getMessagesBySlug,
     loadInitialDmThread,
     loadOlderDmMessages,
-    fetchDmMessagesSince,
     mergeIncomingDmMessage,
     patchDmMessage,
     dmHasMoreOlder,
     sendMessageBySlug,
     loadingDmSlug,
     loadingOlderDmSlug,
-    isDmListLoading,
     getConversationBySlug,
     reportDmUnread,
     clearDmUnread,
@@ -291,6 +289,37 @@ export function ChatWindow({
       return { text: raw };
     }
   };
+
+  const DM_MSG_PREFIX = '__DM_MSG_JSON__';
+  const encodeDmMessagePayload = (payload: { text: string; attachment?: MessageAttachment }) =>
+    `${DM_MSG_PREFIX}${JSON.stringify({ v: 1, text: payload.text, attachment: payload.attachment })}`;
+  const decodeDmMessageContent = (raw: string): { text: string; attachment?: MessageAttachment } => {
+    if (!raw.startsWith(DM_MSG_PREFIX)) return { text: raw };
+    try {
+      const o = JSON.parse(raw.slice(DM_MSG_PREFIX.length)) as {
+        v?: number;
+        text?: string;
+        attachment?: MessageAttachment;
+      };
+      if (o && typeof o.text === 'string') {
+        return { text: o.text, attachment: o.attachment };
+      }
+    } catch {
+      // ignore
+    }
+    return { text: raw };
+  };
+
+  async function blobUrlToDataUrl(blobUrl: string): Promise<string> {
+    const res = await fetch(blobUrl);
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result));
+      fr.onerror = () => reject(new Error('read failed'));
+      fr.readAsDataURL(blob);
+    });
+  }
 
   const transferTargetOptions = (() => {
     const currentName = agentFullName || getCurrentAgent()?.name || '';
@@ -389,6 +418,8 @@ export function ChatWindow({
     }
   }, [isInboxPage, isInternalChat, inboxConv, inboxMessageCount]);
 
+  const dmThreadSlugRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!isInternalChat || !isDmPage || !dmSlug) return;
     void loadInitialDmThread(dmSlug);
@@ -397,14 +428,25 @@ export function ChatWindow({
   useEffect(() => {
     if (!isInternalChat || !isDmPage || !dmSlug) return;
     const rows = getMessagesBySlug(dmSlug);
+    const slugChanged = dmThreadSlugRef.current !== dmSlug;
+    dmThreadSlugRef.current = dmSlug;
+
+    if (rows.length === 0) {
+      if (slugChanged) setMessages([]);
+      return;
+    }
+
     const byId = new Map(rows.map((r) => [r.id, r]));
     const mapped: Message[] = rows.map((m) => {
+      const parsed = decodeDmMessageContent(m.content);
       const parent =
         m.replyToMessageId != null ? byId.get(m.replyToMessageId) : undefined;
+      const parentParsed =
+        parent != null ? decodeDmMessageContent(parent.content) : { text: '', attachment: undefined };
       const outgoingDm = m.senderName === 'You';
       return {
         id: m.id,
-        content: m.content,
+        content: parsed.text || (parsed.attachment ? '' : m.content),
         sender: 'agent' as const,
         senderName: m.senderName,
         senderAgentId: Number.parseInt(m.senderAgentId, 10) || undefined,
@@ -413,10 +455,17 @@ export function ChatWindow({
         replyToMessageId: m.replyToMessageId,
         replyTo:
           parent != null
-            ? { id: parent.id, senderName: parent.senderName, content: parent.content }
+            ? {
+                id: parent.id,
+                senderName: parent.senderName,
+                content:
+                  parentParsed.text ||
+                  (parentParsed.attachment?.type === 'voice' ? 'Voice message' : parent.content),
+              }
             : undefined,
         editedAt: m.editedAt,
         deletedForEveryone: m.deletedForEveryone,
+        attachment: parsed.attachment,
         messageStatus: outgoingDm
           ? {
               sent: true,
@@ -462,6 +511,14 @@ export function ChatWindow({
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingElapsedSec, setRecordingElapsedSec] = useState(0);
+  const [recordingPaused, setRecordingPaused] = useState(false);
+  const [voiceReviewAttachment, setVoiceReviewAttachment] = useState<MessageAttachment | null>(null);
+  const [voiceReviewPlaying, setVoiceReviewPlaying] = useState(false);
+  const recordingTickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const voiceReviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const voiceCaptureCancelledRef = useRef(false);
   const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
   const [playingVoiceId, setPlayingVoiceId] = useState<number | null>(null);
   const [voiceProgress, setVoiceProgress] = useState<Record<number, number>>({});
@@ -997,11 +1054,6 @@ export function ChatWindow({
     return () => window.clearInterval(t);
   }, [isTeamChannel]);
 
-  const fetchDmSinceRunRef = useRef<(slug: string, iso: string) => void>(() => {});
-  fetchDmSinceRunRef.current = (slug, iso) => {
-    void fetchDmMessagesSince(slug, iso);
-  };
-
   const dmConversation = isDmPage && dmSlug ? getConversationBySlug(dmSlug) : undefined;
   const dmConversationIdRaw = dmConversation ? Number(dmConversation.id) : NaN;
   const dmConversationId =
@@ -1051,10 +1103,8 @@ export function ChatWindow({
     viewerAgentId > 0 ? viewerAgentId : null,
     handleDmWs,
     {
-      onOpen: () => {
-        const s = dmLastSyncIsoRef.current;
-        if (s && dmSlug) void fetchDmSinceRunRef.current(dmSlug, s);
-      },
+      // New messages arrive via WebSocket; avoid an extra history fetch on every reconnect (reduces flicker).
+      onOpen: () => {},
     },
   );
   dmSendDeliveryAckRef.current = dmSendDeliveryAck;
@@ -1354,7 +1404,7 @@ export function ChatWindow({
     isDmPage &&
     dmSlug != null &&
     dmMessagesEmpty &&
-    (loadingDmSlug === dmSlug || isDmListLoading);
+    loadingDmSlug === dmSlug;
   const showChatThreadSkeleton =
     (inboxThreadSkeleton && filteredMessages.length === 0) || dmThreadSkeleton;
 
@@ -1804,7 +1854,36 @@ export function ChatWindow({
       attachment: pendingAttachment ?? undefined,
     };
     if (isInternalChat && isDmPage && dmSlug) {
-      void sendMessageBySlug(dmSlug, newMsg.content, replyingTo?.id);
+      let outContent = text;
+      try {
+        if (pendingAttachment?.type === 'voice') {
+          const dataUrl = await blobUrlToDataUrl(pendingAttachment.url);
+          if (dataUrl.length > 2_000_000) {
+            addSystemNote('Voice message is too large. Try a shorter recording.');
+            return;
+          }
+          outContent = encodeDmMessagePayload({
+            text: text,
+            attachment: { ...pendingAttachment, url: dataUrl },
+          });
+        } else if (pendingAttachment) {
+          addSystemNote('Direct messages support text or voice only.');
+          return;
+        } else if (!text) {
+          return;
+        }
+        await sendMessageBySlug(dmSlug, outContent, replyingTo?.id);
+      } catch {
+        addSystemNote('Message failed to send. Please try again.');
+        return;
+      }
+      if (pendingAttachment?.url?.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(pendingAttachment.url);
+        } catch {
+          // ignore
+        }
+      }
       setInputValue('');
       setReplyingTo(null);
       setPendingAttachment(null);
@@ -1815,9 +1894,18 @@ export function ChatWindow({
       try {
         sendTypingWs(false);
         const mentionList = Array.from(mentionIdsRef.current);
+        let att = pendingAttachment ?? undefined;
+        if (att?.type === 'voice' && att.url.startsWith('blob:')) {
+          const dataUrl = await blobUrlToDataUrl(att.url);
+          if (dataUrl.length > 2_000_000) {
+            addSystemNote('Voice message is too large. Try a shorter recording.');
+            return;
+          }
+          att = { ...att, url: dataUrl };
+        }
         const payloadJson = encodeTeamMessageContent({
           text: text || '',
-          attachment: pendingAttachment ?? undefined,
+          attachment: att,
           replyTo: replyingTo ?? undefined,
           mentions: mentionList.length > 0 ? mentionList : undefined,
         });
@@ -1856,6 +1944,13 @@ export function ChatWindow({
       } catch {
         addSystemNote('Message failed to send. Please try again.');
       } finally {
+        if (pendingAttachment?.type === 'voice' && pendingAttachment.url.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(pendingAttachment.url);
+          } catch {
+            // ignore
+          }
+        }
         setInputValue('');
         setReplyingTo(null);
         setPendingAttachment(null);
@@ -1890,41 +1985,261 @@ export function ChatWindow({
     setShowMentionDropdown(false);
   };
 
+  const DM_VOICE_MAX_SEC = 120;
+
+  const clearRecordingTimer = () => {
+    if (recordingTickRef.current) {
+      clearInterval(recordingTickRef.current);
+      recordingTickRef.current = null;
+    }
+  };
+
+  const cancelVoiceRecording = () => {
+    voiceCaptureCancelledRef.current = true;
+    clearRecordingTimer();
+    try {
+      mediaRecorderRef.current?.stop();
+    } catch {
+      // ignore
+    }
+    mediaRecorderRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    mediaStreamRef.current = null;
+    setIsRecording(false);
+    setRecordingPaused(false);
+    setRecordingElapsedSec(0);
+    recordingChunksRef.current = [];
+  };
+
+  function stopVoiceRecordingToReview() {
+    const rec = mediaRecorderRef.current;
+    if (rec && rec.state !== 'inactive') {
+      try {
+        rec.stop();
+      } catch {
+        // ignore
+      }
+    }
+    mediaRecorderRef.current = null;
+    clearRecordingTimer();
+  }
+
   const startVoiceRecording = () => {
     if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
+    voiceCaptureCancelledRef.current = false;
+    setVoiceReviewAttachment(null);
+    setShowAttachmentMenu(false);
+    setShowEmojiPicker(false);
     navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      const recorder = new MediaRecorder(stream);
+      mediaStreamRef.current = stream;
       recordingChunksRef.current = [];
       recordingStartRef.current = Date.now();
+      setRecordingElapsedSec(0);
+      setRecordingPaused(false);
+      const recorder = new MediaRecorder(stream);
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) recordingChunksRef.current.push(e.data);
       };
       recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(recordingChunksRef.current, { type: 'audio/webm' });
+        mediaStreamRef.current = null;
+        clearRecordingTimer();
+        setIsRecording(false);
+        setRecordingPaused(false);
+        if (voiceCaptureCancelledRef.current) {
+          voiceCaptureCancelledRef.current = false;
+          recordingChunksRef.current = [];
+          return;
+        }
+        const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        recordingChunksRef.current = [];
+        if (blob.size < 1) return;
         const url = URL.createObjectURL(blob);
-        const durationSeconds = Math.round((Date.now() - recordingStartRef.current) / 1000);
-        setPendingAttachment({
+        const durationSeconds = Math.max(
+          1,
+          Math.round((Date.now() - recordingStartRef.current) / 1000),
+        );
+        const att: MessageAttachment = {
           type: 'voice',
           name: 'Voice message',
           url,
-          durationSeconds: durationSeconds || 1,
-        });
-        setShowAttachmentMenu(false);
+          durationSeconds,
+        };
+        if (isInternalChat) {
+          setVoiceReviewAttachment(att);
+        } else {
+          setPendingAttachment(att);
+        }
       };
-      recorder.start();
+      try {
+        recorder.start(250);
+      } catch {
+        recorder.start();
+      }
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
+      clearRecordingTimer();
+      recordingTickRef.current = setInterval(() => {
+        setRecordingElapsedSec((s) => {
+          const next = s + 1;
+          if (next >= DM_VOICE_MAX_SEC) {
+            queueMicrotask(() => stopVoiceRecordingToReview());
+          }
+          return next;
+        });
+      }, 1000);
     });
   };
 
-  const stopVoiceRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current = null;
+  const toggleVoiceRecordingPause = () => {
+    const rec = mediaRecorderRef.current;
+    if (!rec) return;
+    if (rec.state === 'recording') {
+      try {
+        rec.pause();
+        setRecordingPaused(true);
+        clearRecordingTimer();
+      } catch {
+        // ignore
+      }
+    } else if (rec.state === 'paused') {
+      try {
+        rec.resume();
+        setRecordingPaused(false);
+        clearRecordingTimer();
+        recordingTickRef.current = setInterval(() => {
+          setRecordingElapsedSec((s) => {
+            const next = s + 1;
+            if (next >= DM_VOICE_MAX_SEC) queueMicrotask(() => stopVoiceRecordingToReview());
+            return next;
+          });
+        }, 1000);
+      } catch {
+        // ignore
+      }
     }
-    setIsRecording(false);
   };
+
+  const discardVoiceReview = () => {
+    if (voiceReviewAttachment?.url?.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(voiceReviewAttachment.url);
+      } catch {
+        // ignore
+      }
+    }
+    setVoiceReviewAttachment(null);
+    setVoiceReviewPlaying(false);
+    try {
+      voiceReviewAudioRef.current?.pause();
+    } catch {
+      // ignore
+    }
+    voiceReviewAudioRef.current = null;
+  };
+
+  const toggleVoiceReviewPlayback = () => {
+    const u = voiceReviewAttachment?.url;
+    if (!u) return;
+    if (voiceReviewPlaying) {
+      voiceReviewAudioRef.current?.pause();
+      setVoiceReviewPlaying(false);
+      return;
+    }
+    if (voiceReviewAudioRef.current) {
+      voiceReviewAudioRef.current.pause();
+    }
+    const a = new Audio(u);
+    voiceReviewAudioRef.current = a;
+    a.onended = () => setVoiceReviewPlaying(false);
+    a.play().then(() => setVoiceReviewPlaying(true)).catch(() => setVoiceReviewPlaying(false));
+  };
+
+  const sendVoiceReview = async () => {
+    if (!voiceReviewAttachment || !isInternalChat) return;
+    const att = voiceReviewAttachment;
+    try {
+      const dataUrl = await blobUrlToDataUrl(att.url);
+      if (dataUrl.length > 2_000_000) {
+        addSystemNote('Voice message is too large. Try a shorter recording.');
+        return;
+      }
+      const resolved: MessageAttachment = { ...att, url: dataUrl };
+      if (isDmPage && dmSlug) {
+        await sendMessageBySlug(
+          dmSlug,
+          encodeDmMessagePayload({ text: '', attachment: resolved }),
+          replyingTo?.id,
+        );
+      } else if (isTeamChannel && teamId) {
+        sendTypingWs(false);
+        const payloadJson = encodeTeamMessageContent({
+          text: '',
+          attachment: resolved,
+          replyTo: replyingTo ?? undefined,
+          mentions: mentionIdsRef.current.size > 0 ? Array.from(mentionIdsRef.current) : undefined,
+        });
+        const body: Record<string, number | string | boolean> = {
+          tenant_id: Number(TENANT_ID),
+          content: typeof payloadJson === 'string' ? payloadJson : String(payloadJson ?? ''),
+        };
+        if (broadcastMode) {
+          body.posted_by_admin = true;
+        } else {
+          const senderId = Number.parseInt(String(getCurrentAgent()?.id ?? ''), 10);
+          if (!Number.isFinite(senderId) || senderId < 1) throw new Error('Agent not found');
+          body.sender_agent_id = senderId;
+        }
+        if (typeof replyingTo?.id === 'number' && replyingTo.id > 0) {
+          body.reply_to_message_id = replyingTo.id;
+        }
+        const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages`, {
+          method: 'POST',
+          headers: teamChannelJsonHeaders(),
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error('Failed to send team message');
+        const saved = (await res.json()) as TeamChannelMessageRow;
+        const mapped = mapTeamRowToMessage(saved);
+        setMessages((prev) => {
+          const idx = prev.findIndex((x) => x.id === mapped.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = mapped;
+            return next;
+          }
+          return [...prev, mapped].sort((a, b) => a.id - b.id);
+        });
+        mentionIdsRef.current = new Set();
+      }
+    } catch {
+      addSystemNote('Voice message failed to send. Please try again.');
+      return;
+    }
+    if (att.url.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(att.url);
+      } catch {
+        // ignore
+      }
+    }
+    setVoiceReviewAttachment(null);
+    setVoiceReviewPlaying(false);
+    voiceReviewAudioRef.current = null;
+    setReplyingTo(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      clearRecordingTimer();
+      try {
+        mediaRecorderRef.current?.stop();
+      } catch {
+        // ignore
+      }
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
 
   const ALLOWED_FILE_EXTENSIONS = ['.pdf', '.csv', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.ppt', '.pptx'];
   const ALLOWED_FILE_TYPES = [
@@ -2494,16 +2809,6 @@ export function ChatWindow({
                   id={`message-${message.id}`}
                   className={`group/message flex w-full items-end gap-1.5 ${outgoing ? 'justify-end' : 'justify-start'}`}
                 >
-                  {outgoing && !readOnly && (
-                    <button
-                      type="button"
-                      onClick={() => setActiveReactionPickerId(message.id)}
-                      className="mb-1 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#54656f] opacity-0 shadow-md transition-opacity duration-200 hover:bg-[#f0f2f5] group-hover/message:opacity-100"
-                      aria-label="Quick react"
-                    >
-                      <Smile className="h-5 w-5" />
-                    </button>
-                  )}
                   {(isTeamChannel || (isInboxPage && !isInternalChat)) && !outgoing && (
                     <div
                       className={`mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06] ${
@@ -3098,16 +3403,6 @@ export function ChatWindow({
                       </div>
                     )}
                   </div>
-                  {!outgoing && !readOnly && (
-                    <button
-                      type="button"
-                      onClick={() => setActiveReactionPickerId(message.id)}
-                      className="mb-1 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#54656f] opacity-0 shadow-md transition-opacity duration-200 hover:bg-[#f0f2f5] group-hover/message:opacity-100"
-                      aria-label="Quick react"
-                    >
-                      <Smile className="h-5 w-5" />
-                    </button>
-                  )}
                   {((isTeamChannel && outgoing) || (isInboxPage && !isInternalChat && outgoing)) && (
                     <div
                       className={`mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06] ${
@@ -3183,6 +3478,40 @@ export function ChatWindow({
               aria-label="Cancel reply"
             >
               <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {!readOnly && voiceReviewAttachment && isInternalChat && (
+          <div className="px-4 py-3 bg-panel border-b border-border flex flex-wrap items-center gap-3">
+            <Mic className="w-5 h-5 text-primary shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-text-primary">Review voice message</p>
+              <p className="text-xs text-text-muted">
+                {voiceReviewAttachment.durationSeconds ?? 0}s · Play to check, then send or discard
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={toggleVoiceReviewPlayback}
+              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium text-text-primary hover:bg-white"
+            >
+              {voiceReviewPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {voiceReviewPlaying ? 'Pause' : 'Play'}
+            </button>
+            <button
+              type="button"
+              onClick={discardVoiceReview}
+              className="rounded-lg border border-border px-3 py-2 text-sm font-medium text-text-secondary hover:bg-white"
+            >
+              Delete
+            </button>
+            <button
+              type="button"
+              onClick={() => void sendVoiceReview()}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary/90"
+            >
+              Send voice
             </button>
           </div>
         )}
@@ -3362,25 +3691,60 @@ export function ChatWindow({
               )}
             </div>
             
-            {!showBroadcastInput && (isRecording ? (
-              <button
-                type="button"
-                onClick={stopVoiceRecording}
-                className="p-2.5 rounded-full bg-status-error text-white hover:bg-status-error/90 flex-shrink-0"
-                aria-label="Stop recording"
-              >
-                <Square className="w-5 h-5" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => { setShowAttachmentMenu(false); setShowEmojiPicker(false); startVoiceRecording(); }}
-                className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors flex-shrink-0"
-                aria-label="Voice message"
-              >
-                <Mic className="w-6 h-6" />
-              </button>
-            ))}
+            {!showBroadcastInput &&
+              (isRecording ? (
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={cancelVoiceRecording}
+                    className="p-2 rounded-full text-text-muted hover:bg-panel hover:text-status-error"
+                    aria-label="Cancel recording"
+                    title="Cancel"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                  <span className="tabular-nums text-xs text-text-secondary min-w-[3rem] text-center">
+                    {Math.floor(recordingElapsedSec / 60)
+                      .toString()
+                      .padStart(2, '0')}
+                    :{(recordingElapsedSec % 60).toString().padStart(2, '0')}
+                  </span>
+                  {typeof MediaRecorder !== 'undefined' &&
+                    MediaRecorder.prototype != null &&
+                    'pause' in MediaRecorder.prototype && (
+                      <button
+                        type="button"
+                        onClick={toggleVoiceRecordingPause}
+                        className="p-2 rounded-full text-text-secondary hover:bg-panel text-xs font-medium w-14"
+                        aria-label={recordingPaused ? 'Resume recording' : 'Pause recording'}
+                      >
+                        {recordingPaused ? 'Resume' : 'Pause'}
+                      </button>
+                    )}
+                  <button
+                    type="button"
+                    onClick={stopVoiceRecordingToReview}
+                    className="p-2.5 rounded-full bg-status-error text-white hover:bg-status-error/90 flex-shrink-0"
+                    aria-label="Stop and review"
+                    title="Stop"
+                  >
+                    <Square className="w-5 h-5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAttachmentMenu(false);
+                    setShowEmojiPicker(false);
+                    startVoiceRecording();
+                  }}
+                  className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors flex-shrink-0"
+                  aria-label="Voice message"
+                >
+                  <Mic className="w-6 h-6" />
+                </button>
+              ))}
             
             <button
               type="button"

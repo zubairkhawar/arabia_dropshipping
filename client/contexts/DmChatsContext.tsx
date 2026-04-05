@@ -297,7 +297,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         const url = new URL(`${API_BASE}/api/internal-dm/conversations/${conversation.id}/messages`);
         url.searchParams.set('agent_id', String(Number(currentAgentId)));
         url.searchParams.set('limit', '50');
-        const res = await fetch(url.toString());
+        const res = await fetch(url.toString(), { headers: dmAuthHeaders() });
         if (!res.ok) return;
         const raw = await res.json();
         const { rows, hasMoreOlder } = parseDmMessagesPayload(raw);
