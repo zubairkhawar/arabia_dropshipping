@@ -11,6 +11,7 @@ import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { useToast } from '@/contexts/ToastContext';
 import { usePathname, useRouter } from 'next/navigation';
+import { readAuthAgentId } from '@/lib/agent-session-storage';
 
 type AgentStatus = 'active' | 'offline';
 const ACTIVE_SINCE_PREFIX = 'agent-active-since:';
@@ -56,10 +57,12 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const pathname = usePathname();
   const router = useRouter();
   const displayName = fullName || userName || 'Support Agent';
+  const profileNameSkeleton = !currentAgent && !!readAuthAgentId();
   const {
     getNotificationsForCurrentAgent,
     unreadCount,
     markAsRead,
+    isNotificationsLoading,
   } = useNotifications();
   const notificationList = getNotificationsForCurrentAgent();
 
@@ -338,7 +341,11 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                 <User className="w-5 h-5 text-primary" />
               )}
             </div>
-            <span className="text-text-primary font-medium text-sm">{displayName}</span>
+            {profileNameSkeleton ? (
+              <span className="h-4 w-28 rounded-md bg-border/80 animate-pulse inline-block" />
+            ) : (
+              <span className="text-text-primary font-medium text-sm">{displayName}</span>
+            )}
             <ChevronDown className="w-4 h-4 text-text-muted" />
           </button>
           {showUserMenu && (

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
+import { readAuthAgentId, writeAuthAgentId } from '@/lib/agent-session-storage';
 
 /** Agent unique ID is set by the backend when the admin creates a new agent. */
 export interface AgentRecord {
@@ -46,6 +47,7 @@ interface AgentApiModel {
   user_id: number;
   email: string;
   full_name: string | null;
+  avatar_url?: string | null;
   status: string;
   team: string | null;
   created_at: string;
@@ -77,11 +79,29 @@ function saveStoredPasswords(passwords: Record<string, string>): void {
   }
 }
 
+function mapApiToRecord(a: AgentApiModel, storedPasswords: Record<string, string>): AgentRecord {
+  return {
+    id: String(a.id),
+    email: a.email,
+    name: a.full_name || a.email.split('@')[0] || 'Agent',
+    status: normalizeAgentStatus(a.status),
+    password: storedPasswords[String(a.id)] ?? '',
+    avatarUrl: a.avatar_url ?? null,
+    createdAt: a.created_at,
+  };
+}
+
+function readInitialCurrentAgentId(): string | null {
+  if (typeof window === 'undefined') return null;
+  if ((localStorage.getItem('auth_role') || '').toLowerCase() !== 'agent') return null;
+  return readAuthAgentId();
+}
+
 export function AgentsProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentRecord[]>([]);
-  const [currentAgentId, setCurrentAgentId] = useState<string | null>(null);
+  const [currentAgentId, setCurrentAgentId] = useState<string | null>(readInitialCurrentAgentId);
 
-  const refreshAgents = useCallback(async () => {
+  const fetchAgentsListOnly = useCallback(async (): Promise<boolean> => {
     const res = await fetch(`${API_BASE_URL}/api/agents?tenant_id=${DEFAULT_TENANT_ID}`, {
       method: 'GET',
     });
@@ -90,15 +110,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
     }
     const data = (await res.json()) as AgentApiModel[];
     const storedPasswords = loadStoredPasswords();
-    const mapped: AgentRecord[] = data.map((a) => ({
-      id: String(a.id),
-      email: a.email,
-      name: a.full_name || a.email.split('@')[0] || 'Agent',
-      status: normalizeAgentStatus(a.status),
-      password: storedPasswords[String(a.id)] ?? '',
-      avatarUrl: null,
-      createdAt: a.created_at,
-    }));
+    const mapped: AgentRecord[] = data.map((a) => mapApiToRecord(a, storedPasswords));
     setAgents(mapped);
     const authEmail =
       typeof window !== 'undefined'
@@ -109,8 +121,6 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         ? mapped.find((a) => a.email.trim().toLowerCase() === authEmail)?.id ?? null
         : null;
       if (byEmail) return byEmail;
-      // If an auth email exists but doesn't map to an agent row, don't silently
-      // switch to another agent account.
       if (authEmail) return null;
       if (prev && mapped.some((a) => a.id === prev)) return prev;
       return mapped[0]?.id ?? null;
@@ -118,25 +128,82 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
     return true;
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
+  const refreshAgents = fetchAgentsListOnly;
+
+  const hydrateFromSession = useCallback(async () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const role = (typeof window !== 'undefined' ? localStorage.getItem('auth_role') : '') || '';
+    const isAgentRole = role.toLowerCase() === 'agent';
+
+    if (isAgentRole && token) {
+      const headers = { Authorization: `Bearer ${token}` };
       try {
-        const ok = await refreshAgents();
-        if (!ok || cancelled) return;
+        const [meRes, listRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/agents/me`, { headers }),
+          fetch(`${API_BASE_URL}/api/agents?tenant_id=${DEFAULT_TENANT_ID}`),
+        ]);
+        const meJson = meRes.ok ? ((await meRes.json()) as AgentApiModel) : null;
+        const listJson = listRes.ok ? ((await listRes.json()) as AgentApiModel[]) : null;
+        const storedPasswords = loadStoredPasswords();
+        const authEmail =
+          typeof window !== 'undefined'
+            ? (localStorage.getItem(AUTH_EMAIL_STORAGE_KEY) || '').trim().toLowerCase()
+            : '';
+
+        let nextAgents: AgentRecord[] = [];
+        if (listJson && listJson.length > 0) {
+          nextAgents = listJson.map((a) => mapApiToRecord(a, storedPasswords));
+        }
+        if (meJson) {
+          writeAuthAgentId(String(meJson.id));
+          const record = mapApiToRecord(meJson, storedPasswords);
+          const idx = nextAgents.findIndex((a) => a.id === record.id);
+          if (idx >= 0) {
+            nextAgents[idx] = { ...nextAgents[idx], ...record };
+          } else {
+            nextAgents = [record, ...nextAgents];
+          }
+        }
+
+        setAgents(nextAgents);
+
+        let nextCurrent: string | null = null;
+        if (meJson) {
+          nextCurrent = String(meJson.id);
+        } else {
+          const storedId = readAuthAgentId();
+          if (storedId && nextAgents.some((a) => a.id === storedId)) {
+            nextCurrent = storedId;
+          } else {
+            const byEmail = authEmail
+              ? nextAgents.find((a) => a.email.trim().toLowerCase() === authEmail)?.id ?? null
+              : null;
+            if (byEmail) nextCurrent = byEmail;
+            else if (!authEmail) nextCurrent = nextAgents[0]?.id ?? null;
+            else nextCurrent = null;
+          }
+        }
+        setCurrentAgentId(nextCurrent);
       } catch {
         // Silent failure to avoid impacting UI performance.
       }
-    };
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [refreshAgents]);
+      return;
+    }
+
+    try {
+      await fetchAgentsListOnly();
+    } catch {
+      // ignore
+    }
+  }, [fetchAgentsListOnly]);
+
+  useEffect(() => {
+    void hydrateFromSession();
+  }, [hydrateFromSession]);
 
   useEffect(() => {
     const handleAuthChanged = () => {
-      void refreshAgents();
+      void hydrateFromSession();
     };
     if (typeof window !== 'undefined') {
       window.addEventListener('auth-changed', handleAuthChanged);
@@ -146,7 +213,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         window.removeEventListener('auth-changed', handleAuthChanged);
       }
     };
-  }, [refreshAgents]);
+  }, [hydrateFromSession]);
 
   const getCurrentAgent = useCallback(() => {
     if (!currentAgentId) return null;
@@ -178,7 +245,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           name: created.full_name || name,
           status: normalizeAgentStatus(created.status),
           password,
-          avatarUrl: null,
+          avatarUrl: created.avatar_url ?? null,
           createdAt: created.created_at,
         };
         const storedPasswords = loadStoredPasswords();
@@ -223,13 +290,29 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) return false;
+        if (!res.ok) {
+          void refreshAgents();
+          return false;
+        }
+        const row = (await res.json()) as AgentApiModel;
+        setAgents((prev) =>
+          prev.map((a) =>
+            a.id === id
+              ? {
+                  ...a,
+                  name: row.full_name || a.name,
+                  avatarUrl: row.avatar_url ?? null,
+                }
+              : a,
+          ),
+        );
         return true;
       } catch {
+        void refreshAgents();
         return false;
       }
     },
-    [],
+    [refreshAgents],
   );
 
   const removeAgent = useCallback(

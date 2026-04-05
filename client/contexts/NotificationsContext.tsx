@@ -2,12 +2,15 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
+import { readAuthAgentId } from '@/lib/agent-session-storage';
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   'https://arabia-dropshipping.onrender.com';
 const TENANT_ID = 1;
+/** How often to refetch notifications from the API while the agent session is active. */
+const NOTIFICATIONS_POLL_MS = 15_000;
 
 export type NotificationType =
   | 'chat_transfer'
@@ -38,6 +41,8 @@ export interface AgentNotification {
 interface NotificationsContextType {
   notifications: AgentNotification[];
   unreadCount: number;
+  /** True until the first successful fetch for the current agent session (or no agent). */
+  isNotificationsLoading: boolean;
   addNotification: (n: Omit<AgentNotification, 'id' | 'createdAt' | 'read'>) => void;
   markAsRead: (id: string) => void;
   markAllAsRead: () => void;
@@ -60,8 +65,9 @@ interface NotificationApi {
 export function NotificationsProvider({ children }: { children: ReactNode }) {
   const { getCurrentAgent } = useAgents();
   const [notifications, setNotifications] = useState<AgentNotification[]>([]);
+  const [isNotificationsLoading, setIsNotificationsLoading] = useState(true);
 
-  const currentAgentId = getCurrentAgent()?.id ?? null;
+  const currentAgentId = getCurrentAgent()?.id ?? readAuthAgentId();
 
   const mapNotification = useCallback((n: NotificationApi): AgentNotification => {
     const rawType = n.type as NotificationType;
@@ -88,27 +94,43 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const refreshNotifications = useCallback(async () => {
-    if (!currentAgentId) {
-      setNotifications([]);
-      return;
-    }
-    try {
-      const url = new URL(`${API_BASE}/api/notifications`);
-      url.searchParams.set('tenant_id', String(TENANT_ID));
-      url.searchParams.set('agent_id', String(Number(currentAgentId)));
-      const res = await fetch(url.toString());
-      if (!res.ok) return;
-      const rows = (await res.json()) as NotificationApi[];
-      setNotifications(rows.map(mapNotification));
-    } catch {
-      // ignore fetch errors
-    }
-  }, [currentAgentId, mapNotification]);
+  const refreshNotifications = useCallback(
+    async (opts?: { trackInitialLoad?: boolean }) => {
+      const track = opts?.trackInitialLoad === true;
+      if (!currentAgentId) {
+        setNotifications([]);
+        if (track) setIsNotificationsLoading(false);
+        return;
+      }
+      try {
+        const url = new URL(`${API_BASE}/api/notifications`);
+        url.searchParams.set('tenant_id', String(TENANT_ID));
+        url.searchParams.set('agent_id', String(Number(currentAgentId)));
+        const res = await fetch(url.toString());
+        if (!res.ok) return;
+        const rows = (await res.json()) as NotificationApi[];
+        setNotifications(rows.map(mapNotification));
+      } catch {
+        // ignore fetch errors
+      } finally {
+        if (track) setIsNotificationsLoading(false);
+      }
+    },
+    [currentAgentId, mapNotification],
+  );
 
   useEffect(() => {
-    void refreshNotifications();
+    setIsNotificationsLoading(true);
+    void refreshNotifications({ trackInitialLoad: true });
   }, [refreshNotifications]);
+
+  useEffect(() => {
+    if (!currentAgentId) return;
+    const timer = window.setInterval(() => {
+      void refreshNotifications();
+    }, NOTIFICATIONS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [currentAgentId, refreshNotifications]);
 
   const getNotificationsForCurrentAgent = useCallback(() => {
     return notifications
@@ -161,6 +183,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       value={{
         notifications,
         unreadCount,
+        isNotificationsLoading,
         addNotification,
         markAsRead,
         markAllAsRead,
@@ -178,6 +201,7 @@ export function useNotifications() {
     return {
       notifications: [] as AgentNotification[],
       unreadCount: 0,
+      isNotificationsLoading: false,
       addNotification: (_: Omit<AgentNotification, 'id' | 'createdAt' | 'read'>) => {},
       markAsRead: (_: string) => {},
       markAllAsRead: () => {},

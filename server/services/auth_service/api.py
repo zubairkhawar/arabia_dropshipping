@@ -28,6 +28,10 @@ router = APIRouter()
 
 # OAuth2PasswordBearer is used by FastAPI's security utilities
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(
+    tokenUrl="/api/auth/login",
+    auto_error=False,
+)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -74,6 +78,34 @@ async def get_current_user(
     )
     if user is None or not user.is_active:
         raise credentials_exception
+    return user
+
+
+async def get_current_user_optional(
+    token: Annotated[str | None, Depends(oauth2_scheme_optional)],
+    db: Session = Depends(get_db),
+) -> User | None:
+    """
+    Same as get_current_user when Authorization is present; otherwise None.
+    """
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        email: str | None = payload.get("sub")
+        if email is None:
+            return None
+        token_data = TokenData(email=email)
+    except JWTError:
+        return None
+
+    user: User | None = (
+        db.query(User).filter(User.email == token_data.email).first()
+    )
+    if user is None or not user.is_active:
+        return None
     return user
 
 

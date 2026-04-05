@@ -216,7 +216,18 @@ export function ChatList() {
         {/* Conversation list as system activity feed */}
         <div className="flex-1 overflow-y-auto">
           <div className="p-2 space-y-3">
-            {liveConversations.length > 0 && (
+            {isAgentInbox && inboxConv?.isLoading ? (
+              <div className="space-y-2 px-1">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <div
+                    key={i}
+                    className="h-[76px] rounded-lg bg-border/60 animate-pulse"
+                    style={{ animationDelay: `${i * 60}ms` }}
+                  />
+                ))}
+              </div>
+            ) : null}
+            {!(isAgentInbox && inboxConv?.isLoading) && liveConversations.length > 0 && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -312,7 +323,7 @@ export function ChatList() {
               </div>
             )}
 
-            {closedConversations.length > 0 && (
+            {!(isAgentInbox && inboxConv?.isLoading) && closedConversations.length > 0 && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -382,7 +393,9 @@ export function ChatList() {
               </div>
             )}
 
-            {liveConversations.length === 0 && closedConversations.length === 0 && (
+            {!(isAgentInbox && inboxConv?.isLoading) &&
+              liveConversations.length === 0 &&
+              closedConversations.length === 0 && (
               <div className="px-2 py-4 text-[12px] text-text-muted">
                 No conversations match this view yet. Adjust the agent selection or try a different
                 inbox view.

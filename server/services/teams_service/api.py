@@ -1,16 +1,85 @@
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 import base64
+import json
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Query,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
+from jose import JWTError, jwt
+from pydantic import BaseModel, ConfigDict, model_validator
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from database import get_db
-from models import Team, TeamMembership, TeamEvent, Notification, TeamAsset, TeamChannelMessage, Agent, User
+from config import settings
+from database import SessionLocal, get_db
+from models import (
+    Agent,
+    Notification,
+    Team,
+    TeamAsset,
+    TeamChannelMemberReadState,
+    TeamChannelMessage,
+    TeamEvent,
+    TeamMembership,
+    User,
+)
+from services.auth_service.api import get_current_user, get_current_user_optional
+from services.teams_service.team_channel_hub import hub
 
 
 router = APIRouter()
+
+
+def _decode_websocket_user(token: str, db: Session) -> Optional[User]:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        email = payload.get("sub")
+        if not email:
+            return None
+        return (
+            db.query(User)
+            .filter(User.email == email, User.is_active.is_(True))
+            .first()
+        )
+    except JWTError:
+        return None
+
+
+async def _broadcast_read_state(tenant_id: int, team_id: int, agent_id: int, last_read_message_id: int) -> None:
+    await hub.broadcast_json(
+        tenant_id,
+        team_id,
+        {
+            "type": "READ_STATE",
+            "agent_id": agent_id,
+            "last_read_message_id": last_read_message_id,
+        },
+    )
+
+
+class MemberReadStateOut(BaseModel):
+    agent_id: int
+    agent_name: str
+    last_read_message_id: int
+    updated_at: datetime
+
+
+class TeamChannelReadStateIn(BaseModel):
+    tenant_id: int
+    last_read_message_id: int
 
 
 class TeamMemberOut(BaseModel):
@@ -84,16 +153,76 @@ class TeamAssetCreate(BaseModel):
 class TeamChannelMessageOut(BaseModel):
     id: int
     team_id: int
-    sender_agent_id: int
+    sender_agent_id: Optional[int] = None
+    posted_by_admin: bool = False
     sender_name: str
     content: str
     created_at: datetime
 
 
+class TeamChannelMessagesPage(BaseModel):
+    """Chronological slice (oldest → newest). Fetched newest-first from DB then reversed."""
+
+    messages: List[TeamChannelMessageOut]
+    has_more_older: bool
+
+
 class TeamChannelMessageCreate(BaseModel):
+    """
+    Accepts typical JSON from the web client; coerces string numbers and loose booleans
+    so minor type drift does not yield 422.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
     tenant_id: int
-    sender_agent_id: int
     content: str
+    sender_agent_id: Optional[int] = None
+    posted_by_admin: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_request_shapes(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        tid = d.get("tenant_id")
+        if tid is not None and not isinstance(tid, bool):
+            try:
+                d["tenant_id"] = int(tid)
+            except (TypeError, ValueError):
+                pass
+        sid = d.get("sender_agent_id", None)
+        if sid is None or sid == "":
+            d["sender_agent_id"] = None
+        elif isinstance(sid, bool):
+            raise ValueError("sender_agent_id must be an integer")
+        else:
+            try:
+                if isinstance(sid, float):
+                    if not sid.is_integer():
+                        raise ValueError("sender_agent_id must be a whole number")
+                    d["sender_agent_id"] = int(sid)
+                elif isinstance(sid, str):
+                    d["sender_agent_id"] = int(sid.strip(), 10)
+                else:
+                    d["sender_agent_id"] = int(sid)
+            except (TypeError, ValueError) as e:
+                raise ValueError("sender_agent_id must be an integer") from e
+        if "posted_by_admin" in d:
+            v = d["posted_by_admin"]
+            if isinstance(v, str):
+                d["posted_by_admin"] = v.strip().lower() in ("1", "true", "yes", "on")
+            elif isinstance(v, bool):
+                d["posted_by_admin"] = v
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                d["posted_by_admin"] = bool(v)
+            elif v is None:
+                d["posted_by_admin"] = False
+        raw_content = d.get("content")
+        if raw_content is not None and not isinstance(raw_content, str):
+            d["content"] = str(raw_content)
+        return d
 
 
 class TeamChannelMessageUpdate(BaseModel):
@@ -502,29 +631,138 @@ def _agent_name(db: Session, agent_id: int) -> str:
     return f"Agent {agent_id}"
 
 
-@router.get("/{team_id}/channel/messages", response_model=List[TeamChannelMessageOut])
-async def list_team_channel_messages(
+def _team_channel_sender_display(db: Session, row: TeamChannelMessage) -> str:
+    if bool(getattr(row, "posted_by_admin", False)):
+        return "Admin"
+    aid = row.sender_agent_id
+    if aid is None:
+        return "Unknown"
+    return _agent_name(db, aid)
+
+
+@router.get("/{team_id}/channel/member-read-states", response_model=List[MemberReadStateOut])
+async def list_team_channel_member_read_states(
     team_id: int,
     tenant_id: int,
-    limit: int = 200,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    if current_user.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
     team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == tenant_id).first()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
+    role = (current_user.role or "").lower()
+    if role == "agent":
+        ag = (
+            db.query(Agent)
+            .filter(Agent.user_id == current_user.id, Agent.tenant_id == tenant_id)
+            .first()
+        )
+        if not ag:
+            raise HTTPException(status_code=403, detail="Not an agent")
+        mem = (
+            db.query(TeamMembership)
+            .filter(
+                TeamMembership.tenant_id == tenant_id,
+                TeamMembership.team_id == team_id,
+                TeamMembership.agent_id == ag.id,
+            )
+            .first()
+        )
+        if not mem:
+            raise HTTPException(status_code=403, detail="Not a team member")
+    elif role != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     rows = (
-        db.query(TeamChannelMessage)
-        .filter(TeamChannelMessage.tenant_id == tenant_id, TeamChannelMessage.team_id == team_id)
-        .order_by(TeamChannelMessage.created_at.asc())
-        .limit(max(1, min(limit, 1000)))
+        db.query(TeamChannelMemberReadState)
+        .filter(
+            TeamChannelMemberReadState.tenant_id == tenant_id,
+            TeamChannelMemberReadState.team_id == team_id,
+        )
         .all()
     )
+    out: List[MemberReadStateOut] = []
+    for r in rows:
+        out.append(
+            MemberReadStateOut(
+                agent_id=r.agent_id,
+                agent_name=_agent_name(db, r.agent_id),
+                last_read_message_id=r.last_read_message_id,
+                updated_at=r.updated_at or datetime.utcnow(),
+            )
+        )
+    return out
+
+
+@router.post("/{team_id}/channel/read-state", status_code=status.HTTP_204_NO_CONTENT)
+async def upsert_team_channel_read_state(
+    team_id: int,
+    payload: TeamChannelReadStateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.tenant_id != payload.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+    team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == payload.tenant_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    ag = (
+        db.query(Agent)
+        .filter(Agent.user_id == current_user.id, Agent.tenant_id == payload.tenant_id)
+        .first()
+    )
+    if not ag:
+        raise HTTPException(status_code=403, detail="Only agents can update read state")
+    mem = (
+        db.query(TeamMembership)
+        .filter(
+            TeamMembership.tenant_id == payload.tenant_id,
+            TeamMembership.team_id == team_id,
+            TeamMembership.agent_id == ag.id,
+        )
+        .first()
+    )
+    if not mem:
+        raise HTTPException(status_code=403, detail="Not a team member")
+
+    row = (
+        db.query(TeamChannelMemberReadState)
+        .filter(
+            TeamChannelMemberReadState.tenant_id == payload.tenant_id,
+            TeamChannelMemberReadState.team_id == team_id,
+            TeamChannelMemberReadState.agent_id == ag.id,
+        )
+        .first()
+    )
+    if row is None:
+        row = TeamChannelMemberReadState(
+            tenant_id=payload.tenant_id,
+            team_id=team_id,
+            agent_id=ag.id,
+            last_read_message_id=max(0, payload.last_read_message_id),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(row)
+    else:
+        row.last_read_message_id = max(row.last_read_message_id, payload.last_read_message_id)
+        row.updated_at = datetime.utcnow()
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    await _broadcast_read_state(payload.tenant_id, team_id, ag.id, row.last_read_message_id)
+    return Response(status_code=204)
+
+
+def _team_channel_rows_to_out(db: Session, rows: List[TeamChannelMessage]) -> List[TeamChannelMessageOut]:
     return [
         TeamChannelMessageOut(
             id=r.id,
             team_id=r.team_id,
             sender_agent_id=r.sender_agent_id,
-            sender_name=_agent_name(db, r.sender_agent_id),
+            posted_by_admin=bool(getattr(r, "posted_by_admin", False)),
+            sender_name=_team_channel_sender_display(db, r),
             content=r.content,
             created_at=r.created_at,
         )
@@ -532,11 +770,82 @@ async def list_team_channel_messages(
     ]
 
 
+@router.get("/{team_id}/channel/messages", response_model=TeamChannelMessagesPage)
+async def list_team_channel_messages(
+    team_id: int,
+    tenant_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    before_id: Optional[int] = Query(None, description="Load older messages with id strictly less than this"),
+    since: Optional[datetime] = Query(None, description="ISO UTC: messages strictly after this time (reconnect gap fill)"),
+    db: Session = Depends(get_db),
+):
+    team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == tenant_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    base = db.query(TeamChannelMessage).filter(
+        TeamChannelMessage.tenant_id == tenant_id,
+        TeamChannelMessage.team_id == team_id,
+    )
+
+    if since is not None:
+        rows = (
+            base.filter(TeamChannelMessage.created_at > since)
+            .order_by(TeamChannelMessage.created_at.asc())
+            .limit(500)
+            .all()
+        )
+        return TeamChannelMessagesPage(messages=_team_channel_rows_to_out(db, rows), has_more_older=False)
+
+    lim = max(1, min(limit, 200))
+    if before_id is not None:
+        rows_desc = (
+            base.filter(TeamChannelMessage.id < before_id)
+            .order_by(desc(TeamChannelMessage.id))
+            .limit(lim)
+            .all()
+        )
+        rows = list(reversed(rows_desc))
+        min_id = rows[0].id if rows else before_id
+        older = (
+            db.query(TeamChannelMessage.id)
+            .filter(
+                TeamChannelMessage.tenant_id == tenant_id,
+                TeamChannelMessage.team_id == team_id,
+                TeamChannelMessage.id < min_id,
+            )
+            .first()
+        )
+        return TeamChannelMessagesPage(
+            messages=_team_channel_rows_to_out(db, rows),
+            has_more_older=older is not None,
+        )
+
+    rows_desc = base.order_by(desc(TeamChannelMessage.id)).limit(lim).all()
+    rows = list(reversed(rows_desc))
+    min_id = rows[0].id if rows else None
+    older = None
+    if min_id is not None:
+        older = (
+            db.query(TeamChannelMessage.id)
+            .filter(
+                TeamChannelMessage.tenant_id == tenant_id,
+                TeamChannelMessage.team_id == team_id,
+                TeamChannelMessage.id < min_id,
+            )
+            .first()
+        )
+    return TeamChannelMessagesPage(
+        messages=_team_channel_rows_to_out(db, rows),
+        has_more_older=older is not None,
+    )
+
+
 @router.post("/{team_id}/channel/messages", response_model=TeamChannelMessageOut, status_code=status.HTTP_201_CREATED)
 async def create_team_channel_message(
     team_id: int,
-    payload: TeamChannelMessageCreate,
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+    payload: TeamChannelMessageCreate = Body(...),
 ):
     team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == payload.tenant_id).first()
     if not team:
@@ -544,24 +853,63 @@ async def create_team_channel_message(
     content = (payload.content or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="Message content is required")
-    row = TeamChannelMessage(
-        tenant_id=payload.tenant_id,
-        team_id=team_id,
-        sender_agent_id=payload.sender_agent_id,
-        content=content,
-        created_at=datetime.utcnow(),
-    )
+    if payload.posted_by_admin:
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required to post as admin",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if (current_user.role or "").lower() != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only tenant admin can post admin team channel messages",
+            )
+        if current_user.tenant_id != payload.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tenant mismatch",
+            )
+        row = TeamChannelMessage(
+            tenant_id=payload.tenant_id,
+            team_id=team_id,
+            sender_agent_id=None,
+            posted_by_admin=True,
+            content=content,
+            created_at=datetime.utcnow(),
+        )
+    else:
+        if payload.sender_agent_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="sender_agent_id is required unless posted_by_admin is true",
+            )
+        row = TeamChannelMessage(
+            tenant_id=payload.tenant_id,
+            team_id=team_id,
+            sender_agent_id=payload.sender_agent_id,
+            posted_by_admin=False,
+            content=content,
+            created_at=datetime.utcnow(),
+        )
     db.add(row)
     db.commit()
     db.refresh(row)
-    return TeamChannelMessageOut(
+    msg_out = TeamChannelMessageOut(
         id=row.id,
         team_id=row.team_id,
         sender_agent_id=row.sender_agent_id,
-        sender_name=_agent_name(db, row.sender_agent_id),
+        posted_by_admin=bool(row.posted_by_admin),
+        sender_name=_team_channel_sender_display(db, row),
         content=row.content,
         created_at=row.created_at,
     )
+    await hub.broadcast_json(
+        payload.tenant_id,
+        team_id,
+        {"type": "NEW_MESSAGE", "message": msg_out.model_dump(mode="json")},
+    )
+    return msg_out
 
 
 @router.patch(
@@ -592,12 +940,110 @@ async def update_team_channel_message(
     db.add(row)
     db.commit()
     db.refresh(row)
-    return TeamChannelMessageOut(
+    msg_out = TeamChannelMessageOut(
         id=row.id,
         team_id=row.team_id,
         sender_agent_id=row.sender_agent_id,
-        sender_name=_agent_name(db, row.sender_agent_id),
+        posted_by_admin=bool(getattr(row, "posted_by_admin", False)),
+        sender_name=_team_channel_sender_display(db, row),
         content=row.content,
         created_at=row.created_at,
     )
+    await hub.broadcast_json(
+        row.tenant_id,
+        team_id,
+        {"type": "MESSAGE_UPDATED", "message": msg_out.model_dump(mode="json")},
+    )
+    return msg_out
+
+
+@router.websocket("/ws/channel/{team_id}")
+async def team_channel_websocket(websocket: WebSocket, team_id: int):
+    qp = websocket.query_params
+    try:
+        tenant_id = int(qp.get("tenant_id") or "0")
+    except (TypeError, ValueError):
+        await websocket.close(code=4400)
+        return
+    token = (qp.get("token") or "").strip()
+    if tenant_id < 1 or not token:
+        await websocket.close(code=4400)
+        return
+
+    db = SessionLocal()
+    try:
+        user = _decode_websocket_user(token, db)
+        if user is None or user.tenant_id != tenant_id:
+            await websocket.close(code=4401)
+            return
+        team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == tenant_id).first()
+        if not team:
+            await websocket.close(code=4404)
+            return
+
+        role = (user.role or "").lower()
+        agent_id: Optional[int] = None
+        display_name = user.full_name or (
+            user.email.split("@")[0] if user.email else "User"
+        )
+
+        if role == "agent":
+            ag = (
+                db.query(Agent)
+                .filter(Agent.user_id == user.id, Agent.tenant_id == tenant_id)
+                .first()
+            )
+            if not ag:
+                await websocket.close(code=4403)
+                return
+            mem = (
+                db.query(TeamMembership)
+                .filter(
+                    TeamMembership.tenant_id == tenant_id,
+                    TeamMembership.team_id == team_id,
+                    TeamMembership.agent_id == ag.id,
+                )
+                .first()
+            )
+            if not mem:
+                await websocket.close(code=4403)
+                return
+            agent_id = ag.id
+            an = _agent_name(db, ag.id)
+            if an:
+                display_name = an
+        elif role != "admin":
+            await websocket.close(code=4403)
+            return
+    finally:
+        db.close()
+
+    await websocket.accept()
+    meta = {"agent_id": agent_id, "name": display_name, "role": role}
+    await hub.connect(websocket, tenant_id, team_id, meta)
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if data.get("type") != "typing":
+                continue
+            await hub.broadcast_json(
+                tenant_id,
+                team_id,
+                {
+                    "type": "TYPING",
+                    "team_id": team_id,
+                    "agent_id": agent_id,
+                    "name": display_name,
+                    "active": bool(data.get("active", True)),
+                },
+                exclude=websocket,
+            )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await hub.disconnect(websocket, tenant_id, team_id)
 

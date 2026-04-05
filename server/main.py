@@ -4,7 +4,15 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from config import settings
-from database import SessionLocal, engine, Base, ensure_broadcast_delivery_columns
+from database import (
+    SessionLocal,
+    engine,
+    Base,
+    ensure_broadcast_delivery_columns,
+    ensure_team_channel_admin_sender_columns,
+    ensure_team_channel_read_states_table,
+    ensure_user_avatar_url_column,
+)
 from models import Tenant, User
 from services.auth_service.services import get_password_hash
 
@@ -67,6 +75,9 @@ async def lifespan(app: FastAPI):
     # Startup
     Base.metadata.create_all(bind=engine)
     ensure_broadcast_delivery_columns()
+    ensure_team_channel_admin_sender_columns()
+    ensure_team_channel_read_states_table()
+    ensure_user_avatar_url_column()
     ensure_admin_user()
     yield
     # Shutdown

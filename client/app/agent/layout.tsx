@@ -2,12 +2,14 @@
 
 import { AgentSidebar } from '@/components/layout/agent-sidebar';
 import { AgentHeader } from '@/components/layout/agent-header';
+import { AgentPortalShellSkeleton } from '@/components/layout/agent-portal-shell-skeleton';
 import { SidebarProvider } from '@/contexts/SidebarContext';
 import { AgentProfileProvider } from '@/contexts/AgentProfileContext';
 import { AgentPresenceProvider } from '@/contexts/AgentPresenceContext';
 import { DmChatsProvider } from '@/contexts/DmChatsContext';
 import { NotificationsProvider } from '@/contexts/NotificationsContext';
 import { useSidebar } from '@/contexts/SidebarContext';
+import { clearAuthAgentId } from '@/lib/agent-session-storage';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -33,15 +35,17 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        const meRes = await fetch(`${API_BASE}/api/auth/me`, {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const authHeaders = { Authorization: `Bearer ${token}` };
+        const [meRes, agentMeRes] = await Promise.all([
+          fetch(`${API_BASE}/api/auth/me`, { method: 'GET', headers: authHeaders }),
+          fetch(`${API_BASE}/api/agents/me`, { method: 'GET', headers: authHeaders }),
+        ]);
         if (!meRes.ok) {
           localStorage.removeItem('auth_token');
           localStorage.removeItem('auth_token_type');
           localStorage.removeItem('auth_email');
           localStorage.removeItem('auth_role');
+          clearAuthAgentId();
           router.replace('/login');
           return;
         }
@@ -52,21 +56,18 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        // Ensure this authenticated user still has an actual Agent profile row.
-        const agentMeRes = await fetch(`${API_BASE}/api/agents/me`, {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
-        });
         if (!agentMeRes.ok) {
           localStorage.removeItem('auth_token');
           localStorage.removeItem('auth_token_type');
           localStorage.removeItem('auth_email');
           localStorage.removeItem('auth_role');
+          clearAuthAgentId();
           router.replace('/login');
           return;
         }
         if (!cancelled) setAuthChecked(true);
       } catch {
+        clearAuthAgentId();
         router.replace('/login');
       }
     };
@@ -77,7 +78,7 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   if (!authChecked) {
-    return <div className="h-screen bg-scaffold" />;
+    return <AgentPortalShellSkeleton />;
   }
 
   return (

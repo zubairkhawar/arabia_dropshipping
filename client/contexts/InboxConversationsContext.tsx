@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
 import { usePathname } from 'next/navigation';
+import { readAuthAgentId, readLastInboxConversationId, writeLastInboxConversationId } from '@/lib/agent-session-storage';
 
 export type ConversationStatus = 'active' | 'resolved' | 'pending';
 
@@ -53,6 +54,8 @@ interface InboxConversationsContextType {
   setMessages: (convId: number, messages: InboxMessage[]) => void;
   appendMessage: (convId: number, message: InboxMessage) => void;
   refreshConversations: () => Promise<void>;
+  /** When set, the UI can show a thread skeleton for that conversation while messages load. */
+  loadingConversationId: number | null;
 }
 
 const InboxConversationsContext = createContext<InboxConversationsContextType | null>(null);
@@ -118,6 +121,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [messagesByConvId, setMessagesByConvId] = useState<Record<number, InboxMessage[]>>({});
   const [isLoading, setIsLoading] = useState(true);
+  const [loadingConversationId, setLoadingConversationId] = useState<number | null>(null);
 
   const mapConversation = useCallback(
     (c: ConversationSummaryApi): InboxConversation => {
@@ -142,20 +146,39 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     [agents],
   );
 
+  const fetchConversationRowsFromApi = useCallback(async (): Promise<ConversationSummaryApi[]> => {
+    const aid = isAgentPortal ? (currentAgentId ?? readAuthAgentId()) : null;
+    if (isAgentPortal && !aid) return [];
+    const url = new URL(`${API_BASE}/api/messaging/conversations`);
+    url.searchParams.set('tenant_id', String(TENANT_ID));
+    if (isAgentPortal && aid) {
+      url.searchParams.set('agent_id', String(Number(aid)));
+    }
+    const res = await fetch(url.toString());
+    if (!res.ok) return [];
+    const rows = (await res.json()) as ConversationSummaryApi[];
+    return isAgentPortal ? rows : rows.filter((c) => c.agent_id != null);
+  }, [currentAgentId, isAgentPortal]);
+
+  const mapDetailToMessages = useCallback((data: ConversationDetailsApi): InboxMessage[] => {
+    return data.messages.map((m) => ({
+      id: m.id,
+      content: m.content,
+      sender: m.sender_type,
+      senderName: m.sender_type === 'agent' ? 'You' : m.sender_type === 'customer' ? 'Customer' : 'AI',
+      timestamp: new Date(m.created_at).toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+      sentAt: m.created_at,
+    }));
+  }, []);
+
   const refreshConversations = useCallback(async () => {
+    setIsLoading(true);
     try {
-      const url = new URL(`${API_BASE}/api/messaging/conversations`);
-      url.searchParams.set('tenant_id', String(TENANT_ID));
-      if (isAgentPortal && currentAgentId) {
-        url.searchParams.set('agent_id', String(Number(currentAgentId)));
-      }
-      const res = await fetch(url.toString());
-      if (!res.ok) return;
-      const rows = (await res.json()) as ConversationSummaryApi[];
-      const visibleRows = isAgentPortal
-        ? rows
-        : rows.filter((c) => c.agent_id != null);
-      const mapped = visibleRows.map(mapConversation);
+      const rows = await fetchConversationRowsFromApi();
+      const mapped = rows.map(mapConversation);
       setConversations(mapped);
       setSelectedId((prev) => {
         if (prev && mapped.some((c) => c.id === prev)) return prev;
@@ -164,37 +187,111 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     } finally {
       setIsLoading(false);
     }
-  }, [currentAgentId, isAgentPortal, mapConversation]);
+  }, [fetchConversationRowsFromApi, mapConversation]);
 
-  const loadMessagesForConversation = useCallback(async (convId: number) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/messaging/conversations/${convId}`);
-      if (!res.ok) return;
-      const data = (await res.json()) as ConversationDetailsApi;
-      const mapped: InboxMessage[] = data.messages.map((m) => ({
-        id: m.id,
-        content: m.content,
-        sender: m.sender_type,
-        senderName: m.sender_type === 'agent' ? 'You' : m.sender_type === 'customer' ? 'Customer' : 'AI',
-        timestamp: new Date(m.created_at).toLocaleTimeString([], {
-          hour: 'numeric',
-          minute: '2-digit',
-        }),
-        sentAt: m.created_at,
-      }));
-      setMessagesByConvId((prev) => ({ ...prev, [convId]: mapped }));
-    } catch {
-      // ignore fetch errors
-    }
-  }, []);
+  const loadMessagesForConversation = useCallback(
+    async (convId: number) => {
+      setLoadingConversationId(convId);
+      try {
+        const res = await fetch(`${API_BASE}/api/messaging/conversations/${convId}`);
+        if (!res.ok) {
+          setMessagesByConvId((prev) => ({ ...prev, [convId]: [] }));
+          return;
+        }
+        const data = (await res.json()) as ConversationDetailsApi;
+        const mapped = mapDetailToMessages(data);
+        setMessagesByConvId((prev) => ({ ...prev, [convId]: mapped }));
+      } catch {
+        setMessagesByConvId((prev) => ({ ...prev, [convId]: [] }));
+      } finally {
+        setLoadingConversationId((id) => (id === convId ? null : id));
+      }
+    },
+    [mapDetailToMessages],
+  );
 
   useEffect(() => {
-    void refreshConversations();
-  }, [refreshConversations]);
+    let cancelled = false;
+
+    const run = async () => {
+      if (!isAgentPortal) {
+        setIsLoading(true);
+        try {
+          const rows = await fetchConversationRowsFromApi();
+          if (cancelled) return;
+          const mapped = rows.map(mapConversation);
+          setConversations(mapped);
+          setSelectedId((prev) => {
+            if (prev && mapped.some((c) => c.id === prev)) return prev;
+            return mapped[0]?.id ?? null;
+          });
+        } finally {
+          if (!cancelled) setIsLoading(false);
+        }
+        return;
+      }
+
+      const aid = currentAgentId ?? readAuthAgentId();
+      if (!aid) {
+        setConversations([]);
+        setIsLoading(false);
+        return;
+      }
+
+      setIsLoading(true);
+      const lastId = readLastInboxConversationId();
+      const listUrl = new URL(`${API_BASE}/api/messaging/conversations`);
+      listUrl.searchParams.set('tenant_id', String(TENANT_ID));
+      listUrl.searchParams.set('agent_id', String(Number(aid)));
+
+      try {
+        const [rowsRaw, detailData] = await Promise.all([
+          fetch(listUrl.toString()).then(async (r) => (r.ok ? r.json() : [])),
+          lastId != null
+            ? fetch(`${API_BASE}/api/messaging/conversations/${lastId}`).then(async (r) =>
+                r.ok ? r.json() : null,
+              )
+            : Promise.resolve(null),
+        ]);
+
+        if (cancelled) return;
+
+        const rows = (Array.isArray(rowsRaw) ? rowsRaw : []) as ConversationSummaryApi[];
+        const mapped = rows.map(mapConversation);
+        setConversations(mapped);
+
+        if (detailData && typeof detailData === 'object' && 'messages' in detailData) {
+          const data = detailData as ConversationDetailsApi;
+          const convId = data.conversation?.id ?? lastId!;
+          const mappedMsgs = mapDetailToMessages(data);
+          setMessagesByConvId((prev) => ({ ...prev, [convId]: mappedMsgs }));
+        }
+
+        setSelectedId((prev) => {
+          const ids = new Set(mapped.map((c) => c.id));
+          if (lastId != null && ids.has(lastId)) return lastId;
+          if (prev != null && ids.has(prev)) return prev;
+          return mapped[0]?.id ?? null;
+        });
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAgentPortal, currentAgentId, mapConversation, fetchConversationRowsFromApi, mapDetailToMessages]);
+
+  useEffect(() => {
+    if (!isAgentPortal || selectedId == null) return;
+    writeLastInboxConversationId(selectedId);
+  }, [selectedId, isAgentPortal]);
 
   useEffect(() => {
     if (selectedId == null) return;
-    if (messagesByConvId[selectedId]) return;
+    if (messagesByConvId[selectedId] !== undefined) return;
     void loadMessagesForConversation(selectedId);
   }, [selectedId, messagesByConvId, loadMessagesForConversation]);
 
@@ -346,6 +443,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         setMessages,
         appendMessage,
         refreshConversations,
+        loadingConversationId,
       }}
     >
       {children}

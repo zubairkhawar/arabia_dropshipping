@@ -269,6 +269,7 @@ export default function AdminTeams() {
               teamId={selectedTeam.id}
               teamName={selectedTeam.name}
               teamMemberNames={selectedTeam.members.map((m) => m.name)}
+              teamMemberRoster={selectedTeam.members.map((m) => ({ agentId: m.agentId, name: m.name }))}
               teamEvents={teamEvents}
               readOnly
               broadcastMode

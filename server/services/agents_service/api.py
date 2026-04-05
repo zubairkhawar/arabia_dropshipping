@@ -36,6 +36,18 @@ def _normalize_full_name(value: str) -> str:
     return " ".join(p[:1].upper() + p[1:].lower() for p in parts)
 
 
+def _normalize_profile_full_name(value: Optional[str]) -> Optional[str]:
+    """Lenient name for PATCH (agent self-service profile); allows single word."""
+    if value is None:
+        return None
+    s = " ".join(value.strip().split())
+    if not s:
+        raise ValueError("Name cannot be empty")
+    if len(s) > 120:
+        s = s[:120]
+    return s
+
+
 def _validate_password(value: str) -> str:
     if len(value) < 8:
         raise ValueError("Password must be at least 8 characters")
@@ -94,9 +106,7 @@ class AgentUpdate(BaseModel):
     @field_validator("full_name")
     @classmethod
     def validate_full_name(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return value
-        return _normalize_full_name(value)
+        return _normalize_profile_full_name(value)
 
 
 @router.get("", response_model=List[AgentOut])
@@ -119,6 +129,7 @@ async def list_agents(tenant_id: int, db: Session = Depends(get_db)):
                 user_id=agent.user_id,
                 email=user.email,
                 full_name=user.full_name,
+                avatar_url=getattr(user, "avatar_url", None),
                 status=agent.status,
                 team=agent.team,
                 created_at=agent.created_at,
@@ -214,6 +225,7 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
         user_id=agent.user_id,
         email=user.email,
         full_name=user.full_name,
+        avatar_url=getattr(user, "avatar_url", None),
         status=agent.status,
         team=agent.team,
         created_at=agent.created_at,
@@ -233,12 +245,15 @@ async def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depend
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if payload.email is not None:
-        user.email = payload.email
-    if payload.full_name is not None:
-        user.full_name = payload.full_name
-    if payload.team is not None:
-        agent.team = payload.team
+    data = payload.model_dump(exclude_unset=True)
+    if "email" in data:
+        user.email = data["email"]
+    if "full_name" in data:
+        user.full_name = data["full_name"]
+    if "team" in data:
+        agent.team = data["team"]
+    if "avatar_url" in data:
+        user.avatar_url = data["avatar_url"]
 
     user.updated_at = datetime.utcnow()
     agent.updated_at = datetime.utcnow()
@@ -255,6 +270,7 @@ async def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depend
         user_id=agent.user_id,
         email=user.email,
         full_name=user.full_name,
+        avatar_url=getattr(user, "avatar_url", None),
         status=agent.status,
         team=agent.team,
         created_at=agent.created_at,
@@ -335,6 +351,7 @@ async def get_me(current_user: User = Depends(get_current_user), db: Session = D
         user_id=agent.user_id,
         email=current_user.email,
         full_name=current_user.full_name,
+        avatar_url=getattr(current_user, "avatar_url", None),
         status=agent.status,
         team=agent.team,
         created_at=agent.created_at,

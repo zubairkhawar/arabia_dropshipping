@@ -2,7 +2,7 @@
 Centralized database models for Arabia Dropshipping
 All models are defined here to avoid circular imports
 """
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -31,6 +31,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
+    avatar_url = Column(Text, nullable=True)
     role = Column(String, nullable=False)  # user, agent, admin
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -323,6 +324,25 @@ class TeamChannelMessage(Base):
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     team_id = Column(Integer, ForeignKey("teams.id"), nullable=False, index=True)
-    sender_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    sender_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True, index=True)
+    posted_by_admin = Column(Boolean, nullable=False, default=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class TeamChannelMemberReadState(Base):
+    """
+    Per-agent read cursor for a team channel (max team_channel_messages.id the agent has read).
+    """
+
+    __tablename__ = "team_channel_member_read_states"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "team_id", "agent_id", name="uq_team_channel_read_agent"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    last_read_message_id = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

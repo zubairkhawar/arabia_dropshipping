@@ -51,6 +51,24 @@ a {
   background: linear-gradient(135deg, #1E40AF 0%, #3B82F6 100%);
 }
 
+/* Chat message list: keep scroll, hide thumb/track (overrides global webkit scrollbar above) */
+.chat-messages-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.chat-messages-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* WhatsApp-style chat wallpaper (subtle texture + doodle tone) */
+.chat-wallpaper {
+  background-color: #efeae2;
+  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-opacity='0.04' stroke='%23475569' stroke-width='0.6'%3E%3Cpath d='M8 12c2 0 3-1 5-1s4 2 4 4-2 4-4 4-3-1-5-1'/%3E%3Ccircle cx='42' cy='14' r='3'/%3E%3Cpath d='M28 38l4-6 4 8'/%3E%3Crect x='6' y='36' width='8' height='8' rx='1' transform='rotate(-12 10 40)'/%3E%3Cpath d='M48 44h-6v6h6z'/%3E%3C/g%3E%3C/svg%3E");
+}
+
 /* Smooth transitions */
 * {
   transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;

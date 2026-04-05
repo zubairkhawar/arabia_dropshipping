@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import { clearAuthAgentId, writeAuthAgentId } from '@/lib/agent-session-storage';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'https://arabia-dropshipping.onrender.com';
 
@@ -41,26 +42,35 @@ export default function LoginPage() {
       }
 
       const tokenData = (await loginRes.json()) as { access_token: string; token_type: string };
-      const meRes = await fetch(`${API_BASE}/api/auth/me`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${tokenData.access_token}`,
-        },
-      });
+      const authHeader = { Authorization: `Bearer ${tokenData.access_token}` };
+      const [meRes, agentMeRes] = await Promise.all([
+        fetch(`${API_BASE}/api/auth/me`, { method: 'GET', headers: authHeader }),
+        fetch(`${API_BASE}/api/agents/me`, { method: 'GET', headers: authHeader }),
+      ]);
       if (!meRes.ok) {
         throw new Error('Could not load account profile');
       }
       const me = (await meRes.json()) as { email: string; role: string };
+      const role = (me.role || '').toLowerCase();
 
       if (typeof window !== 'undefined') {
         localStorage.setItem('auth_token', tokenData.access_token);
         localStorage.setItem('auth_token_type', tokenData.token_type || 'bearer');
         localStorage.setItem('auth_email', me.email || trimmedEmail);
         localStorage.setItem('auth_role', me.role || 'agent');
+        if (role === 'agent') {
+          if (!agentMeRes.ok) {
+            throw new Error('Could not load agent profile');
+          }
+          const agentMe = (await agentMeRes.json()) as { id: number };
+          writeAuthAgentId(String(agentMe.id));
+        } else {
+          clearAuthAgentId();
+        }
         window.dispatchEvent(new Event('auth-changed'));
       }
 
-      if ((me.role || '').toLowerCase() === 'admin') {
+      if (role === 'admin') {
         router.push('/admin/dashboard');
         return;
       }

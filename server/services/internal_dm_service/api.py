@@ -1,13 +1,16 @@
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from jose import JWTError, jwt
 from pydantic import BaseModel
-from sqlalchemy import and_, or_, desc
+from sqlalchemy import or_, desc
 from sqlalchemy.orm import Session
 
-from database import get_db
+from config import settings
+from database import SessionLocal, get_db
 from models import Agent, User, InternalDmConversation, InternalDmMessage
+from services.internal_dm_service.dm_hub import hub
 
 router = APIRouter()
 
@@ -32,6 +35,11 @@ class DmMessageOut(BaseModel):
     created_at: datetime
 
 
+class DmMessagesPage(BaseModel):
+    messages: List[DmMessageOut]
+    has_more_older: bool
+
+
 class FindOrCreateConversationIn(BaseModel):
     tenant_id: int
     agent_id: int
@@ -50,6 +58,25 @@ def _pair(a: int, b: int) -> tuple[int, int]:
 
 def _peer_for(conversation: InternalDmConversation, agent_id: int) -> int:
     return conversation.agent_two_id if conversation.agent_one_id == agent_id else conversation.agent_one_id
+
+
+def _decode_websocket_user(token: str, db: Session) -> Optional[User]:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        email = payload.get("sub")
+        if not email:
+            return None
+        return (
+            db.query(User)
+            .filter(User.email == email, User.is_active.is_(True))
+            .first()
+        )
+    except JWTError:
+        return None
 
 
 def _agent_display_name(db: Session, agent_id: int) -> str:
@@ -145,10 +172,13 @@ async def list_conversations(
     return result
 
 
-@router.get("/conversations/{conversation_id}/messages", response_model=List[DmMessageOut])
+@router.get("/conversations/{conversation_id}/messages", response_model=DmMessagesPage)
 async def list_messages(
     conversation_id: int,
     agent_id: int = Query(...),
+    limit: int = Query(50, ge=1, le=200),
+    before_id: Optional[int] = Query(None, description="Load older messages with id strictly less than this"),
+    since: Optional[datetime] = Query(None, description="Messages strictly after this time (reconnect gap fill)"),
     db: Session = Depends(get_db),
 ):
     conversation = db.query(InternalDmConversation).filter(InternalDmConversation.id == conversation_id).first()
@@ -157,22 +187,60 @@ async def list_messages(
     if agent_id not in (conversation.agent_one_id, conversation.agent_two_id):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    rows = (
-        db.query(InternalDmMessage)
-        .filter(InternalDmMessage.conversation_id == conversation_id)
-        .order_by(InternalDmMessage.created_at.asc())
-        .all()
-    )
-    return [
-        DmMessageOut(
+    base = db.query(InternalDmMessage).filter(InternalDmMessage.conversation_id == conversation_id)
+
+    def to_out(m: InternalDmMessage) -> DmMessageOut:
+        return DmMessageOut(
             id=m.id,
             conversation_id=m.conversation_id,
             sender_agent_id=m.sender_agent_id,
             content=m.content,
             created_at=m.created_at,
         )
-        for m in rows
-    ]
+
+    if since is not None:
+        rows = (
+            base.filter(InternalDmMessage.created_at > since)
+            .order_by(InternalDmMessage.created_at.asc())
+            .limit(500)
+            .all()
+        )
+        return DmMessagesPage(messages=[to_out(m) for m in rows], has_more_older=False)
+
+    lim = max(1, min(limit, 200))
+    if before_id is not None:
+        rows_desc = (
+            base.filter(InternalDmMessage.id < before_id)
+            .order_by(desc(InternalDmMessage.id))
+            .limit(lim)
+            .all()
+        )
+        rows = list(reversed(rows_desc))
+        min_id = rows[0].id if rows else before_id
+        older = (
+            db.query(InternalDmMessage.id)
+            .filter(
+                InternalDmMessage.conversation_id == conversation_id,
+                InternalDmMessage.id < min_id,
+            )
+            .first()
+        )
+        return DmMessagesPage(messages=[to_out(m) for m in rows], has_more_older=older is not None)
+
+    rows_desc = base.order_by(desc(InternalDmMessage.id)).limit(lim).all()
+    rows = list(reversed(rows_desc))
+    min_id = rows[0].id if rows else None
+    older = None
+    if min_id is not None:
+        older = (
+            db.query(InternalDmMessage.id)
+            .filter(
+                InternalDmMessage.conversation_id == conversation_id,
+                InternalDmMessage.id < min_id,
+            )
+            .first()
+        )
+    return DmMessagesPage(messages=[to_out(m) for m in rows], has_more_older=older is not None)
 
 
 @router.post("/messages", response_model=DmMessageOut, status_code=status.HTTP_201_CREATED)
@@ -197,11 +265,76 @@ async def create_message(payload: CreateDmMessageIn, db: Session = Depends(get_d
     db.add(conversation)
     db.commit()
     db.refresh(msg)
-    return DmMessageOut(
+    out = DmMessageOut(
         id=msg.id,
         conversation_id=msg.conversation_id,
         sender_agent_id=msg.sender_agent_id,
         content=msg.content,
         created_at=msg.created_at,
     )
+    await hub.broadcast_json(
+        conversation.tenant_id,
+        conversation.id,
+        {"type": "NEW_DM_MESSAGE", "message": out.model_dump(mode="json")},
+    )
+    return out
+
+
+@router.websocket("/ws/conversation/{conversation_id}")
+async def internal_dm_websocket(websocket: WebSocket, conversation_id: int):
+    qp = websocket.query_params
+    try:
+        tenant_id = int(qp.get("tenant_id") or "0")
+    except (TypeError, ValueError):
+        await websocket.close(code=4400)
+        return
+    token = (qp.get("token") or "").strip()
+    agent_id_raw = (qp.get("agent_id") or "").strip()
+    if tenant_id < 1 or not token or not agent_id_raw:
+        await websocket.close(code=4400)
+        return
+    try:
+        agent_id = int(agent_id_raw, 10)
+    except ValueError:
+        await websocket.close(code=4400)
+        return
+
+    db = SessionLocal()
+    try:
+        user = _decode_websocket_user(token, db)
+        if user is None or user.tenant_id != tenant_id:
+            await websocket.close(code=4401)
+            return
+        ag = (
+            db.query(Agent)
+            .filter(Agent.user_id == user.id, Agent.tenant_id == tenant_id)
+            .first()
+        )
+        if not ag or ag.id != agent_id:
+            await websocket.close(code=4403)
+            return
+        conversation = (
+            db.query(InternalDmConversation)
+            .filter(InternalDmConversation.id == conversation_id, InternalDmConversation.tenant_id == tenant_id)
+            .first()
+        )
+        if not conversation:
+            await websocket.close(code=4404)
+            return
+        if agent_id not in (conversation.agent_one_id, conversation.agent_two_id):
+            await websocket.close(code=4403)
+            return
+    finally:
+        db.close()
+
+    await websocket.accept()
+    meta = {"agent_id": agent_id}
+    await hub.connect(websocket, tenant_id, conversation_id, meta)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await hub.disconnect(websocket, tenant_id, conversation_id)
 

@@ -15,7 +15,8 @@ const DM_MIDDLE_BAR_COLLAPSED_WIDTH = 56;
 export function DmMiddleBar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { conversations, addOrUpdateConversation, removeConversation } = useDmChats();
+  const { conversations, addOrUpdateConversation, removeConversation, isDmListLoading, getDmUnreadCount } =
+    useDmChats();
   const { getPresence, agentsByTeam } = useAgentPresence();
   const { agents, getCurrentAgent } = useAgents();
   const currentAgentId = getCurrentAgent()?.id ?? null;
@@ -243,7 +244,22 @@ export function DmMiddleBar() {
       {!middleBarCollapsed && (
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="p-2">
-            {filteredConversations.length === 0 ? (
+            {isDmListLoading ? (
+              <div className="space-y-2 px-1 py-2">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-3 rounded-lg px-3 py-2.5"
+                  >
+                    <div className="h-9 w-9 rounded-full bg-border/70 animate-pulse shrink-0" />
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="h-3.5 max-w-[140px] w-[85%] rounded bg-border/70 animate-pulse" />
+                      <div className="h-3 max-w-[100px] w-[55%] rounded bg-border/50 animate-pulse" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : filteredConversations.length === 0 ? (
               <p className="text-sm text-text-muted px-3 py-4">
                 {searchQuery.trim() ? 'No matches' : 'No conversations yet'}
               </p>
@@ -253,6 +269,7 @@ export function DmMiddleBar() {
                   const isActive = currentSlug === c.slug;
                   const status = getPresence(c.slug);
                   const menuOpen = menuSlug === c.slug;
+                  const unread = getDmUnreadCount(c.slug);
                   return (
                     <li
                       key={c.slug}
@@ -277,8 +294,13 @@ export function DmMiddleBar() {
                               }`}
                             />
                           </div>
-                          <div className="min-w-0 flex-1">
+                          <div className="min-w-0 flex-1 flex items-center gap-2">
                             <span className="font-medium text-sm truncate block">{c.name}</span>
+                            {unread > 0 && (
+                              <span className="shrink-0 min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold text-white">
+                                {unread > 99 ? '99+' : unread}
+                              </span>
+                            )}
                           </div>
                         </Link>
                         <div

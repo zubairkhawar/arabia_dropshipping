@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useTeamChannelRealtime, type TeamChannelWsEvent } from '@/hooks/useTeamChannelRealtime';
+import { useDmConversationRealtime, type DmWsEvent } from '@/hooks/useDmConversationRealtime';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -17,6 +19,7 @@ import {
   X,
   CornerDownLeft,
   Smile,
+  Check,
   Copy,
   Trash2,
   ChevronDown,
@@ -56,18 +59,25 @@ interface Message {
   sender: 'customer' | 'agent' | 'ai';
   senderName: string;
   senderAgentId?: number;
+  /** Admin team channel: message posted from /admin/teams (right-aligned for admin viewer). */
+  postedByAdmin?: boolean;
   timestamp: string;
   /** ISO date string for actual time and date grouping */
   sentAt?: string;
   reactions?: MessageReaction[];
   replyTo?: { id: number; senderName: string; content: string };
   attachment?: MessageAttachment;
+  /** Team channel: DB team_id for this row; PATCH reactions must use this URL, not the viewer's selected team (avoids 404 after switching teams). */
+  channelTeamId?: number;
+  /** Parsed from team JSON payload: agent ids @mentioned in this message. */
+  mentionAgentIds?: number[];
 }
 
 interface TeamChannelMessageRow {
   id: number;
   team_id: number;
-  sender_agent_id: number;
+  sender_agent_id: number | null;
+  posted_by_admin?: boolean;
   sender_name: string;
   content: string;
   created_at: string;
@@ -78,6 +88,24 @@ interface TeamChannelPayload {
   attachment?: MessageAttachment;
   replyTo?: { id: number; senderName: string; content: string };
   reactions?: MessageReaction[];
+  /** Agent ids @mentioned (stored in JSON payload). */
+  mentions?: number[];
+}
+
+const WA_NAME_COLORS = [
+  'text-orange-700',
+  'text-teal-600',
+  'text-rose-600',
+  'text-violet-600',
+  'text-amber-800',
+  'text-cyan-700',
+  'text-emerald-700',
+] as const;
+
+function whatsappSenderNameClass(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return WA_NAME_COLORS[Math.abs(h) % WA_NAME_COLORS.length];
 }
 
 const isHeicLikeAttachment = (attachment?: MessageAttachment) => {
@@ -98,6 +126,8 @@ export interface ChatWindowProps {
   teamName?: string;
   /** For team channel: names shown in header subtitle, e.g. "Ali, Hamza, Sarah". */
   teamMemberNames?: string[];
+  /** For team channel: roster with agent ids (mentions + read receipts). */
+  teamMemberRoster?: Array<{ agentId: string; name: string }>;
   /** For team channel: soft system messages (member added/removed/transferred). */
   teamEvents?: TeamEvent[];
   /** When true, chat is read-only (monitor mode: no replies/reactions/menus). */
@@ -188,6 +218,7 @@ export function ChatWindow({
   teamId,
   teamName,
   teamMemberNames = [],
+  teamMemberRoster = [],
   teamEvents = [],
   readOnly = false,
   broadcastMode = false,
@@ -198,12 +229,35 @@ export function ChatWindow({
   const { teams } = useTeams();
   const { agents, getCurrentAgent } = useAgents();
   const notifications = useNotifications();
-  const { getMessagesBySlug, loadMessagesBySlug, sendMessageBySlug } = useDmChats();
+  const {
+    getMessagesBySlug,
+    loadInitialDmThread,
+    loadOlderDmMessages,
+    fetchDmMessagesSince,
+    mergeIncomingDmMessage,
+    dmHasMoreOlder,
+    sendMessageBySlug,
+    loadingDmSlug,
+    loadingOlderDmSlug,
+    isDmListLoading,
+    getConversationBySlug,
+    reportDmUnread,
+    clearDmUnread,
+  } = useDmChats();
   const API_BASE =
     process.env.NEXT_PUBLIC_API_URL ||
     process.env.NEXT_PUBLIC_API_BASE_URL ||
     'https://arabia-dropshipping.onrender.com';
   const TENANT_ID = 1;
+  /** Admin team posts require Bearer token (role=admin). Agents may send token too; server only enforces it for posted_by_admin. */
+  const teamChannelJsonHeaders = (): Record<string, string> => {
+    const h: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (typeof window !== 'undefined') {
+      const t = localStorage.getItem('auth_token');
+      if (t) h.Authorization = `Bearer ${t}`;
+    }
+    return h;
+  };
   const encodeTeamMessageContent = (payload: TeamChannelPayload) =>
     `__TEAM_MSG_JSON__${JSON.stringify(payload)}`;
   const decodeTeamMessageContent = (raw: string): TeamChannelPayload => {
@@ -253,6 +307,10 @@ export function ChatWindow({
       ? inboxConv.conversations.find((c) => c.id === inboxConv.selectedId)
       : undefined;
   const isInboxWithSelection = !!inboxConv && inboxConv.selectedId != null;
+  const inboxMessageCount =
+    isInboxWithSelection && inboxConv?.selectedId != null
+      ? inboxConv.getMessages(inboxConv.selectedId).length
+      : 0;
   const hasSelectedConversation = !!selectedConv;
   const headerTitle = isTeamChannel && teamName
     ? `# Team Channel • ${teamName}`
@@ -270,12 +328,12 @@ export function ChatWindow({
     const convId = inboxConv!.selectedId!;
     const stored = inboxConv.getMessages(convId);
     setMessages(stored as Message[]);
-  }, [isInboxWithSelection, inboxConv?.selectedId]);
+  }, [isInboxWithSelection, isInternalChat, inboxConv?.selectedId, inboxMessageCount]);
 
   useEffect(() => {
     if (!isInternalChat || !isDmPage || !dmSlug) return;
-    void loadMessagesBySlug(dmSlug);
-  }, [isInternalChat, isDmPage, dmSlug, loadMessagesBySlug]);
+    void loadInitialDmThread(dmSlug);
+  }, [isInternalChat, isDmPage, dmSlug, loadInitialDmThread]);
 
   useEffect(() => {
     if (!isInternalChat || !isDmPage || !dmSlug) return;
@@ -291,42 +349,6 @@ export function ChatWindow({
     setMessages(mapped);
   }, [isInternalChat, isDmPage, dmSlug, getMessagesBySlug]);
 
-  useEffect(() => {
-    if (!isInternalChat || !isTeamChannel || !teamId) return;
-    const currentAgentId = Number(getCurrentAgent()?.id || 0);
-    const loadTeamMessages = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages?tenant_id=${TENANT_ID}`);
-        if (!res.ok) throw new Error('Failed to load team messages');
-        const rows = (await res.json()) as TeamChannelMessageRow[];
-        const cached = readReactionCache();
-        const mapped: Message[] = (Array.isArray(rows) ? rows : []).map((m) => {
-          const payload = decodeTeamMessageContent(m.content);
-          const cachedReactions = cached[String(m.id)];
-          return {
-            id: m.id,
-            content: payload.text || '',
-            sender: 'agent',
-            senderName: m.sender_agent_id === currentAgentId ? 'You' : m.sender_name,
-            senderAgentId: m.sender_agent_id,
-            timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-            sentAt: m.created_at,
-            attachment: payload.attachment,
-            replyTo: payload.replyTo,
-            reactions: mergeReactions(payload.reactions, cachedReactions),
-          };
-        });
-        setMessages(mapped);
-      } catch {
-        setMessages([]);
-      }
-    };
-    void loadTeamMessages();
-    const poll = window.setInterval(() => {
-      void loadTeamMessages();
-    }, 3000);
-    return () => window.clearInterval(poll);
-  }, [isInternalChat, isTeamChannel, teamId, getCurrentAgent, API_BASE, TENANT_ID]);
   const [inputValue, setInputValue] = useState('');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
@@ -355,6 +377,7 @@ export function ChatWindow({
   const [replyingTo, setReplyingTo] = useState<{ id: number; senderName: string; content: string } | null>(null);
   const [messageInfoId, setMessageInfoId] = useState<number | null>(null);
   const [reactionDetailMessageId, setReactionDetailMessageId] = useState<number | null>(null);
+  const [reactionDetailFilter, setReactionDetailFilter] = useState<'all' | string>('all');
   const [dropdownPlaceAbove, setDropdownPlaceAbove] = useState(true);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -373,6 +396,16 @@ export function ChatWindow({
   const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceMessageIdRef = useRef<number | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const BOTTOM_THRESHOLD_PX = 80;
+  const teamNearBottomRef = useRef(true);
+  const dmNearBottomRef = useRef(true);
+  const teamLastSyncIsoRef = useRef<string | null>(null);
+  const dmLastSyncIsoRef = useRef<string | null>(null);
+  const initialScrollThreadKeyDoneRef = useRef<string>('');
+  const [teamHasMoreOlder, setTeamHasMoreOlder] = useState(false);
+  const [teamLoadingOlder, setTeamLoadingOlder] = useState(false);
+  const [teamNewBelowOpen, setTeamNewBelowOpen] = useState(false);
+  const [dmNewBelowOpen, setDmNewBelowOpen] = useState(false);
   const [stickyDate, setStickyDate] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -450,11 +483,27 @@ export function ChatWindow({
   const [mentionFilter, setMentionFilter] = useState('');
   const mentionAnchorRef = useRef<number>(0);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const mentionIdsRef = useRef<Set<number>>(new Set());
+  const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [memberReadStates, setMemberReadStates] = useState<Record<string, number>>({});
+  const [teamTypers, setTeamTypers] = useState<Record<string, { name: string; until: number }>>({});
+  const [readReceiptOpenId, setReadReceiptOpenId] = useState<number | null>(null);
+
+  type MentionRosterItem = { agentId: string; name: string };
+  const mentionRoster: MentionRosterItem[] =
+    teamMemberRoster.length > 0
+      ? teamMemberRoster
+      : teamMemberNames.map((name) => ({ agentId: '', name }));
+
+  const mentionComposerEnabled =
+    isTeamChannel &&
+    !readOnly &&
+    (showBroadcastInput || teamMemberNames.length > 0 || teamMemberRoster.length > 0);
 
   const DROPDOWN_APPROX_HEIGHT = 320;
-  const mentionCandidates = teamMemberNames
-    ? teamMemberNames.filter((n) => n.toLowerCase().includes((mentionFilter || '').toLowerCase()))
-    : [];
+  const mentionCandidatesList = mentionRoster.filter((o) =>
+    o.name.toLowerCase().includes((mentionFilter || '').toLowerCase()),
+  );
 
   useEffect(() => {
     if (activeMessageMenuId === null) return;
@@ -472,8 +521,10 @@ export function ChatWindow({
   }, [activeMessageMenuId]);
 
   const viewerAgentId = Number(getCurrentAgent()?.id || 0);
-  const reactionActorId = viewerAgentId ? `agent-${viewerAgentId}` : 'me';
-  const reactionActorName = agentFullName || getCurrentAgent()?.name || 'You';
+  const reactionActorId =
+    broadcastMode && isTeamChannel ? 'admin-broadcast' : viewerAgentId ? `agent-${viewerAgentId}` : 'me';
+  const reactionActorName =
+    broadcastMode && isTeamChannel ? 'Admin' : agentFullName || getCurrentAgent()?.name || 'You';
   const getReactionCacheKey = () => (teamId ? `${TEAM_REACTION_CACHE_PREFIX}${teamId}` : null);
   const readReactionCache = (): Record<string, MessageReaction[]> => {
     if (typeof window === 'undefined') return {};
@@ -523,19 +574,350 @@ export function ChatWindow({
     return Array.from(byUser.values());
   };
 
+  const mapTeamRowToMessage = useCallback(
+    (m: TeamChannelMessageRow): Message => {
+      const payload = decodeTeamMessageContent(m.content);
+      const cachedReactions = readReactionCache()[String(m.id)];
+      const postedByAdmin = !!m.posted_by_admin;
+      const senderName = broadcastMode
+        ? postedByAdmin
+          ? 'Admin'
+          : m.sender_name
+        : m.sender_agent_id === viewerAgentId
+          ? 'You'
+          : m.sender_name;
+      const mentionIds = payload.mentions?.filter((x) => Number.isFinite(Number(x))).map((x) => Number(x));
+      return {
+        id: m.id,
+        content: payload.text || '',
+        sender: 'agent',
+        senderName,
+        senderAgentId: m.sender_agent_id ?? undefined,
+        postedByAdmin: postedByAdmin || undefined,
+        channelTeamId: m.team_id,
+        timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        sentAt: m.created_at,
+        attachment: payload.attachment,
+        replyTo: payload.replyTo,
+        reactions: mergeReactions(payload.reactions, cachedReactions),
+        mentionAgentIds: mentionIds && mentionIds.length > 0 ? mentionIds : undefined,
+      };
+    },
+    [broadcastMode, viewerAgentId, teamId],
+  );
+
+  const fetchTeamMessagesSince = useCallback(
+    async (sinceIso: string) => {
+      if (!teamId) return;
+      const url = new URL(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages`);
+      url.searchParams.set('tenant_id', String(TENANT_ID));
+      url.searchParams.set('since', sinceIso);
+      try {
+        const res = await fetch(url.toString());
+        if (!res.ok) return;
+        const raw = await res.json();
+        const rows = (Array.isArray(raw) ? raw : (raw.messages ?? [])) as TeamChannelMessageRow[];
+        const mapped = rows.map((m) => mapTeamRowToMessage(m));
+        if (mapped.length === 0) return;
+        setMessages((prev) => {
+          const byId = new Map<number, Message>();
+          for (const m of prev) byId.set(m.id, m);
+          for (const m of mapped) byId.set(m.id, m);
+          return Array.from(byId.values()).sort((a, b) => a.id - b.id);
+        });
+      } catch {
+        // ignore
+      }
+    },
+    [teamId, mapTeamRowToMessage, API_BASE, TENANT_ID],
+  );
+
+  const fetchTeamMessagesSinceRef = useRef(fetchTeamMessagesSince);
+  fetchTeamMessagesSinceRef.current = fetchTeamMessagesSince;
+
+  const loadTeamOlderMessages = useCallback(async () => {
+    if (!isInternalChat || !isTeamChannel || !teamId || teamLoadingOlder || !teamHasMoreOlder) return;
+    const el = scrollContainerRef.current;
+    const prevH = el?.scrollHeight ?? 0;
+    const prevT = el?.scrollTop ?? 0;
+    const oldestId = messages[0]?.id;
+    if (oldestId == null) return;
+    setTeamLoadingOlder(true);
+    try {
+      const url = new URL(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages`);
+      url.searchParams.set('tenant_id', String(TENANT_ID));
+      url.searchParams.set('limit', '50');
+      url.searchParams.set('before_id', String(oldestId));
+      const res = await fetch(url.toString());
+      if (!res.ok) return;
+      const raw = await res.json();
+      const page = Array.isArray(raw) ? { messages: raw, has_more_older: false } : raw;
+      const rows = (page.messages ?? []) as TeamChannelMessageRow[];
+      setTeamHasMoreOlder(Boolean(page.has_more_older));
+      const olderMapped = rows.map((m) => mapTeamRowToMessage(m));
+      setMessages((prev) => {
+        const byId = new Map<number, Message>();
+        for (const m of olderMapped) byId.set(m.id, m);
+        for (const m of prev) byId.set(m.id, m);
+        return Array.from(byId.values()).sort((a, b) => a.id - b.id);
+      });
+      requestAnimationFrame(() => {
+        const s = scrollContainerRef.current;
+        if (s) s.scrollTop = s.scrollHeight - prevH + prevT;
+      });
+    } catch {
+      // ignore
+    } finally {
+      setTeamLoadingOlder(false);
+    }
+  }, [
+    isInternalChat,
+    isTeamChannel,
+    teamId,
+    teamLoadingOlder,
+    teamHasMoreOlder,
+    messages,
+    mapTeamRowToMessage,
+    API_BASE,
+    TENANT_ID,
+  ]);
+
+  const handleTeamChannelWs = useCallback(
+    (ev: TeamChannelWsEvent) => {
+      if (ev.type === 'NEW_MESSAGE' || ev.type === 'MESSAGE_UPDATED') {
+        const row = ev.message as TeamChannelMessageRow;
+        const mapped = mapTeamRowToMessage(row);
+        const isNew = ev.type === 'NEW_MESSAGE';
+        setMessages((prev) => {
+          const idx = prev.findIndex((x) => x.id === mapped.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = mapped;
+            return next;
+          }
+          const merged = [...prev, mapped].sort((a, b) => a.id - b.id);
+          return merged;
+        });
+        if (isNew && !teamNearBottomRef.current) {
+          const isMine = broadcastMode
+            ? !!mapped.postedByAdmin && showBroadcastInput
+            : mapped.senderAgentId === viewerAgentId && viewerAgentId > 0;
+          if (!isMine) setTeamNewBelowOpen(true);
+        }
+        return;
+      }
+      if (ev.type === 'READ_STATE') {
+        setMemberReadStates((prev) => ({
+          ...prev,
+          [String(ev.agent_id)]: ev.last_read_message_id,
+        }));
+        return;
+      }
+      if (ev.type === 'TYPING') {
+        const self = viewerAgentId && ev.agent_id === viewerAgentId;
+        if (self) return;
+        const key = `${ev.agent_id ?? 'x'}:${ev.name}`;
+        if (ev.active) {
+          setTeamTypers((prev) => ({
+            ...prev,
+            [key]: { name: ev.name, until: Date.now() + 4000 },
+          }));
+        } else {
+          setTeamTypers((prev) => {
+            const { [key]: _, ...rest } = prev;
+            return rest;
+          });
+        }
+      }
+    },
+    [mapTeamRowToMessage, viewerAgentId, broadcastMode, showBroadcastInput],
+  );
+
+  const sendTypingWs = useTeamChannelRealtime(
+    Boolean(isInternalChat && isTeamChannel && teamId && typeof window !== 'undefined'),
+    teamId ? Number(teamId) : null,
+    TENANT_ID,
+    handleTeamChannelWs,
+    {
+      onOpen: () => {
+        const since = teamLastSyncIsoRef.current;
+        if (since) void fetchTeamMessagesSinceRef.current(since);
+      },
+    },
+  );
+
+  const teamReadFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const teamPendingReadMaxRef = useRef(0);
+
+  useEffect(() => {
+    if (!isInternalChat || !isTeamChannel || !teamId) return;
+    setMessages([]);
+    setMemberReadStates({});
+    setTeamTypers({});
+    setTeamHasMoreOlder(false);
+    setTeamNewBelowOpen(false);
+    initialScrollThreadKeyDoneRef.current = '';
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const msgUrl = new URL(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages`);
+        msgUrl.searchParams.set('tenant_id', String(TENANT_ID));
+        msgUrl.searchParams.set('limit', '50');
+        const readUrl = `${API_BASE}/api/teams/${Number(teamId)}/channel/member-read-states?tenant_id=${TENANT_ID}`;
+        const [msgRes, readRes] = await Promise.all([
+          fetch(msgUrl.toString()),
+          fetch(readUrl, { headers: teamChannelJsonHeaders() }),
+        ]);
+        if (!msgRes.ok) throw new Error('Failed to load team messages');
+        const raw = await msgRes.json();
+        const page = Array.isArray(raw) ? { messages: raw, has_more_older: false } : raw;
+        const rows = (page.messages ?? []) as TeamChannelMessageRow[];
+        if (cancelled) return;
+        const mapped: Message[] = rows.map((m) => mapTeamRowToMessage(m));
+        setMessages(mapped);
+        setTeamHasMoreOlder(Boolean(page.has_more_older));
+        if (readRes.ok) {
+          const arr = (await readRes.json()) as { agent_id: number; last_read_message_id: number }[];
+          const readMap: Record<string, number> = {};
+          for (const r of arr) {
+            readMap[String(r.agent_id)] = r.last_read_message_id;
+          }
+          if (!cancelled) setMemberReadStates(readMap);
+        }
+      } catch {
+        if (!cancelled) setMessages([]);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [isInternalChat, isTeamChannel, teamId, API_BASE, TENANT_ID, mapTeamRowToMessage]);
+
+  useEffect(() => {
+    if (!isInternalChat || !isTeamChannel || !teamId || readOnly || !viewerAgentId) return;
+    const ids = messages.map((m) => m.id);
+    if (ids.length === 0) return;
+    const maxId = Math.max(...ids);
+    teamPendingReadMaxRef.current = Math.max(teamPendingReadMaxRef.current, maxId);
+    if (teamReadFlushTimerRef.current) clearTimeout(teamReadFlushTimerRef.current);
+    teamReadFlushTimerRef.current = setTimeout(() => {
+      teamReadFlushTimerRef.current = null;
+      if (!teamNearBottomRef.current) return;
+      const v = teamPendingReadMaxRef.current;
+      void fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/read-state`, {
+        method: 'POST',
+        headers: teamChannelJsonHeaders(),
+        body: JSON.stringify({ tenant_id: TENANT_ID, last_read_message_id: v }),
+      }).catch(() => undefined);
+    }, 700);
+    return () => {
+      if (teamReadFlushTimerRef.current) clearTimeout(teamReadFlushTimerRef.current);
+    };
+  }, [isInternalChat, isTeamChannel, teamId, readOnly, viewerAgentId, messages, API_BASE, TENANT_ID]);
+
+  useEffect(() => {
+    if (!isTeamChannel) return;
+    const t = window.setInterval(() => {
+      const now = Date.now();
+      setTeamTypers((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        for (const k of Object.keys(next)) {
+          if (next[k].until < now) {
+            delete next[k];
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 800);
+    return () => window.clearInterval(t);
+  }, [isTeamChannel]);
+
+  const fetchDmSinceRunRef = useRef<(slug: string, iso: string) => void>(() => {});
+  fetchDmSinceRunRef.current = (slug, iso) => {
+    void fetchDmMessagesSince(slug, iso);
+  };
+
+  const dmConversation = isDmPage && dmSlug ? getConversationBySlug(dmSlug) : undefined;
+  const dmConversationIdRaw = dmConversation ? Number(dmConversation.id) : NaN;
+  const dmConversationId =
+    dmConversation != null && Number.isFinite(dmConversationIdRaw) && dmConversationIdRaw > 0
+      ? dmConversationIdRaw
+      : null;
+
+  const handleDmWs = useCallback(
+    (ev: DmWsEvent) => {
+      if (ev.type !== 'NEW_DM_MESSAGE' || !dmSlug) return;
+      const row = ev.message;
+      mergeIncomingDmMessage(dmSlug, row);
+      if (String(row.sender_agent_id) !== String(viewerAgentId) && !dmNearBottomRef.current) {
+        reportDmUnread(dmSlug);
+        setDmNewBelowOpen(true);
+      }
+    },
+    [dmSlug, mergeIncomingDmMessage, viewerAgentId, reportDmUnread],
+  );
+
+  useDmConversationRealtime(
+    Boolean(
+      isInternalChat && isDmPage && dmSlug && dmConversationId != null && dmConversationId > 0 && viewerAgentId > 0,
+    ),
+    dmConversationId,
+    TENANT_ID,
+    viewerAgentId > 0 ? viewerAgentId : null,
+    handleDmWs,
+    {
+      onOpen: () => {
+        const s = dmLastSyncIsoRef.current;
+        if (s && dmSlug) void fetchDmSinceRunRef.current(dmSlug, s);
+      },
+    },
+  );
+
+  useEffect(() => {
+    if (!isDmPage) return;
+    initialScrollThreadKeyDoneRef.current = '';
+    setDmNewBelowOpen(false);
+  }, [isDmPage, dmSlug]);
+
+  useEffect(() => {
+    if (!isTeamChannel || messages.length === 0) return;
+    let max = '';
+    for (const m of messages) {
+      const t = m.sentAt || '';
+      if (t > max) max = t;
+    }
+    if (max) teamLastSyncIsoRef.current = max;
+  }, [isTeamChannel, messages]);
+
+  useEffect(() => {
+    if (!isDmPage || !dmSlug) return;
+    const rows = getMessagesBySlug(dmSlug);
+    let max = '';
+    for (const m of rows) {
+      if (m.createdAt > max) max = m.createdAt;
+    }
+    if (max) dmLastSyncIsoRef.current = max;
+  }, [isDmPage, dmSlug, getMessagesBySlug]);
+
   const toTeamPayload = (message: Message): TeamChannelPayload => ({
     text: message.content || '',
     attachment: message.attachment,
     replyTo: message.replyTo,
     reactions: message.reactions,
+    mentions: message.mentionAgentIds?.length ? message.mentionAgentIds : undefined,
   });
 
   const persistTeamMessagePayload = async (message: Message) => {
-    if (!isInternalChat || !isTeamChannel || !teamId) return;
+    if (!isInternalChat || !isTeamChannel) return;
+    const teamIdForApi = message.channelTeamId ?? (teamId ? Number(teamId) : 0);
+    if (!teamIdForApi) return;
     try {
-      await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages/${message.id}`, {
+      await fetch(`${API_BASE}/api/teams/${teamIdForApi}/channel/messages/${message.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: teamChannelJsonHeaders(),
         body: JSON.stringify({
           tenant_id: TENANT_ID,
           content: encodeTeamMessageContent(toTeamPayload(message)),
@@ -547,15 +929,24 @@ export function ChatWindow({
   };
 
   const getMessageStyle = (message: Message, outgoing: boolean) => {
-    if (outgoing) return 'bg-chat-user text-white';
-    if (message.senderName === 'Admin') return 'bg-primary/15 text-primary border border-primary/30';
-    if (message.sender === 'agent') return 'bg-chat-agent text-text-primary';
-    return 'bg-chat-ai text-text-primary';
+    const mentioned =
+      isTeamChannel &&
+      viewerAgentId > 0 &&
+      message.mentionAgentIds?.includes(viewerAgentId);
+    if (outgoing) {
+      return 'bg-[#d9fdd3] text-[#111b21] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]';
+    }
+    if (mentioned) {
+      return 'bg-[#fff9c4] text-[#111b21] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] border border-[#53bdeb]/40';
+    }
+    return 'bg-white text-[#111b21] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] border border-black/[0.06]';
   };
 
   const isOutgoingMessage = (message: Message) => {
     if (isInternalChat && isTeamChannel) {
-      if (broadcastMode && message.senderName === 'Admin') return true;
+      if (broadcastMode) {
+        return message.postedByAdmin === true || message.senderName === 'Admin';
+      }
       if (viewerAgentId && message.senderAgentId) return message.senderAgentId === viewerAgentId;
       return message.senderName === 'You';
     }
@@ -650,6 +1041,39 @@ export function ChatWindow({
     return /^[\p{Emoji_Presentation}\p{Emoji}\s\uFE0F]+$/u.test(t) && t.length <= 20;
   };
 
+  const getReceiptPeersForMessage = (message: Message): { id: number; name: string }[] => {
+    if (!teamMemberRoster.length) return [];
+    const peers = teamMemberRoster
+      .map((r) => ({ id: Number.parseInt(r.agentId, 10), name: r.name }))
+      .filter((p) => Number.isFinite(p.id) && p.id >= 1);
+    if (message.postedByAdmin || message.senderName === 'Admin') return peers;
+    const sid = message.senderAgentId;
+    if (!sid) return peers;
+    return peers.filter((p) => p.id !== sid);
+  };
+
+  const renderTeamMessageBody = (content: string) => {
+    if (!isTeamChannel || !content) return content;
+    const parts: ReactNode[] = [];
+    const re = /@([^\s@]+)/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    let mi = 0;
+    while ((m = re.exec(content)) !== null) {
+      if (m.index > last) parts.push(<span key={`t-${mi++}`}>{content.slice(last, m.index)}</span>);
+      const token = m[1];
+      const hit = mentionRoster.find((r) => r.name.toLowerCase() === token.toLowerCase());
+      parts.push(
+        <span key={`m-${m.index}`} className={hit ? 'font-semibold text-[#53bdeb]' : 'text-[#8696a0]'}>
+          @{token}
+        </span>,
+      );
+      last = m.index + m[0].length;
+    }
+    if (last < content.length) parts.push(<span key={`t-end-${mi}`}>{content.slice(last)}</span>);
+    return parts.length > 0 ? parts : content;
+  };
+
   const formatVoiceDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
@@ -726,6 +1150,23 @@ export function ChatWindow({
     };
   });
 
+  const inboxThreadSkeleton =
+    isInboxPage &&
+    !isInternalChat &&
+    inboxConv != null &&
+    inboxConv.selectedId != null &&
+    inboxConv.loadingConversationId === inboxConv.selectedId;
+  const dmMessagesEmpty =
+    isInternalChat && isDmPage && dmSlug != null && getMessagesBySlug(dmSlug).length === 0;
+  const dmThreadSkeleton =
+    isInternalChat &&
+    isDmPage &&
+    dmSlug != null &&
+    dmMessagesEmpty &&
+    (loadingDmSlug === dmSlug || isDmListLoading);
+  const showChatThreadSkeleton =
+    (inboxThreadSkeleton && filteredMessages.length === 0) || dmThreadSkeleton;
+
   const sharedChatMedia = messages
     .filter((m) => m.attachment?.type === 'photo' && m.attachment.url)
     .map((m) => ({
@@ -756,13 +1197,72 @@ export function ChatWindow({
     setStickyDate(current);
   };
 
+  const handleChatScroll = useCallback(() => {
+    handleScrollStickyDate();
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    const distBottom = scrollHeight - scrollTop - clientHeight;
+    const near = distBottom <= BOTTOM_THRESHOLD_PX;
+    teamNearBottomRef.current = near;
+    dmNearBottomRef.current = near;
+    if (near) {
+      setTeamNewBelowOpen(false);
+      setDmNewBelowOpen(false);
+      if (isDmPage && dmSlug) clearDmUnread(dmSlug);
+    }
+    if (isTeamChannel && teamHasMoreOlder && !teamLoadingOlder && scrollTop < 100) {
+      void loadTeamOlderMessages();
+    }
+    if (isDmPage && dmSlug && dmHasMoreOlder(dmSlug) && !loadingOlderDmSlug && scrollTop < 100) {
+      void loadOlderDmMessages(dmSlug);
+    }
+  }, [
+    isTeamChannel,
+    isDmPage,
+    dmSlug,
+    teamHasMoreOlder,
+    teamLoadingOlder,
+    loadTeamOlderMessages,
+    dmHasMoreOlder,
+    loadingOlderDmSlug,
+    loadOlderDmMessages,
+    clearDmUnread,
+  ]);
+
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
-    handleScrollStickyDate();
-    el.addEventListener('scroll', handleScrollStickyDate);
-    return () => el.removeEventListener('scroll', handleScrollStickyDate);
-  }, [filteredMessages.length, teamEvents.length]);
+    handleChatScroll();
+    el.addEventListener('scroll', handleChatScroll);
+    return () => el.removeEventListener('scroll', handleChatScroll);
+  }, [handleChatScroll, filteredMessages.length, teamEvents.length]);
+
+  const initialScrollKey =
+    isTeamChannel && teamId ? `team:${teamId}` : isDmPage && dmSlug ? `dm:${dmSlug}` : '';
+
+  useLayoutEffect(() => {
+    if (!initialScrollKey || showChatThreadSkeleton || filteredMessages.length === 0) return;
+    if (initialScrollThreadKeyDoneRef.current === initialScrollKey) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    initialScrollThreadKeyDoneRef.current = initialScrollKey;
+    teamNearBottomRef.current = true;
+    dmNearBottomRef.current = true;
+    if (initialScrollKey.startsWith('dm:') && dmSlug) clearDmUnread(dmSlug);
+  }, [initialScrollKey, showChatThreadSkeleton, filteredMessages.length, dmSlug, clearDmUnread]);
+
+  useEffect(() => {
+    if (!initialScrollKey) return;
+    if (!teamNearBottomRef.current) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      if (!teamNearBottomRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    });
+  }, [filteredMessages.length, initialScrollKey]);
 
   const deleteMessage = (id: number) => {
     setMessages((prev) => prev.filter((m) => m.id !== id));
@@ -803,37 +1303,43 @@ export function ChatWindow({
     }
     if (isInternalChat && isTeamChannel && teamId) {
       try {
-        const senderId = Number(getCurrentAgent()?.id || 0);
-        if (!senderId) throw new Error('Agent not found');
+        sendTypingWs(false);
+        const mentionList = Array.from(mentionIdsRef.current);
+        const payloadJson = encodeTeamMessageContent({
+          text: text || '',
+          attachment: pendingAttachment ?? undefined,
+          replyTo: replyingTo ?? undefined,
+          mentions: mentionList.length > 0 ? mentionList : undefined,
+        });
+        const body: Record<string, number | string | boolean> = {
+          tenant_id: Number(TENANT_ID),
+          content: typeof payloadJson === 'string' ? payloadJson : String(payloadJson ?? ''),
+        };
+        if (broadcastMode) {
+          body.posted_by_admin = true;
+        } else {
+          const senderId = Number.parseInt(String(getCurrentAgent()?.id ?? ''), 10);
+          if (!Number.isFinite(senderId) || senderId < 1) throw new Error('Agent not found');
+          body.sender_agent_id = senderId;
+        }
         const res = await fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tenant_id: TENANT_ID,
-            sender_agent_id: senderId,
-            content: encodeTeamMessageContent({
-              text: text || '',
-              attachment: pendingAttachment ?? undefined,
-              replyTo: replyingTo ?? undefined,
-            }),
-          }),
+          headers: teamChannelJsonHeaders(),
+          body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error('Failed to send team message');
         const saved = (await res.json()) as TeamChannelMessageRow;
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: saved.id,
-            content: text || (pendingAttachment?.name || ''),
-            sender: 'agent',
-            senderName: 'You',
-            senderAgentId: senderId,
-            timestamp: new Date(saved.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-            sentAt: saved.created_at,
-            attachment: pendingAttachment ?? undefined,
-            replyTo: replyingTo ?? undefined,
-          },
-        ]);
+        const mapped = mapTeamRowToMessage(saved);
+        setMessages((prev) => {
+          const idx = prev.findIndex((x) => x.id === mapped.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = mapped;
+            return next;
+          }
+          return [...prev, mapped].sort((a, b) => a.id - b.id);
+        });
+        mentionIdsRef.current = new Set();
       } catch {
         addSystemNote('Message failed to send. Please try again.');
       } finally {
@@ -940,7 +1446,18 @@ export function ChatWindow({
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setInputValue(v);
-    if (!showBroadcastInput || !teamMemberNames?.length) return;
+    if (isTeamChannel && !readOnly) {
+      sendTypingWs(true);
+      if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+      typingStopTimerRef.current = setTimeout(() => {
+        typingStopTimerRef.current = null;
+        sendTypingWs(false);
+      }, 2000);
+    }
+    if (!mentionComposerEnabled) {
+      setShowMentionDropdown(false);
+      return;
+    }
     const start = e.target.selectionStart ?? v.length;
     const textToCursor = v.slice(0, start);
     const lastAt = textToCursor.lastIndexOf('@');
@@ -957,13 +1474,17 @@ export function ChatWindow({
     setShowMentionDropdown(false);
   };
 
-  const insertMention = (name: string) => {
+  const insertMention = (name: string, agentId?: string) => {
     const start = mentionAnchorRef.current;
     const cursor = inputRef.current?.selectionStart ?? inputValue.length;
     const newValue =
       inputValue.slice(0, start) + `@${name} ` + inputValue.slice(cursor);
     setInputValue(newValue);
     setShowMentionDropdown(false);
+    if (agentId) {
+      const aid = Number.parseInt(agentId, 10);
+      if (Number.isFinite(aid) && aid >= 1) mentionIdsRef.current.add(aid);
+    }
     setTimeout(() => {
       inputRef.current?.focus();
       const pos = start + name.length + 2;
@@ -972,24 +1493,25 @@ export function ChatWindow({
   };
 
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (showMentionDropdown && mentionCandidates.length > 0) {
+    if (showMentionDropdown && mentionCandidatesList.length > 0) {
       if (e.key === 'Escape') {
         setShowMentionDropdown(false);
         e.preventDefault();
         return;
       }
       if (e.key === 'ArrowDown') {
-        setMentionIndex((i) => (i + 1) % mentionCandidates.length);
+        setMentionIndex((i) => (i + 1) % mentionCandidatesList.length);
         e.preventDefault();
         return;
       }
       if (e.key === 'ArrowUp') {
-        setMentionIndex((i) => (i - 1 + mentionCandidates.length) % mentionCandidates.length);
+        setMentionIndex((i) => (i - 1 + mentionCandidatesList.length) % mentionCandidatesList.length);
         e.preventDefault();
         return;
       }
-      if (e.key === 'Enter' && mentionCandidates.length > 0) {
-        insertMention(mentionCandidates[mentionIndex]);
+      if (e.key === 'Enter' && mentionCandidatesList.length > 0) {
+        const pick = mentionCandidatesList[mentionIndex];
+        insertMention(pick.name, pick.agentId || undefined);
         e.preventDefault();
         return;
       }
@@ -1246,27 +1768,53 @@ export function ChatWindow({
       {/* Messages Container */}
       <div
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto p-6 space-y-4 bg-panel relative"
+        className="chat-messages-scroll chat-wallpaper flex-1 overflow-y-auto p-6 space-y-4 relative"
       >
-        {selectedConv?.reopenedAt && selectedConv.closedAt && (
+        {showChatThreadSkeleton && (
+          <div className="space-y-4 max-w-2xl mx-auto py-2" aria-busy aria-label="Loading messages">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <div
+                key={i}
+                className={`flex w-full ${i % 2 === 0 ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className="h-11 w-[min(100%,280px)] rounded-2xl bg-[#f0f2f5] animate-pulse"
+                  style={{ animationDelay: `${i * 70}ms` }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        {!showChatThreadSkeleton && isTeamChannel && teamLoadingOlder && (
+          <div className="flex justify-center py-2 shrink-0">
+            <span className="text-xs text-[#667781]">Loading older messages…</span>
+          </div>
+        )}
+        {!showChatThreadSkeleton && isDmPage && loadingOlderDmSlug === dmSlug && (
+          <div className="flex justify-center py-2 shrink-0">
+            <span className="text-xs text-[#667781]">Loading older messages…</span>
+          </div>
+        )}
+        {!showChatThreadSkeleton && selectedConv?.reopenedAt && selectedConv.closedAt && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             You closed this conversation on {selectedConv.closedAt}. The customer has messaged again.
           </div>
         )}
-        {stickyDate && (
+        {!showChatThreadSkeleton && stickyDate && (
           <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
-            <span className="bg-white/95 border border-border rounded-full px-3 py-1.5 text-xs font-medium text-text-secondary shadow-sm">
+            <span className="rounded-full border border-black/[0.06] bg-white/90 px-3 py-1.5 text-xs font-medium text-[#54656f] shadow-sm backdrop-blur-sm">
               {formatDateLabel(stickyDate + 'T12:00:00')}
             </span>
           </div>
         )}
-        {unifiedGroups.map((group) => (
+        {!showChatThreadSkeleton &&
+          unifiedGroups.map((group) => (
           <div key={group.dateKey} className="space-y-4">
             <div
               data-date-key={group.dateKey}
               className="flex justify-center py-2"
             >
-              <span className="bg-white border border-border rounded-full px-3 py-1.5 text-xs font-medium text-text-muted shadow-sm">
+              <span className="rounded-full border border-black/[0.06] bg-white/90 px-3 py-1.5 text-xs font-medium text-[#54656f] shadow-sm backdrop-blur-sm">
                 {group.label}
               </span>
             </div>
@@ -1305,6 +1853,13 @@ export function ChatWindow({
               }
 
               const outgoing = isOutgoingMessage(message);
+              const receiptPeers = isTeamChannel && outgoing ? getReceiptPeersForMessage(message) : [];
+              const allReadReceipt =
+                receiptPeers.length === 0 ||
+                receiptPeers.every((p) => (memberReadStates[String(p.id)] ?? 0) >= message.id);
+              const anyReadReceipt = receiptPeers.some(
+                (p) => (memberReadStates[String(p.id)] ?? 0) >= message.id,
+              );
               const isStarred = starredIds.includes(message.id);
               const showMenu = activeMessageMenuId === message.id;
               const showReactions = activeReactionPickerId === message.id;
@@ -1319,26 +1874,42 @@ export function ChatWindow({
               ).map(([emoji, count]) => ({ emoji, count }));
               const showReactionDetail = reactionDetailMessageId === message.id;
               const emojiOnly = !message.attachment && isEmojiOnly(message.content);
+              const reactionRowsFiltered =
+                reactionDetailFilter === 'all'
+                  ? reactionList
+                  : reactionList.filter((r) => r.emoji === reactionDetailFilter);
 
               return (
                 <div
                   key={message.id}
                   id={`message-${message.id}`}
-                  className={`flex w-full items-start gap-2 ${outgoing ? 'justify-end' : 'justify-start'}`}
+                  className={`group/message flex w-full items-end gap-1.5 ${outgoing ? 'justify-end' : 'justify-start'}`}
                 >
+                  {outgoing && !readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveReactionPickerId(message.id)}
+                      className="mb-1 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#54656f] opacity-0 shadow-md transition-opacity duration-200 hover:bg-[#f0f2f5] group-hover/message:opacity-100"
+                      aria-label="Quick react"
+                    >
+                      <Smile className="h-5 w-5" />
+                    </button>
+                  )}
                   {isTeamChannel && !outgoing && (
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
+                    <div className="mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06]">
                       {message.senderName === 'You' && agentAvatarUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                        <img src={agentAvatarUrl} alt="" className="h-full w-full object-cover" />
                       ) : (
                         message.senderName.charAt(0)
                       )}
                     </div>
                   )}
-                  <div className={`relative group max-w-[85%] ${outgoing ? 'flex flex-col items-end' : ''}`}>
+                  <div
+                    className={`relative flex max-w-[85%] min-w-0 flex-col ${outgoing ? 'items-end' : 'items-start'}`}
+                  >
                     <div
-                      className={`relative max-w-message-bubble min-w-[8rem] rounded-lg px-3 py-3.5 pl-3 pr-10 ${getMessageStyle(message, outgoing)}`}
+                      className={`relative min-w-[8rem] max-w-message-bubble rounded-2xl px-2.5 pb-1.5 pt-2 pr-9 ${getMessageStyle(message, outgoing)}`}
                     >
                       {!readOnly && (
                         <button
@@ -1348,30 +1919,26 @@ export function ChatWindow({
                               current === message.id ? null : message.id,
                             )
                           }
-                          className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-full bg-white/30 hover:bg-white/50 text-current opacity-80 hover:opacity-100 transition-opacity flex-shrink-0"
+                          className="absolute right-1.5 top-1.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-black/[0.04] text-[#54656f] opacity-90 transition-colors hover:bg-black/[0.08]"
                           aria-label="Message options"
                         >
-                          <ChevronDown className="w-4 h-4" />
+                          <ChevronDown className="h-4 w-4" />
                         </button>
                       )}
 
-                      <div className="pr-1 min-w-0 space-y-1">
+                      <div className="min-w-0 space-y-1 pr-0.5">
                         {message.replyTo && (
                           <button
                             type="button"
                             onClick={() => scrollToMessage(message.replyTo!.id)}
-                            className={`mb-2 w-full text-left pl-2 border-l-4 rounded border-primary cursor-pointer ${
-                              outgoing ? 'bg-white/20 hover:bg-white/25' : 'bg-black/5 hover:bg-black/10'
+                            className={`mb-1.5 w-full cursor-pointer rounded-md border-l-[3px] border-[#53bdeb] py-1.5 pl-2 text-left ${
+                              outgoing ? 'bg-[#00000008] hover:bg-[#0000000d]' : 'bg-[#f0f2f5] hover:bg-[#e9edef]'
                             }`}
                             title="Jump to original message"
                           >
-                            <p className={`text-xs font-semibold ${outgoing ? 'text-white' : 'text-primary'}`}>
-                              {message.replyTo.senderName}
-                            </p>
+                            <p className="text-xs font-semibold text-[#53bdeb]">{message.replyTo.senderName}</p>
                             <p
-                              className={`text-xs truncate max-w-full ${
-                                outgoing ? 'text-white/90' : 'text-text-secondary'
-                              }`}
+                              className="max-w-full truncate text-xs text-[#667781]"
                               title={message.replyTo.content}
                             >
                               {message.replyTo.content}
@@ -1379,51 +1946,57 @@ export function ChatWindow({
                           </button>
                         )}
                         {!outgoing && (
-                          <p className="text-xs font-medium mb-1 opacity-75">{message.senderName}</p>
+                          <p
+                            className={`mb-0.5 text-[13px] font-semibold ${whatsappSenderNameClass(message.senderName)}`}
+                          >
+                            {message.senderName}
+                          </p>
                         )}
                         {message.attachment && (
-                          <div className={`mb-2 rounded-lg overflow-hidden ${outgoing ? 'bg-white/20' : 'bg-black/5'}`}>
+                          <div
+                            className={`mb-2 overflow-hidden rounded-lg ${outgoing ? 'bg-black/[0.04]' : 'bg-black/[0.04]'}`}
+                          >
                             {message.attachment.type === 'photo' && (
                               isHeicLikeAttachment(message.attachment) ? (
                                 <a
                                   href={message.attachment.url}
                                   download={message.attachment.name}
-                                  className={`flex items-center gap-2 px-2 py-2 rounded-lg ${outgoing ? 'text-white hover:bg-white/10' : 'text-text-primary hover:bg-black/5'}`}
+                                  className="flex items-center gap-2 rounded-lg px-2 py-2 text-[#111b21] hover:bg-black/[0.04]"
                                 >
-                                  <ImageIcon className="w-5 h-5 flex-shrink-0" />
-                                  <span className="text-sm truncate">{message.attachment.name}</span>
+                                  <ImageIcon className="h-5 w-5 flex-shrink-0" />
+                                  <span className="truncate text-sm">{message.attachment.name}</span>
                                 </a>
                               ) : (
-                              <button
-                                type="button"
-                                onClick={() => setPreviewImageSrc(message.attachment?.url || null)}
-                                className="block max-w-full text-left"
-                              >
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={message.attachment.url}
-                                  alt={message.attachment.name}
-                                  className="max-w-full max-h-48 object-cover rounded-lg"
-                                />
-                              </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewImageSrc(message.attachment?.url || null)}
+                                  className="block max-w-full text-left"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={message.attachment.url}
+                                    alt={message.attachment.name}
+                                    className="max-h-48 max-w-full rounded-lg object-cover"
+                                  />
+                                </button>
                               )
                             )}
                             {message.attachment.type === 'file' && (
                               <a
                                 href={message.attachment.url}
                                 download={message.attachment.name}
-                                className={`flex items-center gap-2 px-2 py-2 rounded-lg ${outgoing ? 'text-white hover:bg-white/10' : 'text-text-primary hover:bg-black/5'}`}
+                                className="flex items-center gap-2 rounded-lg px-2 py-2 text-[#111b21] hover:bg-black/[0.04]"
                               >
-                                <FileText className="w-5 h-5 flex-shrink-0" />
-                                <span className="text-sm truncate">{message.attachment.name}</span>
+                                <FileText className="h-5 w-5 flex-shrink-0" />
+                                <span className="truncate text-sm">{message.attachment.name}</span>
                               </a>
                             )}
                             {message.attachment.type === 'voice' && (
-                              <div className={`flex items-center gap-2 py-1 ${outgoing ? 'text-white' : 'text-text-primary'}`}>
-                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <div className="flex items-center gap-2 py-1 text-[#111b21]">
+                                <div className="flex min-w-0 flex-1 items-center gap-2">
                                   <div className="relative flex-shrink-0">
-                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${outgoing ? 'bg-white/20' : 'bg-black/10'}`}>
-                                      <Mic className={`w-4 h-4 ${outgoing ? 'text-blue-200' : 'text-status-info'}`} />
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10">
+                                      <Mic className="h-4 w-4 text-[#54656f]" />
                                     </div>
                                   </div>
                                   <button
@@ -1435,164 +2008,251 @@ export function ChatWindow({
                                         message.attachment!.durationSeconds ?? 0,
                                       )
                                     }
-                                    className={`p-1 rounded-full flex-shrink-0 ${outgoing ? 'text-white/90 hover:bg-white/20' : 'text-text-primary hover:bg-black/10'}`}
+                                    className="flex-shrink-0 rounded-full p-1 text-[#111b21] hover:bg-black/10"
                                     aria-label={playingVoiceId === message.id ? 'Pause' : 'Play voice message'}
                                   >
                                     {playingVoiceId === message.id ? (
-                                      <Pause className="w-5 h-5" fill="currentColor" />
+                                      <Pause className="h-5 w-5" fill="currentColor" />
                                     ) : (
-                                      <Play className="w-5 h-5" fill="currentColor" />
+                                      <Play className="h-5 w-5" fill="currentColor" />
                                     )}
                                   </button>
-                                  <div className="flex-1 min-w-0 flex items-center gap-1.5">
-                                    <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-black/15 min-w-[4rem]">
+                                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                                    <div className="min-w-[4rem] flex-1 overflow-hidden rounded-full bg-black/15 h-1.5">
                                       <div
-                                        className={`h-full rounded-full transition-all duration-150 ${outgoing ? 'bg-blue-200' : 'bg-status-info/70'}`}
+                                        className="h-full rounded-full bg-[#53bdeb] transition-all duration-150"
                                         style={{ width: `${((voiceProgress[message.id] ?? 0) * 100).toFixed(1)}%` }}
                                       />
                                     </div>
-                                    <div className="flex gap-0.5 flex-shrink-0">
+                                    <div className="flex flex-shrink-0 gap-0.5">
                                       {VOICE_WAVEFORM_BARS.map((h, i) => (
                                         <div
                                           key={i}
-                                          className={`w-0.5 rounded-full ${outgoing ? 'bg-white/50' : 'bg-text-muted'}`}
+                                          className="w-0.5 rounded-full bg-[#8696a0]"
                                           style={{ height: `${(h / 100) * 12}px`, minHeight: 4 }}
                                         />
                                       ))}
                                     </div>
                                   </div>
                                 </div>
-                                <span className={`text-xs flex-shrink-0 ${outgoing ? 'text-white/80' : 'text-text-muted'}`}>
+                                <span className="flex-shrink-0 text-xs text-[#667781]">
                                   {formatVoiceDuration(message.attachment.durationSeconds ?? 0)}
                                 </span>
                               </div>
                             )}
                           </div>
                         )}
-                        <p className={`leading-relaxed break-words whitespace-pre-wrap ${emojiOnly ? 'text-5xl' : 'text-sm'} ${outgoing ? 'text-white' : 'text-text-primary'}`}>
-                          {message.content}
+                        <p
+                          className={`whitespace-pre-wrap break-words leading-relaxed text-[#111b21] ${emojiOnly ? 'text-5xl' : 'text-sm'}`}
+                        >
+                          {isTeamChannel ? renderTeamMessageBody(message.content) : message.content}
                         </p>
-                        <div className="mt-2 flex items-center justify-between gap-2">
-                          <span
-                            className={`text-xs ${
-                              outgoing ? 'text-white/75' : 'text-text-muted'
-                            }`}
-                          >
+                        <div className="mt-1 flex items-center justify-end gap-2">
+                          <span className="text-[11px] text-[#667781]">
                             {formatMessageTime(message.sentAt, message.timestamp)}
                           </span>
-                          <span className="flex items-center gap-1">
-                            {isTeamChannel && isStarred && (
-                              <Star className={`w-3 h-3 flex-shrink-0 ${outgoing ? 'text-white' : 'text-primary'}`} />
-                            )}
-                          </span>
+                          {isTeamChannel && outgoing && receiptPeers.length > 0 && (
+                            <span className="relative inline-flex items-center">
+                              <button
+                                type="button"
+                                className="inline-flex items-center p-0.5 -m-0.5 rounded hover:bg-black/[0.04]"
+                                aria-label="Read receipts"
+                                onClick={() =>
+                                  setReadReceiptOpenId((id) => (id === message.id ? null : message.id))
+                                }
+                              >
+                                <Check
+                                  className={`h-3.5 w-3.5 stroke-[2.5] ${allReadReceipt ? 'text-[#53bdeb]' : 'text-[#8696a0]'}`}
+                                />
+                                <Check
+                                  className={`-ml-1.5 h-3.5 w-3.5 stroke-[2.5] ${allReadReceipt ? 'text-[#53bdeb]' : anyReadReceipt ? 'text-[#8696a0]' : 'text-[#8696a0]/50'}`}
+                                />
+                              </button>
+                              {readReceiptOpenId === message.id && receiptPeers.length > 0 && (
+                                <>
+                                  <div
+                                    className="fixed inset-0 z-10"
+                                    onClick={() => setReadReceiptOpenId(null)}
+                                    aria-hidden
+                                  />
+                                  <div className="absolute right-0 bottom-full z-20 mb-1 w-56 rounded-lg border border-black/[0.08] bg-white py-2 px-2.5 text-left text-xs shadow-lg">
+                                    <p className="mb-1 font-semibold text-[#111b21]">Read</p>
+                                    <ul className="max-h-24 overflow-y-auto space-y-0.5 text-[#111b21]">
+                                      {receiptPeers
+                                        .filter((p) => (memberReadStates[String(p.id)] ?? 0) >= message.id)
+                                        .map((p) => (
+                                          <li key={p.id}>{p.name}</li>
+                                        ))}
+                                    </ul>
+                                    <p className="mt-2 mb-1 font-semibold text-[#111b21]">Not read yet</p>
+                                    <ul className="max-h-24 overflow-y-auto space-y-0.5 text-[#667781]">
+                                      {receiptPeers
+                                        .filter((p) => (memberReadStates[String(p.id)] ?? 0) < message.id)
+                                        .map((p) => (
+                                          <li key={p.id}>{p.name}</li>
+                                        ))}
+                                    </ul>
+                                  </div>
+                                </>
+                              )}
+                            </span>
+                          )}
+                          {isTeamChannel && isStarred && (
+                            <Star className="h-3 w-3 flex-shrink-0 fill-[#8696a0] text-[#8696a0]" />
+                          )}
                         </div>
                       </div>
                     </div>
 
-                    {/* Reaction summary and react button: below bubble */}
+                    {/* Reaction pill + emoji (WhatsApp-style) */}
                     <div
-                      className={`mt-1 flex gap-1 items-center ${
-                        outgoing ? 'justify-end' : 'justify-start'
+                      className={`relative z-10 -mt-2 flex items-center gap-1 ${
+                        outgoing ? 'mr-0.5 justify-end' : 'ml-0.5 justify-start'
                       }`}
                     >
                       {aggregated.length > 0 && (
                         <button
                           type="button"
-                          onClick={() =>
+                          onClick={() => {
+                            setReactionDetailFilter('all');
                             setReactionDetailMessageId((id) =>
                               id === message.id ? null : message.id,
-                            )
-                          }
-                          className="inline-flex items-center gap-1 rounded-full border border-border bg-white shadow-sm px-2 py-1 text-sm hover:bg-panel"
+                            );
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-2 py-0.5 text-sm shadow-[0_1px_1px_rgba(11,20,26,0.08)] transition-colors hover:bg-[#f7f8fa]"
                         >
-                          {aggregated.map(({ emoji, count }) => (
-                            <span key={emoji} className="inline-flex items-center gap-0.5">
+                          {aggregated.map(({ emoji }) => (
+                            <span key={emoji} className="leading-none">
                               {emoji}
-                              {count > 1 && (
-                                <span className="text-xs text-text-muted">{count}</span>
-                              )}
                             </span>
                           ))}
+                          <span className="tabular-nums text-[13px] font-medium text-[#667781]">
+                            {reactionList.length}
+                          </span>
                         </button>
                       )}
                       {!readOnly && (
                         <button
                           type="button"
                           onClick={() => setActiveReactionPickerId(message.id)}
-                          className={`p-1 rounded-full border transition-colors flex-shrink-0 ${
+                          className={`flex-shrink-0 rounded-full border p-1 transition-colors ${
                             myReaction
-                              ? 'bg-primary/20 border-primary text-primary'
-                              : 'bg-white/80 border-border shadow-sm text-text-muted hover:text-primary hover:border-primary'
+                              ? 'border-[#53bdeb] bg-[#e7f8ff] text-[#111b21]'
+                              : 'border-black/[0.08] bg-white text-[#54656f] shadow-sm hover:border-[#53bdeb]/50'
                           }`}
                           aria-label="React"
                         >
                           {myReaction ? (
-                            <span className="text-base">{myReaction}</span>
+                            <span className="text-base leading-none">{myReaction}</span>
                           ) : (
-                            <Smile className="w-4 h-4" />
+                            <Smile className="h-4 w-4" />
                           )}
                         </button>
                       )}
                     </div>
 
-                    {/* Who reacted detail popover */}
+                    {/* Reaction detail: glass popover + filters */}
                     {showReactionDetail && reactionList.length > 0 && (
-                      <>
-                        <div className="fixed inset-0 z-10" onClick={() => setReactionDetailMessageId(null)} aria-hidden />
+                      <div
+                        className={`absolute bottom-full z-30 mb-2 w-[min(18rem,calc(100vw-2rem))] ${
+                          outgoing ? 'right-0' : 'left-0'
+                        }`}
+                      >
                         <div
-                          className={`absolute z-20 w-64 bg-white border border-border rounded-xl shadow-xl overflow-hidden ${
-                            outgoing ? 'right-0' : 'left-0'
-                          } bottom-full mb-1`}
-                        >
-                          <div className="px-3 py-2 border-b border-border flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-medium text-text-primary">All {reactionList.length}</span>
+                          className="fixed inset-0 z-20"
+                          onClick={() => {
+                            setReactionDetailMessageId(null);
+                            setReactionDetailFilter('all');
+                          }}
+                          aria-hidden
+                        />
+                        <div className="relative z-30 overflow-hidden rounded-2xl border border-white/50 bg-white/75 shadow-[0_8px_32px_rgba(11,20,26,0.15)] backdrop-blur-xl">
+                          <div className="flex flex-wrap items-center gap-1 border-b border-black/[0.06] px-2 py-2">
+                            <button
+                              type="button"
+                              onClick={() => setReactionDetailFilter('all')}
+                              className={`rounded-full px-2.5 py-1 text-[13px] font-medium transition-colors ${
+                                reactionDetailFilter === 'all'
+                                  ? 'bg-[#e9edef] text-[#111b21]'
+                                  : 'text-[#54656f] hover:bg-black/[0.04]'
+                              }`}
+                            >
+                              All {reactionList.length}
+                            </button>
                             {aggregated.map(({ emoji, count }) => (
-                              <span key={emoji} className="text-sm text-text-muted">
-                                {emoji} {count}
-                              </span>
+                              <button
+                                key={emoji}
+                                type="button"
+                                onClick={() => setReactionDetailFilter(emoji)}
+                                className={`rounded-full px-2 py-1 text-[13px] transition-colors ${
+                                  reactionDetailFilter === emoji
+                                    ? 'bg-[#e9edef] text-[#111b21]'
+                                    : 'text-[#54656f] hover:bg-black/[0.04]'
+                                }`}
+                              >
+                                <span>{emoji}</span>
+                                <span className="ml-0.5 text-[#667781]">{count}</span>
+                              </button>
                             ))}
                           </div>
-                          <div className="max-h-48 overflow-y-auto">
-                            {reactionList.map((r, i) => (
-                              <div
-                                key={`${r.userId}-${r.emoji}-${i}`}
-                                className="flex items-center gap-3 px-3 py-2 hover:bg-panel border-b border-border last:border-b-0"
-                              >
-                                <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
-                                  {r.userName === 'You' && agentAvatarUrl ? (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
-                                  ) : (
-                                    r.userName.charAt(0)
-                                  )}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-sm font-medium text-text-primary truncate">{r.userName}</p>
-                                  <p className="text-xs text-text-muted">{formatReactionTime(r.reactedAt)}</p>
-                                </div>
-                                <span className="text-lg flex-shrink-0">{r.emoji}</span>
-                              </div>
-                            ))}
+                          <div className="max-h-52 overflow-y-auto chat-messages-scroll">
+                            {reactionRowsFiltered.map((r, i) => {
+                              const isMe = r.userId === reactionActorId;
+                              return (
+                                <button
+                                  key={`${r.userId}-${r.emoji}-${i}`}
+                                  type="button"
+                                  className="flex w-full items-center gap-3 border-b border-black/[0.05] px-3 py-2.5 text-left last:border-b-0 hover:bg-white/60"
+                                  onClick={() => {
+                                    if (isMe) addReaction(message.id, r.emoji);
+                                  }}
+                                >
+                                  <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#dfe5e7] text-sm font-semibold text-[#54656f]">
+                                    {(r.userName === 'You' || r.userName === 'Admin') && agentAvatarUrl ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img src={agentAvatarUrl} alt="" className="h-full w-full object-cover" />
+                                    ) : (
+                                      r.userName.charAt(0)
+                                    )}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-semibold text-[#111b21]">{r.userName}</p>
+                                    {isMe ? (
+                                      <p className="text-xs text-[#667781]">Click to remove</p>
+                                    ) : (
+                                      <p className="text-xs text-[#667781]">{formatReactionTime(r.reactedAt)}</p>
+                                    )}
+                                  </div>
+                                  <span className="flex-shrink-0 text-xl">{r.emoji}</span>
+                                </button>
+                              );
+                            })}
                           </div>
                         </div>
-                      </>
+                        <div
+                          className={`pointer-events-none absolute -bottom-1 h-2.5 w-2.5 rotate-45 border-b border-r border-black/[0.08] bg-white/80 backdrop-blur-md ${
+                            outgoing ? 'right-8' : 'left-8'
+                          }`}
+                          aria-hidden
+                        />
+                      </div>
                     )}
 
                     {!readOnly && showMenu && (
                       <div
-                        className={`absolute w-48 bg-white border border-border rounded-lg shadow-xl z-20 py-1 text-sm ${
+                        className={`absolute z-20 w-52 rounded-xl border border-black/[0.08] bg-white py-1 text-sm shadow-[0_4px_24px_rgba(11,20,26,0.12)] ${
                           outgoing
                             ? dropdownPlaceAbove
-                              ? 'right-0 bottom-full mb-1'
-                              : 'right-full mr-2 top-0'
+                              ? 'bottom-full right-0 mb-1'
+                              : 'right-full top-0 mr-2'
                             : dropdownPlaceAbove
-                              ? 'left-0 bottom-full mb-1'
+                              ? 'bottom-full left-0 mb-1'
                               : 'left-0 top-full mt-1'
                         }`}
                       >
                         <button
                           type="button"
-                          className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                           onClick={() => {
                             setReplyingTo({
                               id: message.id,
@@ -1602,34 +2262,32 @@ export function ChatWindow({
                             setActiveMessageMenuId(null);
                           }}
                         >
-                          <CornerDownLeft className="w-4 h-4 text-text-muted" />
+                          <CornerDownLeft className="h-4 w-4 text-[#54656f]" />
                           Reply
                         </button>
-                        {outgoing && (
-                          <button
-                            type="button"
-                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
-                            onClick={() => setActiveReactionPickerId(message.id)}
-                          >
-                            <Smile className="w-4 h-4 text-text-muted" />
-                            React
-                          </button>
-                        )}
                         <button
                           type="button"
-                          className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
+                          onClick={() => setActiveReactionPickerId(message.id)}
+                        >
+                          <Smile className="h-4 w-4 text-[#54656f]" />
+                          React
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                           onClick={() => toggleStar(message.id)}
                         >
                           <Star
-                            className={`w-4 h-4 ${
-                              isStarred ? 'text-primary fill-primary' : 'text-text-muted'
+                            className={`h-4 w-4 ${
+                              isStarred ? 'fill-[#53bdeb] text-[#53bdeb]' : 'text-[#54656f]'
                             }`}
                           />
                           {isStarred ? 'Unstar' : 'Star'}
                         </button>
                         <button
                           type="button"
-                          className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                           onClick={() => {
                             if (navigator.clipboard?.writeText) {
                               navigator.clipboard.writeText(message.content).catch(() => undefined);
@@ -1637,49 +2295,49 @@ export function ChatWindow({
                             setActiveMessageMenuId(null);
                           }}
                         >
-                          <Copy className="w-4 h-4 text-text-muted" />
+                          <Copy className="h-4 w-4 text-[#54656f]" />
                           Copy
                         </button>
                         {outgoing && (
                           <button
                             type="button"
-                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left"
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                             onClick={() => {
                               setMessageInfoId(message.id);
                               setActiveMessageMenuId(null);
                             }}
                           >
-                            <Info className="w-4 h-4 text-text-muted" />
+                            <Info className="h-4 w-4 text-[#54656f]" />
                             Info
                           </button>
                         )}
-                        <div className="border-t border-border my-1" />
+                        <div className="my-1 border-t border-black/[0.06]" />
                         {outgoing ? (
                           <>
                             <button
                               type="button"
-                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left text-status-error"
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-red-50"
                               onClick={() => deleteForMe(message.id)}
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="h-4 w-4" />
                               Delete for me
                             </button>
                             <button
                               type="button"
-                              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left text-status-error"
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-red-50"
                               onClick={() => deleteMessage(message.id)}
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="h-4 w-4" />
                               Delete for everyone
                             </button>
                           </>
                         ) : (
                           <button
                             type="button"
-                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-panel text-left text-status-error"
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-red-50"
                             onClick={() => deleteForMe(message.id)}
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="h-4 w-4" />
                             Delete for me
                           </button>
                         )}
@@ -1688,22 +2346,24 @@ export function ChatWindow({
 
                     {!readOnly && showReactions && (
                       <div
-                        className={`absolute ${
+                        className={`absolute z-40 mt-2 w-72 rounded-2xl border border-white/60 bg-white/90 p-3 shadow-[0_8px_32px_rgba(11,20,26,0.14)] backdrop-blur-xl ${
                           outgoing ? 'right-0' : 'left-0'
-                        } mt-2 w-64 bg-white border border-border rounded-xl shadow-2xl z-30 p-3`}
+                        }`}
                       >
-                        <p className="text-xs text-text-muted mb-2">React (one at a time, click again to remove)</p>
-                        <div className="flex flex-wrap gap-1.5 mb-2">
+                        <p className="mb-2 text-xs text-[#667781]">
+                          Tap to react · tap again on yours to remove
+                        </p>
+                        <div className="flex flex-wrap gap-1">
                           {reactionEmojis.map((emoji) => {
                             const isSelected = myReaction === emoji;
                             return (
                               <button
                                 key={emoji}
                                 type="button"
-                                className={`w-7 h-7 rounded-full flex items-center justify-center text-lg transition-colors ${
+                                className={`flex h-9 w-9 items-center justify-center rounded-full text-xl transition-colors ${
                                   isSelected
-                                    ? 'bg-primary/20 border-2 border-primary'
-                                    : 'hover:bg-panel'
+                                    ? 'border-2 border-[#53bdeb] bg-[#e7f8ff]'
+                                    : 'hover:bg-[#f0f2f5]'
                                 }`}
                                 onClick={() => addReaction(message.id, emoji)}
                               >
@@ -1715,11 +2375,23 @@ export function ChatWindow({
                       </div>
                     )}
                   </div>
+                  {!outgoing && !readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveReactionPickerId(message.id)}
+                      className="mb-1 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#54656f] opacity-0 shadow-md transition-opacity duration-200 hover:bg-[#f0f2f5] group-hover/message:opacity-100"
+                      aria-label="Quick react"
+                    >
+                      <Smile className="h-5 w-5" />
+                    </button>
+                  )}
                   {isTeamChannel && outgoing && (
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
-                      {agentAvatarUrl ? (
+                    <div className="mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06]">
+                      {message.postedByAdmin || message.senderName === 'Admin' ? (
+                        'A'
+                      ) : agentAvatarUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={agentAvatarUrl} alt="" className="w-full h-full object-cover" />
+                        <img src={agentAvatarUrl} alt="" className="h-full w-full object-cover" />
                       ) : (
                         (agentFullName || 'You').charAt(0)
                       )}
@@ -1730,6 +2402,36 @@ export function ChatWindow({
             })}
           </div>
         ))}
+        {(teamNewBelowOpen && isTeamChannel) || (dmNewBelowOpen && isDmPage) ? (
+          <div className="pointer-events-none sticky bottom-2 z-20 flex justify-center py-2">
+            <button
+              type="button"
+              className="pointer-events-auto rounded-full bg-primary px-4 py-2 text-xs font-semibold text-white shadow-lg hover:opacity-95"
+              onClick={() => {
+                const el = scrollContainerRef.current;
+                if (el) el.scrollTop = el.scrollHeight;
+                setTeamNewBelowOpen(false);
+                setDmNewBelowOpen(false);
+                teamNearBottomRef.current = true;
+                dmNearBottomRef.current = true;
+                if (isDmPage && dmSlug) clearDmUnread(dmSlug);
+                if (isTeamChannel && teamId && !readOnly && viewerAgentId) {
+                  const ids = messages.map((m) => m.id);
+                  if (ids.length > 0) {
+                    const v = Math.max(...ids);
+                    void fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/read-state`, {
+                      method: 'POST',
+                      headers: teamChannelJsonHeaders(),
+                      body: JSON.stringify({ tenant_id: TENANT_ID, last_read_message_id: v }),
+                    }).catch(() => undefined);
+                  }
+                }
+              }}
+            >
+              New messages below
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* Input Area */}
@@ -1788,6 +2490,13 @@ export function ChatWindow({
           </div>
         )}
         
+        {isTeamChannel && Object.keys(teamTypers).length > 0 && (
+          <div className="px-4 py-1.5 text-xs text-[#667781] border-b border-black/[0.06] bg-[#f7f8fa]">
+            {Array.from(new Set(Object.values(teamTypers).map((t) => t.name))).join(', ')}
+            {Object.keys(teamTypers).length === 1 ? ' is typing…' : ' are typing…'}
+          </div>
+        )}
+
         {/* Input row - fixed height to align bottom separator with 2nd bar (80px) */}
         {(!readOnly || showBroadcastInput) && (
           <div className="flex items-center gap-2 px-4 h-[80px]">
@@ -1852,8 +2561,8 @@ export function ChatWindow({
                 value={inputValue}
                 onChange={handleInputChange}
                 placeholder={
-                  showBroadcastInput
-                    ? 'Type a message... Use @ to tag an agent'
+                  mentionComposerEnabled
+                    ? 'Type a message... Use @ to mention someone'
                     : replyingTo
                       ? `Reply to ${replyingTo.senderName}...`
                       : 'Type a message...'
@@ -1862,7 +2571,7 @@ export function ChatWindow({
                 onKeyDown={handleInputKeyDown}
               />
               
-              {showBroadcastInput && showMentionDropdown && mentionCandidates.length > 0 && (
+              {mentionComposerEnabled && showMentionDropdown && mentionCandidatesList.length > 0 && (
                 <>
                   <div
                     className="fixed inset-0 z-10"
@@ -1870,15 +2579,15 @@ export function ChatWindow({
                     aria-hidden
                   />
                   <div className="absolute left-0 right-0 bottom-full mb-1 max-h-48 overflow-y-auto bg-white border border-border rounded-lg shadow-xl z-20 py-1">
-                    {mentionCandidates.map((name, i) => (
+                    {mentionCandidatesList.map((row, i) => (
                       <button
-                        key={name}
+                        key={row.agentId ? `${row.agentId}-${row.name}` : row.name}
                         type="button"
                         className={`w-full px-3 py-2 text-left text-sm hover:bg-panel text-text-primary flex items-center gap-2 ${i === mentionIndex ? 'bg-panel' : ''}`}
-                        onClick={() => insertMention(name)}
+                        onClick={() => insertMention(row.name, row.agentId || undefined)}
                       >
                         <User className="w-4 h-4 text-text-muted flex-shrink-0" />
-                        {name}
+                        {row.name}
                       </button>
                     ))}
                   </div>
@@ -1970,7 +2679,9 @@ export function ChatWindow({
         const readerName =
           targetMessage?.senderName === 'You'
             ? (agentFullName || getCurrentAgent()?.name || 'You')
-            : (targetMessage?.senderName || title?.split(' ')[0] || 'Customer');
+            : targetMessage?.senderName === 'Admin'
+              ? 'Admin'
+              : (targetMessage?.senderName || title?.split(' ')[0] || 'Customer');
         const readByList = [{ name: readerName, readAt: new Date() }];
         const formatReadAt = (d: Date) =>
           `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()} ${d.getHours() % 12 || 12}:${d.getMinutes().toString().padStart(2, '0')} ${d.getHours() >= 12 ? 'PM' : 'AM'}`;
