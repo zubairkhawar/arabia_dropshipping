@@ -909,6 +909,9 @@ async def create_team_channel_message(
         team_id,
         {"type": "NEW_MESSAGE", "message": msg_out.model_dump(mode="json")},
     )
+    from services.agent_portal_service.broadcast import notify_team_members_unread
+
+    await notify_team_members_unread(db, payload.tenant_id, team_id)
     return msg_out
 
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlalchemy import or_, desc
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import SessionLocal, get_db
-from models import Agent, User, InternalDmConversation, InternalDmMessage
+from models import Agent, User, InternalDmConversation, InternalDmMessage, InternalDmMemberReadState
 from services.internal_dm_service.dm_hub import hub
 
 router = APIRouter()
@@ -50,6 +50,12 @@ class CreateDmMessageIn(BaseModel):
     conversation_id: int
     sender_agent_id: int
     content: str
+
+
+class DmReadStateIn(BaseModel):
+    tenant_id: int
+    agent_id: int
+    last_read_message_id: int
 
 
 def _pair(a: int, b: int) -> tuple[int, int]:
@@ -277,7 +283,57 @@ async def create_message(payload: CreateDmMessageIn, db: Session = Depends(get_d
         conversation.id,
         {"type": "NEW_DM_MESSAGE", "message": out.model_dump(mode="json")},
     )
+    from services.agent_portal_service.broadcast import push_refresh_unread
+
+    for aid in (conversation.agent_one_id, conversation.agent_two_id):
+        if aid != payload.sender_agent_id:
+            await push_refresh_unread(db, conversation.tenant_id, aid)
     return out
+
+
+
+
+@router.post("/conversations/{conversation_id}/read-state")
+async def upsert_dm_read_state(
+    conversation_id: int,
+    payload: DmReadStateIn,
+    db: Session = Depends(get_db),
+):
+    conversation = (
+        db.query(InternalDmConversation).filter(InternalDmConversation.id == conversation_id).first()
+    )
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if payload.tenant_id != conversation.tenant_id:
+        raise HTTPException(status_code=400, detail="Tenant mismatch")
+    if payload.agent_id not in (conversation.agent_one_id, conversation.agent_two_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    row = (
+        db.query(InternalDmMemberReadState)
+        .filter(
+            InternalDmMemberReadState.tenant_id == payload.tenant_id,
+            InternalDmMemberReadState.conversation_id == conversation_id,
+            InternalDmMemberReadState.agent_id == payload.agent_id,
+        )
+        .first()
+    )
+    v = max(0, payload.last_read_message_id)
+    if row is None:
+        row = InternalDmMemberReadState(
+            tenant_id=payload.tenant_id,
+            conversation_id=conversation_id,
+            agent_id=payload.agent_id,
+            last_read_message_id=v,
+        )
+        db.add(row)
+    else:
+        row.last_read_message_id = max(row.last_read_message_id, v)
+        db.add(row)
+    db.commit()
+    from services.agent_portal_service.broadcast import push_refresh_unread
+
+    await push_refresh_unread(db, payload.tenant_id, payload.agent_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.websocket("/ws/conversation/{conversation_id}")

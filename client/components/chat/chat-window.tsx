@@ -399,10 +399,16 @@ export function ChatWindow({
   const BOTTOM_THRESHOLD_PX = 80;
   const teamNearBottomRef = useRef(true);
   const dmNearBottomRef = useRef(true);
+  const lastSyncedInboxReadRef = useRef<{ convId: number; id: number } | null>(null);
   const teamLastSyncIsoRef = useRef<string | null>(null);
   const dmLastSyncIsoRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    lastSyncedInboxReadRef.current = null;
+  }, [inboxConv?.selectedId]);
   const initialScrollThreadKeyDoneRef = useRef<string>('');
   const [teamHasMoreOlder, setTeamHasMoreOlder] = useState(false);
+  const [inboxLoadingOlder, setInboxLoadingOlder] = useState(false);
   const [teamLoadingOlder, setTeamLoadingOlder] = useState(false);
   const [teamNewBelowOpen, setTeamNewBelowOpen] = useState(false);
   const [dmNewBelowOpen, setDmNewBelowOpen] = useState(false);
@@ -1211,16 +1217,45 @@ export function ChatWindow({
       setDmNewBelowOpen(false);
       if (isDmPage && dmSlug) clearDmUnread(dmSlug);
     }
+    if (
+      isInboxPage &&
+      !isInternalChat &&
+      inboxConv?.selectedId != null &&
+      inboxConv.inboxHasMoreOlder &&
+      inboxConv.loadOlderInboxMessages &&
+      inboxConv.inboxHasMoreOlder(inboxConv.selectedId) &&
+      !inboxLoadingOlder &&
+      scrollTop < 100
+    ) {
+      setInboxLoadingOlder(true);
+      void inboxConv.loadOlderInboxMessages(inboxConv.selectedId).finally(() => setInboxLoadingOlder(false));
+    }
     if (isTeamChannel && teamHasMoreOlder && !teamLoadingOlder && scrollTop < 100) {
       void loadTeamOlderMessages();
     }
     if (isDmPage && dmSlug && dmHasMoreOlder(dmSlug) && !loadingOlderDmSlug && scrollTop < 100) {
       void loadOlderDmMessages(dmSlug);
     }
+    if (near && isInboxPage && !isInternalChat && inboxConv?.selectedId != null && inboxConv.syncInboxReadState) {
+      const sid = inboxConv.selectedId;
+      const msgs = inboxConv.getMessages(sid);
+      const maxId = msgs.length ? Math.max(...msgs.map((m) => m.id)) : 0;
+      if (maxId > 0) {
+        const prev = lastSyncedInboxReadRef.current;
+        if (!prev || prev.convId !== sid || prev.id !== maxId) {
+          lastSyncedInboxReadRef.current = { convId: sid, id: maxId };
+          void inboxConv.syncInboxReadState(sid, maxId);
+        }
+      }
+    }
   }, [
     isTeamChannel,
+    isInboxPage,
+    isInternalChat,
     isDmPage,
     dmSlug,
+    inboxConv,
+    inboxLoadingOlder,
     teamHasMoreOlder,
     teamLoadingOlder,
     loadTeamOlderMessages,

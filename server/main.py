@@ -11,6 +11,7 @@ from database import (
     ensure_broadcast_delivery_columns,
     ensure_team_channel_admin_sender_columns,
     ensure_team_channel_read_states_table,
+    ensure_agent_read_state_tables,
     ensure_user_avatar_url_column,
 )
 from models import Tenant, User
@@ -29,6 +30,7 @@ from services.notifications_service.api import router as notifications_router
 from services.broadcasts_service.api import router as broadcasts_router
 from services.knowledge_service.api import router as knowledge_router
 from services.internal_dm_service.api import router as internal_dm_router
+from services.agent_portal_service.api import router as agent_portal_router
 
 
 def ensure_admin_user() -> None:
@@ -77,6 +79,7 @@ async def lifespan(app: FastAPI):
     ensure_broadcast_delivery_columns()
     ensure_team_channel_admin_sender_columns()
     ensure_team_channel_read_states_table()
+    ensure_agent_read_state_tables()
     ensure_user_avatar_url_column()
     ensure_admin_user()
     yield
@@ -120,6 +123,7 @@ app.include_router(notifications_router, prefix="/api/notifications", tags=["not
 app.include_router(broadcasts_router, prefix="/api", tags=["broadcasts"])
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["knowledge"])
 app.include_router(internal_dm_router, prefix="/api/internal-dm", tags=["internal-dm"])
+app.include_router(agent_portal_router, prefix="/api/agent-portal", tags=["agent-portal"])
 
 
 @app.get("/")

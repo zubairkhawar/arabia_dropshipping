@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
+import { useAgentPortalRealtime } from '@/contexts/AgentPortalRealtimeContext';
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
@@ -93,6 +94,32 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       conversationId: n.conversation_id ?? undefined,
     };
   }, []);
+
+  const { subscribe } = useAgentPortalRealtime();
+
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type !== 'notification' || !msg.notification || typeof msg.notification !== 'object') return;
+      if (!currentAgentId) return;
+      const raw = msg.notification as Record<string, unknown>;
+      const idNum = Number(raw.id);
+      if (!Number.isFinite(idNum)) return;
+      const n: NotificationApi = {
+        id: idNum,
+        type: String(raw.type ?? 'system'),
+        message: String(raw.message ?? ''),
+        description: raw.description != null ? String(raw.description) : null,
+        from_agent_id: raw.from_agent_id != null ? Number(raw.from_agent_id) : null,
+        conversation_id: raw.conversation_id != null ? Number(raw.conversation_id) : null,
+        created_at: typeof raw.created_at === 'string' ? raw.created_at : new Date().toISOString(),
+        read: Boolean(raw.read),
+      };
+      setNotifications((prev) => {
+        if (prev.some((x) => x.id === String(n.id))) return prev;
+        return [mapNotification(n), ...prev];
+      });
+    });
+  }, [subscribe, mapNotification, currentAgentId]);
 
   const refreshNotifications = useCallback(
     async (opts?: { trackInitialLoad?: boolean }) => {

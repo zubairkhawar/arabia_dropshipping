@@ -97,6 +97,17 @@ def ensure_team_channel_read_states_table() -> None:
         pass
 
 
+def ensure_agent_read_state_tables() -> None:
+    """Create conversation_agent_read_states and internal_dm_member_read_states if missing."""
+    try:
+        from models import ConversationAgentReadState, InternalDmMemberReadState  # noqa: WPS433
+
+        ConversationAgentReadState.__table__.create(bind=engine, checkfirst=True)
+        InternalDmMemberReadState.__table__.create(bind=engine, checkfirst=True)
+    except Exception:
+        pass
+
+
 def ensure_user_avatar_url_column() -> None:
     try:
         insp = inspect(engine)

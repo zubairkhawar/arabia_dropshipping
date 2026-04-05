@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Inbox, Bell, Users, MessageCircle, LucideIcon } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
+import { useAgentPortalRealtime } from '@/contexts/AgentPortalRealtimeContext';
+import { useNotifications } from '@/contexts/NotificationsContext';
 import Image from 'next/image';
 
 interface SidebarLink {
@@ -36,9 +38,18 @@ const footerItems: SidebarLink[] = [
   { icon: Bell, label: 'Notifications', path: '/agent/settings' },
 ];
 
+function portalUnreadForPath(path: string, unread: { inbox: number; team_channel: number; dm: number }): number {
+  if (path === '/agent/inbox') return unread.inbox;
+  if (path === '/agent/team') return unread.team_channel;
+  if (path.startsWith('/agent/dm')) return unread.dm;
+  return 0;
+}
+
 export function AgentSidebar() {
   const pathname = usePathname();
   const { isCollapsed } = useSidebar();
+  const { unread } = useAgentPortalRealtime();
+  const { unreadCount: notificationUnread } = useNotifications();
 
   const linkClass = (path: string) => {
     const isActive = pathname === path || pathname?.startsWith(path + '/');
@@ -78,10 +89,20 @@ export function AgentSidebar() {
               <div className="space-y-0.5">
                 {section.items.map((item) => {
                   const Icon = item.icon;
+                  const n = portalUnreadForPath(item.path, unread);
                   return (
                     <Link key={item.path} href={item.path} className={linkClass(item.path)}>
                       <Icon className="w-5 h-5 flex-shrink-0" />
-                      {!isCollapsed && <span className="font-medium text-sm">{item.label}</span>}
+                      {!isCollapsed && (
+                        <>
+                          <span className="font-medium text-sm flex-1 min-w-0">{item.label}</span>
+                          {n > 0 && (
+                            <span className="shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-full bg-red-500 text-white text-xs font-semibold flex items-center justify-center">
+                              {n > 99 ? '99+' : n}
+                            </span>
+                          )}
+                        </>
+                      )}
                     </Link>
                   );
                 })}
@@ -93,10 +114,20 @@ export function AgentSidebar() {
           <div className="space-y-0.5">
             {footerItems.map((item) => {
               const Icon = item.icon;
+              const n = notificationUnread;
               return (
                 <Link key={item.path} href={item.path} className={linkClass(item.path)}>
                   <Icon className="w-5 h-5 flex-shrink-0" />
-                  {!isCollapsed && <span className="font-medium text-sm">{item.label}</span>}
+                  {!isCollapsed && (
+                    <>
+                      <span className="font-medium text-sm flex-1 min-w-0">{item.label}</span>
+                      {n > 0 && (
+                        <span className="shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-full bg-red-500 text-white text-xs font-semibold flex items-center justify-center">
+                          {n > 99 ? '99+' : n}
+                        </span>
+                      )}
+                    </>
+                  )}
                 </Link>
               );
             })}

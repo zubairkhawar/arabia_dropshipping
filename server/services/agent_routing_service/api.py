@@ -392,6 +392,10 @@ async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_
     result = perform_conversation_assignment(db, payload)
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    if result.agent_id is not None:
+        from services.agent_portal_service.broadcast import push_unread_summary
+
+        await push_unread_summary(db, payload.tenant_id, result.agent_id)
     return result
 
 
@@ -421,9 +425,16 @@ async def transfer_conversation(payload: TransferRequest, db: Session = Depends(
                 detail="No available agent to transfer conversation",
             )
 
+    prev_agent_id = conversation.agent_id
     conversation.agent_id = agent.id
     db.add(conversation)
     db.commit()
+    from services.agent_portal_service.broadcast import push_unread_summary
+
+    tid = conversation.tenant_id
+    await push_unread_summary(db, tid, agent.id)
+    if prev_agent_id is not None and prev_agent_id != agent.id:
+        await push_unread_summary(db, tid, prev_agent_id)
 
     return AssignResponse(
         conversation_id=conversation.id,

@@ -346,3 +346,35 @@ class TeamChannelMemberReadState(Base):
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
     last_read_message_id = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ConversationAgentReadState(Base):
+    """Per-agent read cursor for customer inbox conversations (messages.id)."""
+
+    __tablename__ = "conversation_agent_read_states"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "conversation_id", "agent_id", name="uq_conv_read_agent"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    last_read_message_id = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class InternalDmMemberReadState(Base):
+    """Per-agent read cursor for internal DM threads."""
+
+    __tablename__ = "internal_dm_member_read_states"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "conversation_id", "agent_id", name="uq_dm_read_agent"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    conversation_id = Column(Integer, ForeignKey("internal_dm_conversations.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    last_read_message_id = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

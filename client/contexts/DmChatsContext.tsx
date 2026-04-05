@@ -282,6 +282,18 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         setMessagesBySlug((prev) => ({ ...prev, [slug]: mapped }));
         setDmMetaBySlug((prev) => ({ ...prev, [slug]: { hasMoreOlder } }));
         writeLastDmPrefs(conversation.id, slug);
+        const maxId = mapped.length ? Math.max(...mapped.map((m) => m.id)) : 0;
+        if (maxId > 0) {
+          void fetch(`${API_BASE}/api/internal-dm/conversations/${conversation.id}/read-state`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tenant_id: TENANT_ID,
+              agent_id: Number(currentAgentId),
+              last_read_message_id: maxId,
+            }),
+          });
+        }
       } catch {
         // ignore
       } finally {

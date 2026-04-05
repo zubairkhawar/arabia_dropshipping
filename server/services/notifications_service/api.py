@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -43,15 +43,18 @@ async def list_notifications(
     db: Session = Depends(get_db),
 ):
     """
-    List notifications for the current agent.
+    List notifications for the current agent (last 7 days, max 50).
     """
+    cutoff = datetime.utcnow() - timedelta(days=7)
     rows = (
         db.query(Notification)
         .filter(
             Notification.tenant_id == tenant_id,
             Notification.agent_id == agent_id,
+            Notification.created_at >= cutoff,
         )
         .order_by(Notification.created_at.desc())
+        .limit(50)
         .all()
     )
     return rows
@@ -88,6 +91,21 @@ async def create_notification(payload: NotificationCreate, db: Session = Depends
     db.add(notif)
     db.commit()
     db.refresh(notif)
+    from services.agent_portal_service.broadcast import push_notification_event
+    from services.agent_portal_service.unread_compute import build_unread_summary_dict
+
+    notif_dict = {
+        "id": notif.id,
+        "type": notif.type,
+        "message": notif.message,
+        "description": notif.description,
+        "from_agent_id": notif.from_agent_id,
+        "conversation_id": notif.conversation_id,
+        "created_at": notif.created_at,
+        "read": notif.read,
+    }
+    summary = build_unread_summary_dict(db, payload.tenant_id, payload.agent_id)
+    await push_notification_event(payload.tenant_id, payload.agent_id, notif_dict, summary)
     return notif
 
 

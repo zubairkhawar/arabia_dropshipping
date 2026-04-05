@@ -7,6 +7,7 @@ import { SidebarProvider } from '@/contexts/SidebarContext';
 import { AgentProfileProvider } from '@/contexts/AgentProfileContext';
 import { AgentPresenceProvider } from '@/contexts/AgentPresenceContext';
 import { DmChatsProvider } from '@/contexts/DmChatsContext';
+import { AgentPortalRealtimeProvider } from '@/contexts/AgentPortalRealtimeContext';
 import { NotificationsProvider } from '@/contexts/NotificationsContext';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { clearAuthAgentId } from '@/lib/agent-session-storage';
@@ -104,11 +105,13 @@ export default function AgentLayout({
     <SidebarProvider>
       <AgentProfileProvider>
         <AgentPresenceProvider>
-          <NotificationsProvider>
-            <DmChatsProvider>
-              <AgentLayoutContent>{children}</AgentLayoutContent>
-            </DmChatsProvider>
-          </NotificationsProvider>
+          <AgentPortalRealtimeProvider>
+            <NotificationsProvider>
+              <DmChatsProvider>
+                <AgentLayoutContent>{children}</AgentLayoutContent>
+              </DmChatsProvider>
+            </NotificationsProvider>
+          </AgentPortalRealtimeProvider>
         </AgentPresenceProvider>
       </AgentProfileProvider>
     </SidebarProvider>

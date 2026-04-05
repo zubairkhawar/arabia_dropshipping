@@ -16,6 +16,8 @@ from langchain_bot import ArabiaLangChainBot
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 from services.customer_bot_flow import format_kb_reply, process_customer_bot_message
 from services.agent_routing_service.api import assign_from_bot_flow
+from services.agent_portal_service.unread_compute import _inbox_unread_for_conversation
+from services.agent_portal_service.broadcast import push_inbox_message, push_unread_summary
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ class ConversationSummary(BaseModel):
     customer_name: Optional[str] = None
     last_message: Optional[str] = None
     last_activity_at: Optional[datetime] = None
+    unread_count: int = 0
 
 
 class ConversationCreate(BaseModel):
@@ -78,7 +81,7 @@ class WhatsAppWebhookPayload(BaseModel):
     conversation_id: Optional[int] = None
 
 
-def _build_conversation_summary(c: Conversation) -> ConversationSummary:
+def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> ConversationSummary:
     last_msg = c.messages[-1] if c.messages else None
     customer_name = None
     if c.customer and getattr(c.customer, "name", None):
@@ -95,6 +98,7 @@ def _build_conversation_summary(c: Conversation) -> ConversationSummary:
         customer_name=customer_name,
         last_message=last_msg.content if last_msg else None,
         last_activity_at=last_msg.created_at if last_msg else c.updated_at,
+        unread_count=unread_count,
     )
 
 
@@ -240,13 +244,29 @@ async def list_conversations(
         _ = conv.customer
         _ = conv.messages
 
-    return [_build_conversation_summary(c) for c in conversations]
+    out: List[ConversationSummary] = []
+    for c in conversations:
+        u = 0
+        if agent_id is not None:
+            u = _inbox_unread_for_conversation(db, tenant_id, agent_id, c.id)
+        out.append(_build_conversation_summary(c, unread_count=u))
+    return out
 
 
 @router.get("/conversations/{conversation_id}", response_model=Dict[str, Any])
-async def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
+async def get_conversation(
+    conversation_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    before_id: Optional[int] = Query(
+        None, description="Load older messages with id strictly less than this"
+    ),
+    since: Optional[datetime] = Query(
+        None, description="Messages strictly after this time (reconnect gap fill)"
+    ),
+    db: Session = Depends(get_db),
+):
     """
-    Get conversation details and messages.
+    Get conversation details and a page of messages (latest page by default; older via before_id).
     """
     conversation: Conversation | None = (
         db.query(Conversation).filter(Conversation.id == conversation_id).first()
@@ -256,12 +276,71 @@ async def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
         )
 
-    messages: List[Message] = (
-        db.query(Message)
-        .filter(Message.conversation_id == conversation.id)
-        .order_by(Message.created_at.asc())
-        .all()
-    )
+    base = db.query(Message).filter(Message.conversation_id == conversation.id)
+
+    if since is not None:
+        rows = (
+            base.filter(Message.created_at > since)
+            .order_by(Message.created_at.asc())
+            .limit(500)
+            .all()
+        )
+        payload = [
+            {
+                "id": m.id,
+                "conversation_id": m.conversation_id,
+                "content": m.content,
+                "sender_type": m.sender_type,
+                "sender_id": m.sender_id,
+                "language": m.language,
+                "created_at": m.created_at,
+            }
+            for m in rows
+        ]
+        return {
+            "conversation": {
+                "id": conversation.id,
+                "tenant_id": conversation.tenant_id,
+                "store_id": conversation.store_id,
+                "customer_id": conversation.customer_id,
+                "agent_id": conversation.agent_id,
+                "channel": conversation.channel,
+                "status": conversation.status,
+                "created_at": conversation.created_at,
+                "updated_at": conversation.updated_at,
+            },
+            "messages": payload,
+            "has_more_older": False,
+        }
+
+    lim = max(1, min(limit, 200))
+    if before_id is not None:
+        rows_desc = (
+            base.filter(Message.id < before_id)
+            .order_by(desc(Message.id))
+            .limit(lim)
+            .all()
+        )
+        rows = list(reversed(rows_desc))
+        min_id = rows[0].id if rows else before_id
+        older = (
+            db.query(Message.id)
+            .filter(Message.conversation_id == conversation.id, Message.id < min_id)
+            .first()
+        )
+        has_more = older is not None
+    else:
+        rows_desc = base.order_by(desc(Message.id)).limit(lim).all()
+        rows = list(reversed(rows_desc))
+        min_id = rows[0].id if rows else None
+        has_more = False
+        if min_id is not None:
+            older = (
+                db.query(Message.id)
+                .filter(Message.conversation_id == conversation.id, Message.id < min_id)
+                .first()
+            )
+            has_more = older is not None
 
     return {
         "conversation": {
@@ -285,8 +364,9 @@ async def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
                 "language": m.language,
                 "created_at": m.created_at,
             }
-            for m in messages
+            for m in rows
         ],
+        "has_more_older": has_more,
     }
 
 
@@ -388,7 +468,8 @@ async def send_message(
     db.commit()
     db.refresh(msg)
 
-    # TODO: push to WebSocket / notifications layer
+    if conversation.agent_id is not None:
+        await push_unread_summary(db, conversation.tenant_id, conversation.agent_id)
 
     return MessageOut(
         id=msg.id,
@@ -510,19 +591,34 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
 
     if conversation.agent_id:
         detected_language = await orchestrator.detect_language(text)
-        db.add(
-            Message(
-                conversation_id=conversation.id,
-                content=text,
-                sender_type="customer",
-                sender_id=None,
-                language=detected_language,
-                created_at=datetime.utcnow(),
-            )
+        customer_msg = Message(
+            conversation_id=conversation.id,
+            content=text,
+            sender_type="customer",
+            sender_id=None,
+            language=detected_language,
+            created_at=datetime.utcnow(),
         )
+        db.add(customer_msg)
         conversation.updated_at = datetime.utcnow()
         db.add(conversation)
         db.commit()
+        db.refresh(customer_msg)
+        await push_inbox_message(
+            db,
+            tenant_id,
+            conversation.agent_id,
+            conversation.id,
+            {
+                "id": customer_msg.id,
+                "conversation_id": customer_msg.conversation_id,
+                "content": customer_msg.content,
+                "sender_type": customer_msg.sender_type,
+                "sender_id": customer_msg.sender_id,
+                "language": customer_msg.language,
+                "created_at": customer_msg.created_at,
+            },
+        )
         return {
             "status": "ok",
             "conversation_id": conversation.id,
@@ -602,29 +698,44 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         )
         db.refresh(conversation)
 
-    db.add(
-        Message(
-            conversation_id=conversation.id,
-            content=text,
-            sender_type="customer",
-            sender_id=None,
-            language=detected_language,
-            created_at=datetime.utcnow(),
-        )
+    customer_msg = Message(
+        conversation_id=conversation.id,
+        content=text,
+        sender_type="customer",
+        sender_id=None,
+        language=detected_language,
+        created_at=datetime.utcnow(),
     )
-    db.add(
-        Message(
-            conversation_id=conversation.id,
-            content=reply_text,
-            sender_type="ai",
-            sender_id=None,
-            language=detected_language,
-            created_at=datetime.utcnow(),
-        )
+    ai_msg = Message(
+        conversation_id=conversation.id,
+        content=reply_text,
+        sender_type="ai",
+        sender_id=None,
+        language=detected_language,
+        created_at=datetime.utcnow(),
     )
+    db.add(customer_msg)
+    db.add(ai_msg)
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)
     db.commit()
+    db.refresh(customer_msg)
+    if conversation.agent_id:
+        await push_inbox_message(
+            db,
+            tenant_id,
+            conversation.agent_id,
+            conversation.id,
+            {
+                "id": customer_msg.id,
+                "conversation_id": customer_msg.conversation_id,
+                "content": customer_msg.content,
+                "sender_type": customer_msg.sender_type,
+                "sender_id": customer_msg.sender_id,
+                "language": customer_msg.language,
+                "created_at": customer_msg.created_at,
+            },
+        )
 
     wa_response: Dict[str, Any] | None = None
     client = MetaWhatsAppClient()

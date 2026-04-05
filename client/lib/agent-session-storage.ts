@@ -74,3 +74,31 @@ export function writeLastDmPrefs(conversationId: string, slug: string): void {
     // ignore
   }
 }
+
+export const INBOX_LAST_READ_BY_CONV_KEY = 'agent_inbox_last_read_by_conv:v1';
+
+export function readInboxLastReadMap(): Record<string, number> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = sessionStorage.getItem(INBOX_LAST_READ_BY_CONV_KEY);
+    if (!raw) return {};
+    const p = JSON.parse(raw) as Record<string, number>;
+    return p && typeof p === 'object' ? p : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeInboxLastReadEntry(convId: number, messageId: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const cur = readInboxLastReadMap();
+    const k = String(convId);
+    const prev = cur[k] ?? 0;
+    cur[k] = Math.max(prev, messageId);
+    sessionStorage.setItem(INBOX_LAST_READ_BY_CONV_KEY, JSON.stringify(cur));
+  } catch {
+    // ignore
+  }
+}
+

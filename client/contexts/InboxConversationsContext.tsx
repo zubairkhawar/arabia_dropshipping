@@ -1,9 +1,15 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
 import { usePathname } from 'next/navigation';
-import { readAuthAgentId, readLastInboxConversationId, writeLastInboxConversationId } from '@/lib/agent-session-storage';
+import { useAgentPortalRealtime } from '@/contexts/AgentPortalRealtimeContext';
+import {
+  readAuthAgentId,
+  readLastInboxConversationId,
+  writeLastInboxConversationId,
+  writeInboxLastReadEntry,
+} from '@/lib/agent-session-storage';
 
 export type ConversationStatus = 'active' | 'resolved' | 'pending';
 
@@ -56,6 +62,9 @@ interface InboxConversationsContextType {
   refreshConversations: () => Promise<void>;
   /** When set, the UI can show a thread skeleton for that conversation while messages load. */
   loadingConversationId: number | null;
+  inboxHasMoreOlder: (convId: number) => boolean;
+  loadOlderInboxMessages: (convId: number) => Promise<void>;
+  syncInboxReadState: (convId: number, lastReadMessageId: number) => Promise<void>;
 }
 
 const InboxConversationsContext = createContext<InboxConversationsContextType | null>(null);
@@ -66,6 +75,15 @@ const API_BASE =
   'https://arabia-dropshipping.onrender.com';
 const TENANT_ID = 1;
 
+function authJsonHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('auth_token');
+    if (token) h.Authorization = `Bearer ${token}`;
+  }
+  return h;
+}
+
 interface ConversationSummaryApi {
   id: number;
   customer_id: number;
@@ -75,6 +93,7 @@ interface ConversationSummaryApi {
   channel: 'whatsapp' | 'web' | 'portal';
   status: string;
   agent_id?: number | null;
+  unread_count?: number;
 }
 
 interface ConversationDetailsApi {
@@ -91,6 +110,7 @@ interface ConversationDetailsApi {
     sender_type: 'customer' | 'agent' | 'ai';
     created_at: string;
   }>;
+  has_more_older?: boolean;
 }
 
 function toRelativeTime(iso?: string | null): string {
@@ -113,13 +133,29 @@ function toConversationStatus(status: string): ConversationStatus {
   return 'active';
 }
 
+function pickInboxSelection(
+  mapped: InboxConversation[],
+  lastId: number | null,
+  prev: number | null,
+): number | null {
+  const ids = new Set(mapped.map((c) => c.id));
+  if (lastId != null && ids.has(lastId)) return lastId;
+  if (prev != null && ids.has(prev)) return prev;
+  const sorted = [...mapped].sort((a, b) => b.unread - a.unread);
+  if (sorted[0] && sorted[0].unread > 0) return sorted[0].id;
+  return mapped[0]?.id ?? null;
+}
+
 export function InboxConversationsProvider({ children }: { children: ReactNode }) {
   const { agents, currentAgentId } = useAgents();
+  const { subscribe } = useAgentPortalRealtime();
   const pathname = usePathname();
   const isAgentPortal = pathname?.startsWith('/agent/');
   const [conversations, setConversations] = useState<InboxConversation[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const selectedIdRef = useRef<number | null>(null);
   const [messagesByConvId, setMessagesByConvId] = useState<Record<number, InboxMessage[]>>({});
+  const [inboxMetaByConvId, setInboxMetaByConvId] = useState<Record<number, { hasMoreOlder: boolean }>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [loadingConversationId, setLoadingConversationId] = useState<number | null>(null);
 
@@ -134,7 +170,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         customerId: `#${c.customer_id}`,
         lastMessage: c.last_message || '',
         lastActivityAt: toRelativeTime(c.last_activity_at),
-        unread: 0,
+        unread: typeof c.unread_count === 'number' ? c.unread_count : 0,
         channel: c.channel,
         status: toConversationStatus(c.status),
         handlerType: handlerAgentId ? 'agent' : 'ai',
@@ -180,35 +216,155 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       const rows = await fetchConversationRowsFromApi();
       const mapped = rows.map(mapConversation);
       setConversations(mapped);
-      setSelectedId((prev) => {
-        if (prev && mapped.some((c) => c.id === prev)) return prev;
-        return mapped[0]?.id ?? null;
-      });
+      setSelectedId((prev) => pickInboxSelection(mapped, readLastInboxConversationId(), prev));
     } finally {
       setIsLoading(false);
     }
   }, [fetchConversationRowsFromApi, mapConversation]);
 
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
   const loadMessagesForConversation = useCallback(
     async (convId: number) => {
       setLoadingConversationId(convId);
       try {
-        const res = await fetch(`${API_BASE}/api/messaging/conversations/${convId}`);
+        const url = new URL(`${API_BASE}/api/messaging/conversations/${convId}`);
+        url.searchParams.set('limit', '50');
+        const res = await fetch(url.toString());
         if (!res.ok) {
           setMessagesByConvId((prev) => ({ ...prev, [convId]: [] }));
+          setInboxMetaByConvId((prev) => ({ ...prev, [convId]: { hasMoreOlder: false } }));
           return;
         }
         const data = (await res.json()) as ConversationDetailsApi;
         const mapped = mapDetailToMessages(data);
         setMessagesByConvId((prev) => ({ ...prev, [convId]: mapped }));
+        setInboxMetaByConvId((prev) => ({
+          ...prev,
+          [convId]: { hasMoreOlder: Boolean(data.has_more_older) },
+        }));
       } catch {
         setMessagesByConvId((prev) => ({ ...prev, [convId]: [] }));
+        setInboxMetaByConvId((prev) => ({ ...prev, [convId]: { hasMoreOlder: false } }));
       } finally {
         setLoadingConversationId((id) => (id === convId ? null : id));
       }
     },
     [mapDetailToMessages],
   );
+
+  const loadOlderInboxMessages = useCallback(
+    async (convId: number) => {
+      const list = messagesByConvId[convId];
+      if (!list?.length) return;
+      const meta = inboxMetaByConvId[convId];
+      if (meta && !meta.hasMoreOlder) return;
+      const oldestId = list[0].id;
+      try {
+        const url = new URL(`${API_BASE}/api/messaging/conversations/${convId}`);
+        url.searchParams.set('limit', '50');
+        url.searchParams.set('before_id', String(oldestId));
+        const res = await fetch(url.toString());
+        if (!res.ok) return;
+        const data = (await res.json()) as ConversationDetailsApi;
+        const chunk = mapDetailToMessages(data);
+        if (chunk.length === 0) {
+          setInboxMetaByConvId((prev) => ({ ...prev, [convId]: { hasMoreOlder: false } }));
+          return;
+        }
+        setMessagesByConvId((prev) => {
+          const cur = prev[convId] || [];
+          const byId = new Map<number, InboxMessage>();
+          for (const m of chunk) byId.set(m.id, m);
+          for (const m of cur) byId.set(m.id, m);
+          const merged = Array.from(byId.values()).sort((a, b) => a.id - b.id);
+          return { ...prev, [convId]: merged };
+        });
+        setInboxMetaByConvId((prev) => ({
+          ...prev,
+          [convId]: { hasMoreOlder: Boolean(data.has_more_older) },
+        }));
+      } catch {
+        // ignore
+      }
+    },
+    [messagesByConvId, inboxMetaByConvId, mapDetailToMessages],
+  );
+
+  const inboxHasMoreOlder = useCallback(
+    (convId: number) => inboxMetaByConvId[convId]?.hasMoreOlder ?? false,
+    [inboxMetaByConvId],
+  );
+
+  const syncInboxReadState = useCallback(async (convId: number, lastReadMessageId: number) => {
+    if (!isAgentPortal) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/agent-portal/inbox/read-state`, {
+        method: 'POST',
+        headers: authJsonHeaders(),
+        body: JSON.stringify({
+          tenant_id: TENANT_ID,
+          conversation_id: convId,
+          last_read_message_id: lastReadMessageId,
+        }),
+      });
+      if (res.ok) {
+        writeInboxLastReadEntry(convId, lastReadMessageId);
+        setConversations((prev) =>
+          prev.map((c) => (c.id === convId ? { ...c, unread: 0 } : c)),
+        );
+      }
+    } catch {
+      // ignore
+    }
+  }, [isAgentPortal]);
+
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type !== 'inbox_message') return;
+      const convId = msg.conversation_id;
+      if (typeof convId !== 'number') return;
+      const raw = msg.message;
+      if (!raw || typeof raw !== 'object') return;
+      const m = raw as Record<string, unknown>;
+      const id = Number(m.id);
+      if (!Number.isFinite(id)) return;
+      const senderType = m.sender_type === 'customer' || m.sender_type === 'agent' || m.sender_type === 'ai' ? m.sender_type : 'customer';
+      const created = typeof m.created_at === 'string' ? m.created_at : new Date().toISOString();
+      const im: InboxMessage = {
+        id,
+        content: String(m.content ?? ''),
+        sender: senderType,
+        senderName: senderType === 'agent' ? 'You' : senderType === 'customer' ? 'Customer' : 'AI',
+        timestamp: new Date(created).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        sentAt: created,
+      };
+      const viewing = selectedIdRef.current === convId;
+      if (viewing) {
+        setMessagesByConvId((prev) => {
+          const cur = prev[convId] || [];
+          if (cur.some((x) => x.id === im.id)) return prev;
+          return { ...prev, [convId]: [...cur, im].sort((a, b) => a.id - b.id) };
+        });
+        void syncInboxReadState(convId, id);
+      } else {
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === convId
+              ? {
+                  ...c,
+                  unread: c.unread + 1,
+                  lastMessage: im.content,
+                  lastActivityAt: 'Just now',
+                }
+              : c,
+          ),
+        );
+      }
+    });
+  }, [subscribe, syncInboxReadState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -221,10 +377,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           if (cancelled) return;
           const mapped = rows.map(mapConversation);
           setConversations(mapped);
-          setSelectedId((prev) => {
-            if (prev && mapped.some((c) => c.id === prev)) return prev;
-            return mapped[0]?.id ?? null;
-          });
+          setSelectedId((prev) => pickInboxSelection(mapped, readLastInboxConversationId(), prev));
         } finally {
           if (!cancelled) setIsLoading(false);
         }
@@ -248,7 +401,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         const [rowsRaw, detailData] = await Promise.all([
           fetch(listUrl.toString()).then(async (r) => (r.ok ? r.json() : [])),
           lastId != null
-            ? fetch(`${API_BASE}/api/messaging/conversations/${lastId}`).then(async (r) =>
+            ? fetch(`${API_BASE}/api/messaging/conversations/${lastId}?limit=50`).then(async (r) =>
                 r.ok ? r.json() : null,
               )
             : Promise.resolve(null),
@@ -265,14 +418,13 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           const convId = data.conversation?.id ?? lastId!;
           const mappedMsgs = mapDetailToMessages(data);
           setMessagesByConvId((prev) => ({ ...prev, [convId]: mappedMsgs }));
+          setInboxMetaByConvId((prev) => ({
+            ...prev,
+            [convId]: { hasMoreOlder: Boolean(data.has_more_older) },
+          }));
         }
 
-        setSelectedId((prev) => {
-          const ids = new Set(mapped.map((c) => c.id));
-          if (lastId != null && ids.has(lastId)) return lastId;
-          if (prev != null && ids.has(prev)) return prev;
-          return mapped[0]?.id ?? null;
-        });
+        setSelectedId((prev) => pickInboxSelection(mapped, lastId, prev));
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -444,6 +596,9 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         appendMessage,
         refreshConversations,
         loadingConversationId,
+        inboxHasMoreOlder,
+        loadOlderInboxMessages,
+        syncInboxReadState,
       }}
     >
       {children}
