@@ -34,6 +34,12 @@ from models import (
     User,
 )
 from services.auth_service.api import get_current_user, get_current_user_optional
+from services.teams_service.receipt_helpers import (
+    batch_team_receipt_summaries,
+    ensure_team_message_receipt_rows,
+    mark_team_messages_delivered,
+    mark_team_read_through_receipts,
+)
 from services.teams_service.team_channel_hub import hub
 
 
@@ -69,6 +75,21 @@ async def _broadcast_read_state(tenant_id: int, team_id: int, agent_id: int, las
             "last_read_message_id": last_read_message_id,
         },
     )
+
+
+async def _broadcast_team_receipt_summaries(
+    tenant_id: int, team_id: int, db: Session, message_ids: List[int]
+) -> None:
+    if not message_ids:
+        return
+    summ = batch_team_receipt_summaries(db, message_ids)
+    items = [{"message_id": mid, **summ[mid]} for mid in message_ids if mid in summ]
+    if items:
+        await hub.broadcast_json(
+            tenant_id,
+            team_id,
+            {"type": "RECEIPTS_UPDATED", "team_id": team_id, "summaries": items},
+        )
 
 
 class MemberReadStateOut(BaseModel):
@@ -151,6 +172,12 @@ class TeamAssetCreate(BaseModel):
     created_by_agent_id: Optional[int] = None
 
 
+class TeamReceiptSummaryOut(BaseModel):
+    recipient_count: int
+    delivered_count: int
+    read_count: int
+
+
 class TeamChannelMessageOut(BaseModel):
     id: int
     team_id: int
@@ -162,6 +189,12 @@ class TeamChannelMessageOut(BaseModel):
     reply_to_message_id: Optional[int] = None
     edited_at: Optional[datetime] = None
     deleted_for_everyone_at: Optional[datetime] = None
+    receipt_summary: Optional[TeamReceiptSummaryOut] = None
+
+
+class TeamDeliveryAckIn(BaseModel):
+    tenant_id: int
+    message_ids: List[int]
 
 
 class TeamChannelMessagesPage(BaseModel):
@@ -767,10 +800,55 @@ async def upsert_team_channel_read_state(
     db.commit()
     db.refresh(row)
     await _broadcast_read_state(payload.tenant_id, team_id, ag.id, row.last_read_message_id)
+    db_receipt = SessionLocal()
+    try:
+        touched = mark_team_read_through_receipts(
+            db_receipt,
+            payload.tenant_id,
+            team_id,
+            ag.id,
+            row.last_read_message_id,
+        )
+        mids = sorted({t[0] for t in touched})
+        if mids:
+            await _broadcast_team_receipt_summaries(payload.tenant_id, team_id, db_receipt, mids)
+    finally:
+        db_receipt.close()
     return Response(status_code=204)
 
 
-def _team_channel_message_to_out(db: Session, r: TeamChannelMessage) -> TeamChannelMessageOut:
+def _team_receipt_summary_for_viewer(
+    db: Session, msg: TeamChannelMessage, current_user: Optional[User]
+) -> Optional[TeamReceiptSummaryOut]:
+    if current_user is None:
+        return None
+    role = (current_user.role or "").lower()
+    if role == "admin":
+        if not bool(getattr(msg, "posted_by_admin", False)):
+            return None
+    else:
+        ag = (
+            db.query(Agent)
+            .filter(Agent.user_id == current_user.id, Agent.tenant_id == msg.tenant_id)
+            .first()
+        )
+        if not ag or msg.sender_agent_id != ag.id:
+            return None
+    s = batch_team_receipt_summaries(db, [msg.id]).get(msg.id)
+    if not s or s.get("recipient_count", 0) < 1:
+        return None
+    return TeamReceiptSummaryOut(
+        recipient_count=s["recipient_count"],
+        delivered_count=s["delivered_count"],
+        read_count=s["read_count"],
+    )
+
+
+def _team_channel_message_to_out(
+    db: Session,
+    r: TeamChannelMessage,
+    receipt_summary: Optional[TeamReceiptSummaryOut] = None,
+) -> TeamChannelMessageOut:
     deleted = bool(getattr(r, "deleted_for_everyone_at", None))
     text = "[Message deleted]" if deleted else (r.content or "")
     return TeamChannelMessageOut(
@@ -784,11 +862,19 @@ def _team_channel_message_to_out(db: Session, r: TeamChannelMessage) -> TeamChan
         reply_to_message_id=getattr(r, "reply_to_message_id", None),
         edited_at=getattr(r, "edited_at", None),
         deleted_for_everyone_at=getattr(r, "deleted_for_everyone_at", None),
+        receipt_summary=receipt_summary,
     )
 
 
-def _team_channel_rows_to_out(db: Session, rows: List[TeamChannelMessage]) -> List[TeamChannelMessageOut]:
-    return [_team_channel_message_to_out(db, r) for r in rows]
+def _team_channel_rows_to_out(
+    db: Session,
+    rows: List[TeamChannelMessage],
+    current_user: Optional[User] = None,
+) -> List[TeamChannelMessageOut]:
+    return [
+        _team_channel_message_to_out(db, r, _team_receipt_summary_for_viewer(db, r, current_user))
+        for r in rows
+    ]
 
 
 def _hidden_team_message_ids(db: Session, user_id: int, mids: List[int]) -> set[int]:
@@ -866,7 +952,9 @@ async def list_team_channel_messages(
             .all()
         )
         rows = _filter_hidden(rows)
-        return TeamChannelMessagesPage(messages=_team_channel_rows_to_out(db, rows), has_more_older=False)
+        return TeamChannelMessagesPage(
+            messages=_team_channel_rows_to_out(db, rows, current_user), has_more_older=False
+        )
 
     lim = max(1, min(limit, 200))
     if before_id is not None:
@@ -889,7 +977,7 @@ async def list_team_channel_messages(
             .first()
         )
         return TeamChannelMessagesPage(
-            messages=_team_channel_rows_to_out(db, rows),
+            messages=_team_channel_rows_to_out(db, rows, current_user),
             has_more_older=older is not None,
         )
 
@@ -909,7 +997,7 @@ async def list_team_channel_messages(
             .first()
         )
     return TeamChannelMessagesPage(
-        messages=_team_channel_rows_to_out(db, rows),
+        messages=_team_channel_rows_to_out(db, rows, current_user),
         has_more_older=older is not None,
     )
 
@@ -984,7 +1072,10 @@ async def create_team_channel_message(
     db.add(row)
     db.commit()
     db.refresh(row)
-    msg_out = _team_channel_message_to_out(db, row)
+    ensure_team_message_receipt_rows(db, row)
+    msg_out = _team_channel_message_to_out(
+        db, row, _team_receipt_summary_for_viewer(db, row, current_user)
+    )
     await hub.broadcast_json(
         payload.tenant_id,
         team_id,
@@ -1042,13 +1133,54 @@ async def update_team_channel_message(
     db.add(row)
     db.commit()
     db.refresh(row)
-    msg_out = _team_channel_message_to_out(db, row)
+    msg_out = _team_channel_message_to_out(
+        db, row, _team_receipt_summary_for_viewer(db, row, current_user)
+    )
     await hub.broadcast_json(
         row.tenant_id,
         team_id,
         {"type": "MESSAGE_UPDATED", "message": msg_out.model_dump(mode="json")},
     )
     return msg_out
+
+
+@router.post("/{team_id}/channel/delivery-ack", status_code=status.HTTP_204_NO_CONTENT)
+async def team_channel_delivery_ack(
+    team_id: int,
+    payload: TeamDeliveryAckIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.tenant_id != payload.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+    team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == payload.tenant_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    ag = (
+        db.query(Agent)
+        .filter(Agent.user_id == current_user.id, Agent.tenant_id == payload.tenant_id)
+        .first()
+    )
+    if not ag:
+        raise HTTPException(status_code=403, detail="Only agents can acknowledge delivery")
+    mem = (
+        db.query(TeamMembership)
+        .filter(
+            TeamMembership.tenant_id == payload.tenant_id,
+            TeamMembership.team_id == team_id,
+            TeamMembership.agent_id == ag.id,
+        )
+        .first()
+    )
+    if not mem:
+        raise HTTPException(status_code=403, detail="Not a team member")
+    touched = mark_team_messages_delivered(
+        db, payload.tenant_id, team_id, ag.id, payload.message_ids or []
+    )
+    mids = sorted({t[0] for t in touched})
+    if mids:
+        await _broadcast_team_receipt_summaries(payload.tenant_id, team_id, db, mids)
+    return Response(status_code=204)
 
 
 @router.delete(
@@ -1222,20 +1354,45 @@ async def team_channel_websocket(websocket: WebSocket, team_id: int):
                 data = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            if data.get("type") != "typing":
+            if not isinstance(data, dict):
                 continue
-            await hub.broadcast_json(
-                tenant_id,
-                team_id,
-                {
-                    "type": "TYPING",
-                    "team_id": team_id,
-                    "agent_id": agent_id,
-                    "name": display_name,
-                    "active": bool(data.get("active", True)),
-                },
-                exclude=websocket,
-            )
+            t = data.get("type")
+            if t == "typing":
+                await hub.broadcast_json(
+                    tenant_id,
+                    team_id,
+                    {
+                        "type": "TYPING",
+                        "team_id": team_id,
+                        "agent_id": agent_id,
+                        "name": display_name,
+                        "active": bool(data.get("active", True)),
+                    },
+                    exclude=websocket,
+                )
+                continue
+            if t == "delivery_ack" and agent_id is not None:
+                raw_ids = data.get("message_ids") or []
+                if not isinstance(raw_ids, list):
+                    continue
+                mids: List[int] = []
+                for x in raw_ids:
+                    try:
+                        mids.append(int(x))
+                    except (TypeError, ValueError):
+                        continue
+                if not mids:
+                    continue
+                db_ack = SessionLocal()
+                try:
+                    touched = mark_team_messages_delivered(
+                        db_ack, tenant_id, team_id, agent_id, mids
+                    )
+                    uniq = sorted({u[0] for u in touched})
+                    if uniq:
+                        await _broadcast_team_receipt_summaries(tenant_id, team_id, db_ack, uniq)
+                finally:
+                    db_ack.close()
     except WebSocketDisconnect:
         pass
     finally:

@@ -55,6 +55,8 @@ type DmApiMessageRow = {
   reply_to_message_id?: number | null;
   edited_at?: string | null;
   deleted_for_everyone_at?: string | null;
+  peer_delivered_at?: string | null;
+  peer_read_at?: string | null;
 };
 
 function parseDmMessagesPayload(data: unknown): {
@@ -89,6 +91,8 @@ export interface DmMessage {
   replyToMessageId?: number;
   editedAt?: string;
   deletedForEveryone?: boolean;
+  peerDeliveredAt?: string;
+  peerReadAt?: string;
 }
 
 interface DmChatsContextType {
@@ -144,6 +148,8 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         replyToMessageId: row.reply_to_message_id ?? undefined,
         editedAt: row.edited_at ?? undefined,
         deletedForEveryone: Boolean(row.deleted_for_everyone_at),
+        peerDeliveredAt: row.peer_delivered_at ?? undefined,
+        peerReadAt: row.peer_read_at ?? undefined,
       }));
     },
     [conversations, currentAgentId],
@@ -399,6 +405,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         wasNew = !cur.some((m) => m.id === row.id);
         const conv = conversations.find((c) => c.slug === slug);
         const peerName = conv?.name || 'Agent';
+        const prevSame = cur.find((m) => m.id === row.id);
         const msg: DmMessage = {
           id: row.id,
           senderAgentId: String(row.sender_agent_id),
@@ -408,6 +415,8 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
           replyToMessageId: row.reply_to_message_id ?? undefined,
           editedAt: row.edited_at ?? undefined,
           deletedForEveryone: Boolean(row.deleted_for_everyone_at),
+          peerDeliveredAt: row.peer_delivered_at ?? prevSame?.peerDeliveredAt,
+          peerReadAt: row.peer_read_at ?? prevSame?.peerReadAt,
         };
         const next = wasNew
           ? [...cur, msg].sort((a, b) => a.id - b.id)
@@ -486,6 +495,8 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
                 replyToMessageId: row.reply_to_message_id ?? undefined,
                 editedAt: row.edited_at ?? undefined,
                 deletedForEveryone: Boolean(row.deleted_for_everyone_at),
+                peerDeliveredAt: row.peer_delivered_at ?? undefined,
+                peerReadAt: row.peer_read_at ?? undefined,
               },
             ].sort((a, b) => a.id - b.id),
           };

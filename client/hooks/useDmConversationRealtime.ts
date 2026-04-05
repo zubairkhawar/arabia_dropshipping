@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
@@ -16,11 +16,23 @@ export interface DmWsMessagePayload {
   reply_to_message_id?: number | null;
   edited_at?: string | null;
   deleted_for_everyone_at?: string | null;
+  peer_delivered_at?: string | null;
+  peer_read_at?: string | null;
 }
 
 export type DmWsEvent =
   | { type: 'NEW_DM_MESSAGE'; message: DmWsMessagePayload }
-  | { type: 'DM_MESSAGE_UPDATED'; message: DmWsMessagePayload };
+  | { type: 'DM_MESSAGE_UPDATED'; message: DmWsMessagePayload }
+  | {
+      type: 'DM_RECEIPTS_UPDATED';
+      conversation_id: number;
+      receipts: Array<{
+        message_id: number;
+        recipient_agent_id: number;
+        delivered_at?: string | null;
+        read_at?: string | null;
+      }>;
+    };
 
 function wsUrlForDm(conversationId: number, tenantId: number, agentId: number, token: string): string {
   const wsBase = API_BASE.replace(/^http/i, (m) => (m.toLowerCase() === 'https' ? 'wss' : 'ws'));
@@ -37,8 +49,12 @@ export type DmRealtimeOptions = {
   onClose?: () => void;
 };
 
+export type DmRealtimeControls = {
+  sendDeliveryAck: (messageIds: number[]) => void;
+};
+
 /**
- * WebSocket for internal DM: NEW_DM_MESSAGE fan-out (same pattern as team channel).
+ * WebSocket for internal DM: messages + delivery receipts.
  */
 export function useDmConversationRealtime(
   enabled: boolean,
@@ -47,11 +63,12 @@ export function useDmConversationRealtime(
   agentId: number | null,
   onEvent: (event: DmWsEvent) => void,
   options?: DmRealtimeOptions,
-): void {
+): DmRealtimeControls {
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     if (!enabled || conversationId == null || conversationId < 1 || agentId == null || agentId < 1) {
@@ -69,6 +86,7 @@ export function useDmConversationRealtime(
       if (closed) return;
       try {
         ws = new WebSocket(wsUrlForDm(conversationId, tenantId, agentId, token));
+        wsRef.current = ws;
       } catch {
         scheduleReconnect();
         return;
@@ -81,12 +99,7 @@ export function useDmConversationRealtime(
       ws.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data as string) as DmWsEvent;
-          if (
-            data &&
-            typeof data === 'object' &&
-            (data.type === 'NEW_DM_MESSAGE' || data.type === 'DM_MESSAGE_UPDATED') &&
-            data.message
-          ) {
+          if (data && typeof data === 'object' && 'type' in data) {
             onEventRef.current(data);
           }
         } catch {
@@ -95,6 +108,7 @@ export function useDmConversationRealtime(
       };
 
       ws.onclose = () => {
+        wsRef.current = null;
         optionsRef.current?.onClose?.();
         if (!closed) scheduleReconnect();
       };
@@ -129,4 +143,16 @@ export function useDmConversationRealtime(
       }
     };
   }, [enabled, conversationId, tenantId, agentId]);
+
+  const sendDeliveryAck = useCallback((messageIds: number[]) => {
+    const s = wsRef.current;
+    if (!s || s.readyState !== WebSocket.OPEN || messageIds.length === 0) return;
+    try {
+      s.send(JSON.stringify({ type: 'delivery_ack', message_ids: messageIds }));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  return useMemo(() => ({ sendDeliveryAck }), [sendDeliveryAck]);
 }

@@ -1,11 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   'https://arabia-dropshipping.onrender.com';
+
+export interface TeamReceiptSummaryPayload {
+  recipient_count: number;
+  delivered_count: number;
+  read_count: number;
+}
 
 export interface TeamChannelWsMessage {
   id: number;
@@ -18,13 +24,23 @@ export interface TeamChannelWsMessage {
   reply_to_message_id?: number | null;
   edited_at?: string | null;
   deleted_for_everyone_at?: string | null;
+  receipt_summary?: TeamReceiptSummaryPayload | null;
 }
 
 export type TeamChannelWsEvent =
   | { type: 'NEW_MESSAGE'; message: TeamChannelWsMessage }
   | { type: 'MESSAGE_UPDATED'; message: TeamChannelWsMessage }
   | { type: 'TYPING'; team_id: number; agent_id: number | null; name: string; active: boolean }
-  | { type: 'READ_STATE'; agent_id: number; last_read_message_id: number };
+  | { type: 'READ_STATE'; agent_id: number; last_read_message_id: number }
+  | {
+      type: 'RECEIPTS_UPDATED';
+      team_id: number;
+      summaries: Array<
+        TeamReceiptSummaryPayload & {
+          message_id: number;
+        }
+      >;
+    };
 
 function wsUrlForTeamChannel(teamId: number, tenantId: number, token: string): string {
   const wsBase = API_BASE.replace(/^http/i, (m) => (m.toLowerCase() === 'https' ? 'wss' : 'ws'));
@@ -35,21 +51,26 @@ function wsUrlForTeamChannel(teamId: number, tenantId: number, token: string): s
   return `${wsBase}/api/teams/ws/channel/${teamId}?${q.toString()}`;
 }
 
-/**
- * Subscribes to team channel WebSocket when enabled. Returns sendTyping(active) for debounced typing signals.
- */
 export type TeamChannelRealtimeOptions = {
   onOpen?: () => void;
   onClose?: () => void;
 };
 
+export type TeamChannelRealtimeControls = {
+  sendTyping: (active: boolean) => void;
+  sendDeliveryAck: (messageIds: number[]) => void;
+};
+
+/**
+ * Subscribes to team channel WebSocket when enabled. Typing + delivery ack outbound.
+ */
 export function useTeamChannelRealtime(
   enabled: boolean,
   teamId: number | null,
   tenantId: number,
   onEvent: (event: TeamChannelWsEvent) => void,
   options?: TeamChannelRealtimeOptions,
-): (active: boolean) => void {
+): TeamChannelRealtimeControls {
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
   const optionsRef = useRef(options);
@@ -133,7 +154,7 @@ export function useTeamChannelRealtime(
     };
   }, [enabled, teamId, tenantId]);
 
-  return useCallback((active: boolean) => {
+  const sendTyping = useCallback((active: boolean) => {
     const s = wsRef.current;
     if (!s || s.readyState !== WebSocket.OPEN) return;
     try {
@@ -142,4 +163,19 @@ export function useTeamChannelRealtime(
       // ignore
     }
   }, []);
+
+  const sendDeliveryAck = useCallback((messageIds: number[]) => {
+    const s = wsRef.current;
+    if (!s || s.readyState !== WebSocket.OPEN || messageIds.length === 0) return;
+    try {
+      s.send(JSON.stringify({ type: 'delivery_ack', message_ids: messageIds }));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  return useMemo(
+    () => ({ sendTyping, sendDeliveryAck }),
+    [sendTyping, sendDeliveryAck],
+  );
 }

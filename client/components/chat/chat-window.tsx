@@ -77,6 +77,8 @@ interface Message {
   editedAt?: string;
   deletedForEveryone?: boolean;
   messageStatus?: { sent: boolean; delivered: boolean; read: boolean };
+  /** Team channel: server receipt aggregate for outgoing messages (sender/admin view). */
+  teamReceiptSummary?: { recipient_count: number; delivered_count: number; read_count: number };
   sendFailed?: boolean;
 }
 
@@ -96,6 +98,11 @@ interface TeamChannelMessageRow {
   reply_to_message_id?: number | null;
   edited_at?: string | null;
   deleted_for_everyone_at?: string | null;
+  receipt_summary?: {
+    recipient_count: number;
+    delivered_count: number;
+    read_count: number;
+  } | null;
 }
 
 interface TeamChannelPayload {
@@ -394,11 +401,13 @@ export function ChatWindow({
     const mapped: Message[] = rows.map((m) => {
       const parent =
         m.replyToMessageId != null ? byId.get(m.replyToMessageId) : undefined;
+      const outgoingDm = m.senderName === 'You';
       return {
         id: m.id,
         content: m.content,
         sender: 'agent' as const,
         senderName: m.senderName,
+        senderAgentId: Number.parseInt(m.senderAgentId, 10) || undefined,
         timestamp: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
         sentAt: m.createdAt,
         replyToMessageId: m.replyToMessageId,
@@ -408,6 +417,13 @@ export function ChatWindow({
             : undefined,
         editedAt: m.editedAt,
         deletedForEveryone: m.deletedForEveryone,
+        messageStatus: outgoingDm
+          ? {
+              sent: true,
+              delivered: Boolean(m.peerDeliveredAt),
+              read: Boolean(m.peerReadAt),
+            }
+          : undefined,
       };
     });
     setMessages(mapped);
@@ -712,6 +728,13 @@ export function ChatWindow({
         deletedForEveryone: deletedForEveryone || undefined,
         reactions: mergeReactions(payload.reactions, cachedReactions),
         mentionAgentIds: mentionIds && mentionIds.length > 0 ? mentionIds : undefined,
+        teamReceiptSummary: m.receipt_summary
+          ? {
+              recipient_count: m.receipt_summary.recipient_count,
+              delivered_count: m.receipt_summary.delivered_count,
+              read_count: m.receipt_summary.read_count,
+            }
+          : undefined,
       };
     },
     [broadcastMode, viewerAgentId, teamId],
@@ -793,6 +816,8 @@ export function ChatWindow({
     TENANT_ID,
   ]);
 
+  const teamSendDeliveryAckRef = useRef<(ids: number[]) => void>(() => {});
+
   const handleTeamChannelWs = useCallback(
     (ev: TeamChannelWsEvent) => {
       if (ev.type === 'NEW_MESSAGE' || ev.type === 'MESSAGE_UPDATED') {
@@ -815,6 +840,31 @@ export function ChatWindow({
             : mapped.senderAgentId === viewerAgentId && viewerAgentId > 0;
           if (!isMine) setTeamNewBelowOpen(true);
         }
+        if (isNew && viewerAgentId > 0) {
+          const isMine = broadcastMode
+            ? !!mapped.postedByAdmin && showBroadcastInput
+            : mapped.senderAgentId === viewerAgentId;
+          if (!isMine) {
+            teamSendDeliveryAckRef.current([mapped.id]);
+          }
+        }
+        return;
+      }
+      if (ev.type === 'RECEIPTS_UPDATED' && Array.isArray(ev.summaries)) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            const s = ev.summaries.find((x) => x.message_id === m.id);
+            if (!s) return m;
+            return {
+              ...m,
+              teamReceiptSummary: {
+                recipient_count: s.recipient_count,
+                delivered_count: s.delivered_count,
+                read_count: s.read_count,
+              },
+            };
+          }),
+        );
         return;
       }
       if (ev.type === 'READ_STATE') {
@@ -844,7 +894,7 @@ export function ChatWindow({
     [mapTeamRowToMessage, viewerAgentId, broadcastMode, showBroadcastInput],
   );
 
-  const sendTypingWs = useTeamChannelRealtime(
+  const { sendTyping: sendTypingWs, sendDeliveryAck: teamSendDeliveryAck } = useTeamChannelRealtime(
     Boolean(isInternalChat && isTeamChannel && teamId && typeof window !== 'undefined'),
     teamId ? Number(teamId) : null,
     TENANT_ID,
@@ -856,6 +906,7 @@ export function ChatWindow({
       },
     },
   );
+  teamSendDeliveryAckRef.current = teamSendDeliveryAck;
 
   const teamReadFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const teamPendingReadMaxRef = useRef(0);
@@ -958,9 +1009,20 @@ export function ChatWindow({
       ? dmConversationIdRaw
       : null;
 
+  const dmSendDeliveryAckRef = useRef<(ids: number[]) => void>(() => {});
+
   const handleDmWs = useCallback(
     (ev: DmWsEvent) => {
       if (!dmSlug) return;
+      if (ev.type === 'DM_RECEIPTS_UPDATED') {
+        for (const r of ev.receipts) {
+          patchDmMessage(dmSlug, r.message_id, {
+            peerDeliveredAt: r.delivered_at ?? undefined,
+            peerReadAt: r.read_at ?? undefined,
+          });
+        }
+        return;
+      }
       if (ev.type === 'NEW_DM_MESSAGE') {
         const row = ev.message;
         mergeIncomingDmMessage(dmSlug, row);
@@ -968,16 +1030,19 @@ export function ChatWindow({
           reportDmUnread(dmSlug);
           setDmNewBelowOpen(true);
         }
+        if (String(row.sender_agent_id) !== String(viewerAgentId) && viewerAgentId > 0) {
+          dmSendDeliveryAckRef.current([row.id]);
+        }
         return;
       }
       if (ev.type === 'DM_MESSAGE_UPDATED') {
         mergeIncomingDmMessage(dmSlug, ev.message);
       }
     },
-    [dmSlug, mergeIncomingDmMessage, viewerAgentId, reportDmUnread],
+    [dmSlug, mergeIncomingDmMessage, viewerAgentId, reportDmUnread, patchDmMessage],
   );
 
-  useDmConversationRealtime(
+  const { sendDeliveryAck: dmSendDeliveryAck } = useDmConversationRealtime(
     Boolean(
       isInternalChat && isDmPage && dmSlug && dmConversationId != null && dmConversationId > 0 && viewerAgentId > 0,
     ),
@@ -992,6 +1057,7 @@ export function ChatWindow({
       },
     },
   );
+  dmSendDeliveryAckRef.current = dmSendDeliveryAck;
 
   useEffect(() => {
     if (!isDmPage) return;
@@ -2386,12 +2452,23 @@ export function ChatWindow({
 
               const outgoing = isOutgoingMessage(message);
               const receiptPeers = isTeamChannel && outgoing ? getReceiptPeersForMessage(message) : [];
+              const sum = message.teamReceiptSummary;
+              const rc = sum?.recipient_count ?? 0;
+              const peersLen = receiptPeers.length;
+              const useReceiptSummary = Boolean(sum && rc > 0 && (peersLen === 0 || rc === peersLen));
+              const allDeliveredReceipt =
+                useReceiptSummary && sum ? sum.delivered_count >= rc : true;
               const allReadReceipt =
-                receiptPeers.length === 0 ||
-                receiptPeers.every((p) => (memberReadStates[String(p.id)] ?? 0) >= message.id);
-              const anyReadReceipt = receiptPeers.some(
-                (p) => (memberReadStates[String(p.id)] ?? 0) >= message.id,
-              );
+                useReceiptSummary && sum
+                  ? sum.read_count >= rc
+                  : receiptPeers.length === 0 ||
+                    receiptPeers.every((p) => (memberReadStates[String(p.id)] ?? 0) >= message.id);
+              const anyReadReceipt =
+                useReceiptSummary && sum
+                  ? sum.read_count > 0
+                  : receiptPeers.some(
+                      (p) => (memberReadStates[String(p.id)] ?? 0) >= message.id,
+                    );
               const isStarred = starredIds.includes(message.id);
               const showMenu = activeMessageMenuId === message.id;
               const showReactions = activeReactionPickerId === message.id;
@@ -2599,7 +2676,9 @@ export function ChatWindow({
                           <span className="text-[11px] text-[#667781]">
                             {formatMessageTime(message.sentAt, message.timestamp)}
                           </span>
-                          {isInboxPage && !isInternalChat && outgoing && message.messageStatus && (
+                          {((isInboxPage && !isInternalChat) || (isInternalChat && isDmPage)) &&
+                            outgoing &&
+                            message.messageStatus && (
                             <span className="inline-flex items-center" aria-hidden>
                               <Check
                                 className={`h-3.5 w-3.5 stroke-[2.5] ${
@@ -2628,7 +2707,7 @@ export function ChatWindow({
                                 }
                               >
                                 <Check
-                                  className={`h-3.5 w-3.5 stroke-[2.5] ${allReadReceipt ? 'text-[#53bdeb]' : 'text-[#8696a0]'}`}
+                                  className={`h-3.5 w-3.5 stroke-[2.5] ${allDeliveredReceipt ? 'text-[#8696a0]' : 'text-[#8696a0]/50'}`}
                                 />
                                 <Check
                                   className={`-ml-1.5 h-3.5 w-3.5 stroke-[2.5] ${allReadReceipt ? 'text-[#53bdeb]' : anyReadReceipt ? 'text-[#8696a0]' : 'text-[#8696a0]/50'}`}

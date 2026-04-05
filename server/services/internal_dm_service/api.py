@@ -1,5 +1,7 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 from jose import JWTError, jwt
@@ -18,6 +20,12 @@ from models import (
     User,
 )
 from services.auth_service.api import get_current_user, get_current_user_optional
+from services.internal_dm_service.dm_receipt_helpers import (
+    dm_receipt_for_sender_view,
+    ensure_dm_message_receipt,
+    mark_dm_messages_delivered,
+    mark_dm_read_through_receipts,
+)
 from services.internal_dm_service.dm_hub import hub
 
 router = APIRouter()
@@ -44,6 +52,13 @@ class DmMessageOut(BaseModel):
     reply_to_message_id: Optional[int] = None
     edited_at: Optional[datetime] = None
     deleted_for_everyone_at: Optional[datetime] = None
+    peer_delivered_at: Optional[datetime] = None
+    peer_read_at: Optional[datetime] = None
+
+
+class DmDeliveryAckIn(BaseModel):
+    tenant_id: int
+    message_ids: List[int]
 
 
 class DmMessagesPage(BaseModel):
@@ -103,9 +118,16 @@ def _decode_websocket_user(token: str, db: Session) -> Optional[User]:
         return None
 
 
-def _dm_message_to_out(m: InternalDmMessage) -> DmMessageOut:
+def _dm_message_to_out(
+    db: Session,
+    m: InternalDmMessage,
+    acting_agent_id: int,
+) -> DmMessageOut:
     deleted = bool(m.deleted_for_everyone_at)
     text = "[Message deleted]" if deleted else m.content
+    rec = None
+    if m.sender_agent_id == acting_agent_id:
+        rec = dm_receipt_for_sender_view(db, m.id, m.sender_agent_id)
     return DmMessageOut(
         id=m.id,
         conversation_id=m.conversation_id,
@@ -115,7 +137,20 @@ def _dm_message_to_out(m: InternalDmMessage) -> DmMessageOut:
         reply_to_message_id=m.reply_to_message_id,
         edited_at=m.edited_at,
         deleted_for_everyone_at=m.deleted_for_everyone_at,
+        peer_delivered_at=rec.delivered_at if rec else None,
+        peer_read_at=rec.read_at if rec else None,
     )
+
+
+async def _broadcast_dm_receipts(
+    tenant_id: int, conversation_id: int, items: List[Dict[str, Any]]
+) -> None:
+    if items:
+        await hub.broadcast_json(
+            tenant_id,
+            conversation_id,
+            {"type": "DM_RECEIPTS_UPDATED", "conversation_id": conversation_id, "receipts": items},
+        )
 
 
 def _hidden_dm_message_ids(db: Session, user_id: int, mids: List[int]) -> set[int]:
@@ -267,7 +302,9 @@ async def list_messages(
             .all()
         )
         rows = _filter_hidden(rows)
-        return DmMessagesPage(messages=[_dm_message_to_out(m) for m in rows], has_more_older=False)
+        return DmMessagesPage(
+            messages=[_dm_message_to_out(db, m, agent_id) for m in rows], has_more_older=False
+        )
 
     lim = max(1, min(limit, 200))
     if before_id is not None:
@@ -289,7 +326,7 @@ async def list_messages(
             .first()
         )
         return DmMessagesPage(
-            messages=[_dm_message_to_out(m) for m in rows], has_more_older=older is not None
+            messages=[_dm_message_to_out(db, m, agent_id) for m in rows], has_more_older=older is not None
         )
 
     rows_desc = base.order_by(desc(InternalDmMessage.id)).limit(lim).all()
@@ -306,7 +343,9 @@ async def list_messages(
             )
             .first()
         )
-    return DmMessagesPage(messages=[_dm_message_to_out(m) for m in rows], has_more_older=older is not None)
+    return DmMessagesPage(
+        messages=[_dm_message_to_out(db, m, agent_id) for m in rows], has_more_older=older is not None
+    )
 
 
 @router.post("/messages", response_model=DmMessageOut, status_code=status.HTTP_201_CREATED)
@@ -344,7 +383,8 @@ async def create_message(payload: CreateDmMessageIn, db: Session = Depends(get_d
     db.add(conversation)
     db.commit()
     db.refresh(msg)
-    out = _dm_message_to_out(msg)
+    ensure_dm_message_receipt(db, msg, conversation)
+    out = _dm_message_to_out(db, msg, payload.sender_agent_id)
     await hub.broadcast_json(
         conversation.tenant_id,
         conversation.id,
@@ -405,7 +445,7 @@ async def patch_dm_message(
     db.add(row)
     db.commit()
     db.refresh(row)
-    out = _dm_message_to_out(row)
+    out = _dm_message_to_out(db, row, ag.id)
     await hub.broadcast_json(
         conversation.tenant_id,
         conversation.id,
@@ -505,7 +545,7 @@ async def delete_dm_message_for_everyone(
     db.add(row)
     db.commit()
     db.refresh(row)
-    out = _dm_message_to_out(row)
+    out = _dm_message_to_out(db, row, ag.id)
     await hub.broadcast_json(
         conversation.tenant_id,
         conversation.id,
@@ -514,6 +554,39 @@ async def delete_dm_message_for_everyone(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post(
+    "/conversations/{conversation_id}/delivery-ack",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def dm_conversation_delivery_ack(
+    conversation_id: int,
+    payload: DmDeliveryAckIn,
+    db: Session = Depends(get_db),
+    agent_id: int = Query(...),
+):
+    conversation = (
+        db.query(InternalDmConversation).filter(InternalDmConversation.id == conversation_id).first()
+    )
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if payload.tenant_id != conversation.tenant_id:
+        raise HTTPException(status_code=400, detail="Tenant mismatch")
+    if agent_id not in (conversation.agent_one_id, conversation.agent_two_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    touched = mark_dm_messages_delivered(db, conversation_id, agent_id, payload.message_ids or [])
+    receipts: List[Dict[str, Any]] = []
+    for mid, aid, d_at, r_at in touched:
+        receipts.append(
+            {
+                "message_id": mid,
+                "recipient_agent_id": aid,
+                "delivered_at": d_at,
+                "read_at": r_at,
+            }
+        )
+    if receipts:
+        await _broadcast_dm_receipts(conversation.tenant_id, conversation_id, receipts)
+    return Response(status_code=204)
 
 
 @router.post("/conversations/{conversation_id}/read-state")
@@ -549,13 +622,34 @@ async def upsert_dm_read_state(
             last_read_message_id=v,
         )
         db.add(row)
+        read_cursor = v
     else:
         row.last_read_message_id = max(row.last_read_message_id, v)
         db.add(row)
+        read_cursor = row.last_read_message_id
     db.commit()
     from services.agent_portal_service.broadcast import push_refresh_unread
 
     await push_refresh_unread(db, payload.tenant_id, payload.agent_id)
+    db_r = SessionLocal()
+    try:
+        touched = mark_dm_read_through_receipts(
+            db_r, conversation_id, payload.agent_id, read_cursor
+        )
+        receipts: List[Dict[str, Any]] = []
+        for mid, aid, d_at, r_at in touched:
+            receipts.append(
+                {
+                    "message_id": mid,
+                    "recipient_agent_id": aid,
+                    "delivered_at": d_at,
+                    "read_at": r_at,
+                }
+            )
+        if receipts:
+            await _broadcast_dm_receipts(conversation.tenant_id, conversation_id, receipts)
+    finally:
+        db_r.close()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -611,7 +705,41 @@ async def internal_dm_websocket(websocket: WebSocket, conversation_id: int):
     await hub.connect(websocket, tenant_id, conversation_id, meta)
     try:
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict) or data.get("type") != "delivery_ack":
+                continue
+            raw_ids = data.get("message_ids") or []
+            if not isinstance(raw_ids, list):
+                continue
+            mids: List[int] = []
+            for x in raw_ids:
+                try:
+                    mids.append(int(x))
+                except (TypeError, ValueError):
+                    continue
+            if not mids:
+                continue
+            db_ack = SessionLocal()
+            try:
+                touched = mark_dm_messages_delivered(db_ack, conversation_id, agent_id, mids)
+                receipts: List[Dict[str, Any]] = []
+                for mid, aid, d_at, r_at in touched:
+                    receipts.append(
+                        {
+                            "message_id": mid,
+                            "recipient_agent_id": aid,
+                            "delivered_at": d_at,
+                            "read_at": r_at,
+                        }
+                    )
+                if receipts:
+                    await _broadcast_dm_receipts(tenant_id, conversation_id, receipts)
+            finally:
+                db_ack.close()
     except WebSocketDisconnect:
         pass
     finally:
