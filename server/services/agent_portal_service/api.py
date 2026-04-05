@@ -1,4 +1,5 @@
-from typing import Optional
+import json
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 from jose import JWTError, jwt
@@ -117,6 +118,10 @@ async def upsert_inbox_read_state(
     else:
         row.last_read_message_id = max(row.last_read_message_id, v)
         db.add(row)
+
+    from services.messaging_service.inbox_receipts import mark_read_through
+
+    mark_read_through(db, payload.conversation_id, ag_id, v)
     db.commit()
 
     from services.agent_portal_service.broadcast import push_unread_summary
@@ -165,7 +170,26 @@ async def agent_portal_websocket(websocket: WebSocket):
         db2.close()
     try:
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            try:
+                body: Any = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(body, dict):
+                continue
+            if body.get("type") == "delivery_ack" and body.get("channel") == "inbox":
+                ids_raw = body.get("message_ids") or []
+                mids = [int(x) for x in ids_raw if str(x).isdigit()]
+                if not mids:
+                    continue
+                db_ack = SessionLocal()
+                try:
+                    from services.messaging_service.inbox_receipts import mark_delivered
+
+                    mark_delivered(db_ack, mids, ag_id)
+                    db_ack.commit()
+                finally:
+                    db_ack.close()
     except WebSocketDisconnect:
         pass
     finally:

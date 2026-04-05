@@ -13,6 +13,7 @@ from database import (
     ensure_team_channel_read_states_table,
     ensure_agent_read_state_tables,
     ensure_user_avatar_url_column,
+    ensure_message_enhancements,
 )
 from models import Tenant, User
 from services.auth_service.services import get_password_hash
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
     ensure_team_channel_read_states_table()
     ensure_agent_read_state_tables()
     ensure_user_avatar_url_column()
+    ensure_message_enhancements()
     ensure_admin_user()
     yield
     # Shutdown

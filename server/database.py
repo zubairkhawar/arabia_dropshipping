@@ -125,6 +125,76 @@ def ensure_user_avatar_url_column() -> None:
         pass
 
 
+def ensure_message_enhancements() -> None:
+    """Reply/edit/delete columns on message tables + receipt/deletion helper tables."""
+    try:
+        insp = inspect(engine)
+        names = insp.get_table_names()
+    except Exception:
+        return
+
+    def add_cols(table: str, col_defs: list[tuple[str, str]]) -> None:
+        if table not in names:
+            return
+        try:
+            cols = {c["name"] for c in insp.get_columns(table)}
+        except Exception:
+            return
+        stmts: list[str] = []
+        for col, ddl in col_defs:
+            if col not in cols:
+                stmts.append(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+        if not stmts:
+            return
+        try:
+            with engine.begin() as conn:
+                for s in stmts:
+                    conn.execute(text(s))
+        except Exception:
+            pass
+
+    add_cols(
+        "messages",
+        [
+            ("reply_to_message_id", "INTEGER REFERENCES messages(id)"),
+            ("edited_at", "TIMESTAMP"),
+            ("deleted_for_everyone_at", "TIMESTAMP"),
+            ("wa_delivered_at", "TIMESTAMP"),
+        ],
+    )
+    add_cols(
+        "team_channel_messages",
+        [
+            ("reply_to_message_id", "INTEGER REFERENCES team_channel_messages(id)"),
+            ("edited_at", "TIMESTAMP"),
+            ("deleted_for_everyone_at", "TIMESTAMP"),
+        ],
+    )
+    add_cols(
+        "internal_dm_messages",
+        [
+            ("reply_to_message_id", "INTEGER REFERENCES internal_dm_messages(id)"),
+            ("edited_at", "TIMESTAMP"),
+            ("deleted_for_everyone_at", "TIMESTAMP"),
+        ],
+    )
+
+    try:
+        from models import (  # noqa: WPS433
+            MessageUserDeletion,
+            InboxMessageReceipt,
+            TeamMessageReceipt,
+            DmMessageReceipt,
+        )
+
+        MessageUserDeletion.__table__.create(bind=engine, checkfirst=True)
+        InboxMessageReceipt.__table__.create(bind=engine, checkfirst=True)
+        TeamMessageReceipt.__table__.create(bind=engine, checkfirst=True)
+        DmMessageReceipt.__table__.create(bind=engine, checkfirst=True)
+    except Exception:
+        pass
+
+
 def get_db():
     db = SessionLocal()
     try:

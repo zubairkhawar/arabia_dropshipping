@@ -37,6 +37,12 @@ export interface InboxMessage {
   senderName: string;
   timestamp: string;
   sentAt?: string;
+  replyToMessageId?: number;
+  replyTo?: { id: number; senderName: string; content: string };
+  editedAt?: string;
+  deletedForEveryone?: boolean;
+  messageStatus?: { sent: boolean; delivered: boolean; read: boolean };
+  sendFailed?: boolean;
   [key: string]: unknown;
 }
 
@@ -59,6 +65,8 @@ interface InboxConversationsContextType {
   getMessages: (convId: number) => InboxMessage[];
   setMessages: (convId: number, messages: InboxMessage[]) => void;
   appendMessage: (convId: number, message: InboxMessage) => void;
+  patchInboxMessage: (convId: number, messageId: number, patch: Partial<InboxMessage>) => void;
+  removeInboxMessage: (convId: number, messageId: number) => void;
   refreshConversations: () => Promise<void>;
   /** When set, the UI can show a thread skeleton for that conversation while messages load. */
   loadingConversationId: number | null;
@@ -109,8 +117,38 @@ interface ConversationDetailsApi {
     content: string;
     sender_type: 'customer' | 'agent' | 'ai';
     created_at: string;
+    reply_to_message_id?: number | null;
+    edited_at?: string | null;
+    deleted_for_everyone_at?: string | null;
+    reply_preview?: { id: number; sender_type: string; content: string };
+    status?: { sent: boolean; delivered: boolean; read: boolean };
   }>;
   has_more_older?: boolean;
+}
+
+function apiMessageToInbox(m: ConversationDetailsApi['messages'][number]): InboxMessage {
+  const st = m.sender_type;
+  const senderName = st === 'agent' ? 'You' : st === 'customer' ? 'Customer' : 'AI';
+  const rp = m.reply_preview;
+  return {
+    id: m.id,
+    content: m.content,
+    sender: st,
+    senderName,
+    timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    sentAt: m.created_at,
+    replyToMessageId: m.reply_to_message_id ?? undefined,
+    editedAt: m.edited_at ?? undefined,
+    deletedForEveryone: Boolean(m.deleted_for_everyone_at),
+    messageStatus: m.status,
+    replyTo: rp
+      ? {
+          id: rp.id,
+          senderName: rp.sender_type === 'agent' ? 'You' : rp.sender_type === 'customer' ? 'Customer' : 'AI',
+          content: rp.content,
+        }
+      : undefined,
+  };
 }
 
 function toRelativeTime(iso?: string | null): string {
@@ -197,17 +235,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
   }, [currentAgentId, isAgentPortal]);
 
   const mapDetailToMessages = useCallback((data: ConversationDetailsApi): InboxMessage[] => {
-    return data.messages.map((m) => ({
-      id: m.id,
-      content: m.content,
-      sender: m.sender_type,
-      senderName: m.sender_type === 'agent' ? 'You' : m.sender_type === 'customer' ? 'Customer' : 'AI',
-      timestamp: new Date(m.created_at).toLocaleTimeString([], {
-        hour: 'numeric',
-        minute: '2-digit',
-      }),
-      sentAt: m.created_at,
-    }));
+    return data.messages.map((m) => apiMessageToInbox(m));
   }, []);
 
   const refreshConversations = useCallback(async () => {
@@ -232,7 +260,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       try {
         const url = new URL(`${API_BASE}/api/messaging/conversations/${convId}`);
         url.searchParams.set('limit', '50');
-        const res = await fetch(url.toString());
+        const res = await fetch(url.toString(), { headers: authJsonHeaders() });
         if (!res.ok) {
           setMessagesByConvId((prev) => ({ ...prev, [convId]: [] }));
           setInboxMetaByConvId((prev) => ({ ...prev, [convId]: { hasMoreOlder: false } }));
@@ -266,7 +294,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         const url = new URL(`${API_BASE}/api/messaging/conversations/${convId}`);
         url.searchParams.set('limit', '50');
         url.searchParams.set('before_id', String(oldestId));
-        const res = await fetch(url.toString());
+        const res = await fetch(url.toString(), { headers: authJsonHeaders() });
         if (!res.ok) return;
         const data = (await res.json()) as ConversationDetailsApi;
         const chunk = mapDetailToMessages(data);
@@ -323,45 +351,68 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
 
   useEffect(() => {
     return subscribe((msg) => {
-      if (msg.type !== 'inbox_message') return;
       const convId = msg.conversation_id;
-      if (typeof convId !== 'number') return;
-      const raw = msg.message;
-      if (!raw || typeof raw !== 'object') return;
-      const m = raw as Record<string, unknown>;
-      const id = Number(m.id);
-      if (!Number.isFinite(id)) return;
-      const senderType = m.sender_type === 'customer' || m.sender_type === 'agent' || m.sender_type === 'ai' ? m.sender_type : 'customer';
-      const created = typeof m.created_at === 'string' ? m.created_at : new Date().toISOString();
-      const im: InboxMessage = {
-        id,
-        content: String(m.content ?? ''),
-        sender: senderType,
-        senderName: senderType === 'agent' ? 'You' : senderType === 'customer' ? 'Customer' : 'AI',
-        timestamp: new Date(created).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        sentAt: created,
-      };
-      const viewing = selectedIdRef.current === convId;
-      if (viewing) {
+      if (msg.type === 'inbox_message') {
+        if (typeof convId !== 'number') return;
+        const raw = msg.message;
+        if (!raw || typeof raw !== 'object') return;
+        const row = raw as ConversationDetailsApi['messages'][number];
+        if (!row.id) return;
+        const im = apiMessageToInbox(row);
+        const id = im.id;
+        const viewing = selectedIdRef.current === convId;
+        if (viewing) {
+          setMessagesByConvId((prev) => {
+            const cur = prev[convId] || [];
+            if (cur.some((x) => x.id === id)) return prev;
+            return { ...prev, [convId]: [...cur, im].sort((a, b) => a.id - b.id) };
+          });
+          void syncInboxReadState(convId, id);
+        } else {
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id === convId
+                ? {
+                    ...c,
+                    unread: c.unread + 1,
+                    lastMessage: im.content,
+                    lastActivityAt: 'Just now',
+                  }
+                : c,
+            ),
+          );
+        }
+        return;
+      }
+      if (msg.type === 'inbox_message_updated' && typeof convId === 'number') {
+        const raw = msg.message;
+        if (!raw || typeof raw !== 'object') return;
+        const row = raw as ConversationDetailsApi['messages'][number];
+        const im = apiMessageToInbox(row);
         setMessagesByConvId((prev) => {
           const cur = prev[convId] || [];
-          if (cur.some((x) => x.id === im.id)) return prev;
-          return { ...prev, [convId]: [...cur, im].sort((a, b) => a.id - b.id) };
+          const idx = cur.findIndex((x) => x.id === im.id);
+          if (idx < 0) return prev;
+          const next = [...cur];
+          next[idx] = im;
+          return { ...prev, [convId]: next };
         });
-        void syncInboxReadState(convId, id);
-      } else {
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === convId
-              ? {
-                  ...c,
-                  unread: c.unread + 1,
-                  lastMessage: im.content,
-                  lastActivityAt: 'Just now',
-                }
-              : c,
-          ),
-        );
+        return;
+      }
+      if (msg.type === 'MESSAGE_DELETED' && typeof convId === 'number') {
+        const mid = Number(msg.message_id);
+        if (!Number.isFinite(mid)) return;
+        setMessagesByConvId((prev) => {
+          const cur = prev[convId] || [];
+          return {
+            ...prev,
+            [convId]: cur.map((x) =>
+              x.id === mid
+                ? { ...x, content: '[Message deleted]', deletedForEveryone: true }
+                : x,
+            ),
+          };
+        });
       }
     });
   }, [subscribe, syncInboxReadState]);
@@ -552,16 +603,51 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     }));
 
     if (typeof message.content === 'string' && message.content.trim()) {
+      const body: Record<string, unknown> = {
+        conversation_id: convId,
+        content: message.content,
+        sender_type: message.sender,
+        channel: 'whatsapp',
+      };
+      const rt = message.replyToMessageId;
+      if (typeof rt === 'number' && rt > 0) body.reply_to_message_id = rt;
       void fetch(`${API_BASE}/api/messaging/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversation_id: convId,
-          content: message.content,
-          sender_type: message.sender,
-          channel: 'whatsapp',
-        }),
-      }).then(() => {
+        headers: authJsonHeaders(),
+        body: JSON.stringify(body),
+      }).then(async (res) => {
+        if (!res.ok) {
+          setMessagesByConvId((prev) => {
+            const cur = prev[convId] || [];
+            const idx = cur.findIndex((x) => x.id === message.id);
+            if (idx < 0) return prev;
+            const next = [...cur];
+            next[idx] = { ...next[idx], sendFailed: true };
+            return { ...prev, [convId]: next };
+          });
+          return;
+        }
+        const saved = (await res.json()) as {
+          id: number;
+          created_at: string;
+          reply_to_message_id?: number | null;
+          edited_at?: string | null;
+        };
+        setMessagesByConvId((prev) => {
+          const cur = prev[convId] || [];
+          const idx = cur.findIndex((x) => x.id === message.id);
+          if (idx < 0) return prev;
+          const next = [...cur];
+          next[idx] = {
+            ...next[idx],
+            id: saved.id,
+            sentAt: saved.created_at,
+            replyToMessageId: saved.reply_to_message_id ?? next[idx].replyToMessageId,
+            editedAt: saved.edited_at ?? next[idx].editedAt,
+            messageStatus: { sent: true, delivered: false, read: false },
+          };
+          return { ...prev, [convId]: next };
+        });
         setConversations((prev) =>
           prev.map((c) =>
             c.id === convId
@@ -576,6 +662,23 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         );
       });
     }
+  }, []);
+
+  const patchInboxMessage = useCallback((convId: number, messageId: number, patch: Partial<InboxMessage>) => {
+    setMessagesByConvId((prev) => {
+      const cur = prev[convId] || [];
+      return {
+        ...prev,
+        [convId]: cur.map((m) => (m.id === messageId ? { ...m, ...patch } : m)),
+      };
+    });
+  }, []);
+
+  const removeInboxMessage = useCallback((convId: number, messageId: number) => {
+    setMessagesByConvId((prev) => ({
+      ...prev,
+      [convId]: (prev[convId] || []).filter((x) => x.id !== messageId),
+    }));
   }, []);
 
   return (
@@ -594,6 +697,8 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         getMessages,
         setMessages,
         appendMessage,
+        patchInboxMessage,
+        removeInboxMessage,
         refreshConversations,
         loadingConversationId,
         inboxHasMoreOlder,

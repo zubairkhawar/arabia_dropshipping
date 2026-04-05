@@ -2,14 +2,23 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-from fastapi import APIRouter, WebSocket, Request, Depends, HTTPException, status, Query
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, WebSocket, Request, Depends, HTTPException, status, Query, Body
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Conversation, Message, Customer, Store
+from models import (
+    Agent,
+    Conversation,
+    Customer,
+    InboxMessageReceipt,
+    Message,
+    MessageUserDeletion,
+    Store,
+    User,
+)
 from config import settings
 from services.ai_orchestrator_service.services import AIOrchestrator
 from langchain_bot import ArabiaLangChainBot
@@ -17,7 +26,16 @@ from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 from services.customer_bot_flow import format_kb_reply, process_customer_bot_message
 from services.agent_routing_service.api import assign_from_bot_flow
 from services.agent_portal_service.unread_compute import _inbox_unread_for_conversation
-from services.agent_portal_service.broadcast import push_inbox_message, push_unread_summary
+from services.agent_portal_service.broadcast import (
+    push_inbox_message,
+    push_inbox_sync_event,
+    push_unread_summary,
+)
+from services.auth_service.api import get_current_user, get_current_user_optional
+from services.messaging_service.inbox_receipts import (
+    ensure_receipt_for_customer_message,
+    get_receipt_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +70,7 @@ class MessageCreate(BaseModel):
     content: str
     sender_type: str  # customer, agent, ai
     channel: str  # whatsapp, web, portal
+    reply_to_message_id: Optional[int] = None
 
 
 class MessageOut(BaseModel):
@@ -62,6 +81,12 @@ class MessageOut(BaseModel):
     sender_id: Optional[int]
     language: Optional[str]
     created_at: datetime
+    reply_to_message_id: Optional[int] = None
+    edited_at: Optional[datetime] = None
+
+
+class MessageEditIn(BaseModel):
+    content: str
 
 
 class ConversationStatusUpdate(BaseModel):
@@ -100,6 +125,110 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
         last_activity_at=last_msg.created_at if last_msg else c.updated_at,
         unread_count=unread_count,
     )
+
+
+def _filter_hidden_inbox_ids(db: Session, user_id: int, conversation_id: int) -> set[int]:
+    mid_rows = db.query(Message.id).filter(Message.conversation_id == conversation_id).all()
+    ids = [r[0] for r in mid_rows]
+    if not ids:
+        return set()
+    hidden = (
+        db.query(MessageUserDeletion.message_id)
+        .filter(
+            MessageUserDeletion.user_id == user_id,
+            MessageUserDeletion.channel == "inbox",
+            MessageUserDeletion.message_id.in_(ids),
+        )
+        .all()
+    )
+    return {h[0] for h in hidden}
+
+
+def _inbox_message_api_dict(
+    m: Message,
+    conv: Conversation,
+    receipt: Optional[InboxMessageReceipt],
+    reply_row: Optional[Message],
+) -> Dict[str, Any]:
+    deleted = bool(m.deleted_for_everyone_at)
+    content = "[Message deleted]" if deleted else m.content
+    if m.sender_type == "agent":
+        delivered = m.wa_delivered_at is not None
+        read = False
+    else:
+        delivered = receipt.delivered_at is not None if receipt else False
+        read = receipt.read_at is not None if receipt else False
+    out: Dict[str, Any] = {
+        "id": m.id,
+        "conversation_id": m.conversation_id,
+        "content": content,
+        "sender_type": m.sender_type,
+        "sender_id": m.sender_id,
+        "language": m.language,
+        "created_at": m.created_at,
+        "reply_to_message_id": m.reply_to_message_id,
+        "edited_at": m.edited_at,
+        "deleted_for_everyone_at": m.deleted_for_everyone_at,
+        "status": {"sent": True, "delivered": delivered, "read": read},
+    }
+    if m.reply_to_message_id and reply_row:
+        txt = reply_row.content or ""
+        out["reply_preview"] = {
+            "id": reply_row.id,
+            "sender_type": reply_row.sender_type,
+            "content": txt[:200] + ("…" if len(txt) > 200 else ""),
+        }
+    return out
+
+
+def _serialize_inbox_messages(
+    db: Session,
+    rows: List[Message],
+    conv: Conversation,
+    viewer_user_id: Optional[int],
+) -> List[Dict[str, Any]]:
+    hidden: set[int] = set()
+    if viewer_user_id:
+        hidden = _filter_hidden_inbox_ids(db, viewer_user_id, conv.id)
+    visible = [m for m in rows if m.id not in hidden]
+    if not visible:
+        return []
+    mids = [m.id for m in visible]
+    reply_ids = list({m.reply_to_message_id for m in visible if m.reply_to_message_id})
+    reply_map: Dict[int, Message] = {}
+    if reply_ids:
+        for rm in db.query(Message).filter(Message.id.in_(reply_ids)).all():
+            reply_map[rm.id] = rm
+    rec_map = get_receipt_map(db, mids, conv.agent_id)
+    return [
+        _inbox_message_api_dict(
+            m,
+            conv,
+            rec_map.get(m.id),
+            reply_map.get(m.reply_to_message_id) if m.reply_to_message_id else None,
+        )
+        for m in visible
+    ]
+
+
+def _message_dict_for_ws(db: Session, m: Message) -> Dict[str, Any]:
+    conv = db.query(Conversation).filter(Conversation.id == m.conversation_id).first()
+    if not conv:
+        return {
+            "id": m.id,
+            "conversation_id": m.conversation_id,
+            "content": m.content,
+            "sender_type": m.sender_type,
+            "sender_id": m.sender_id,
+            "language": m.language,
+            "created_at": m.created_at,
+            "status": {"sent": True, "delivered": False, "read": False},
+        }
+    rec = get_receipt_map(db, [m.id], conv.agent_id).get(m.id)
+    reply_row = None
+    if m.reply_to_message_id:
+        reply_row = db.query(Message).filter(Message.id == m.reply_to_message_id).first()
+    return _inbox_message_api_dict(m, conv, rec, reply_row)
 
 
 def _extract_meta_text_message(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -285,18 +414,8 @@ async def get_conversation(
             .limit(500)
             .all()
         )
-        payload = [
-            {
-                "id": m.id,
-                "conversation_id": m.conversation_id,
-                "content": m.content,
-                "sender_type": m.sender_type,
-                "sender_id": m.sender_id,
-                "language": m.language,
-                "created_at": m.created_at,
-            }
-            for m in rows
-        ]
+        viewer_id = current_user.id if current_user else None
+        payload = _serialize_inbox_messages(db, rows, conversation, viewer_id)
         return {
             "conversation": {
                 "id": conversation.id,
@@ -342,6 +461,8 @@ async def get_conversation(
             )
             has_more = older is not None
 
+    viewer_id = current_user.id if current_user else None
+    payload = _serialize_inbox_messages(db, rows, conversation, viewer_id)
     return {
         "conversation": {
             "id": conversation.id,
@@ -354,18 +475,7 @@ async def get_conversation(
             "created_at": conversation.created_at,
             "updated_at": conversation.updated_at,
         },
-        "messages": [
-            {
-                "id": m.id,
-                "conversation_id": m.conversation_id,
-                "content": m.content,
-                "sender_type": m.sender_type,
-                "sender_id": m.sender_id,
-                "language": m.language,
-                "created_at": m.created_at,
-            }
-            for m in rows
-        ],
+        "messages": payload,
         "has_more_older": has_more,
     }
 
@@ -460,6 +570,7 @@ async def send_message(
         sender_type=message.sender_type,
         sender_id=sender_id,
         created_at=datetime.utcnow(),
+        reply_to_message_id=message.reply_to_message_id,
     )
     conversation.updated_at = datetime.utcnow()
 
@@ -467,6 +578,10 @@ async def send_message(
     db.add(conversation)
     db.commit()
     db.refresh(msg)
+
+    if msg.sender_type == "customer":
+        ensure_receipt_for_customer_message(db, msg)
+        db.commit()
 
     if conversation.agent_id is not None:
         await push_unread_summary(db, conversation.tenant_id, conversation.agent_id)
@@ -479,6 +594,8 @@ async def send_message(
         sender_id=msg.sender_id,
         language=msg.language,
         created_at=msg.created_at,
+        reply_to_message_id=msg.reply_to_message_id,
+        edited_at=msg.edited_at,
     )
 
 
@@ -532,6 +649,151 @@ async def send_conversation_to_ai(
     _ = conversation.customer
     _ = conversation.messages
     return _build_conversation_summary(conversation)
+
+
+@router.patch("/messages/{message_id}", response_model=MessageOut)
+async def patch_inbox_message(
+    message_id: int,
+    payload: MessageEditIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    m = db.query(Message).filter(Message.id == message_id).first()
+    if not m:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    conv = db.query(Conversation).filter(Conversation.id == m.conversation_id).first()
+    if not conv or conv.tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    if m.deleted_for_everyone_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message was deleted")
+    text = (payload.content or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Content required")
+    role = (current_user.role or "").lower()
+    ag = (
+        db.query(Agent)
+        .filter(Agent.user_id == current_user.id, Agent.tenant_id == conv.tenant_id)
+        .first()
+    )
+    allowed = role == "admin" or (
+        ag is not None and m.sender_type == "agent" and m.sender_id == ag.id
+    )
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit this message")
+    m.content = text
+    m.edited_at = datetime.utcnow()
+    db.add(m)
+    db.commit()
+    db.refresh(m)
+    if conv.agent_id:
+        rec = get_receipt_map(db, [m.id], conv.agent_id).get(m.id)
+        reply_row = None
+        if m.reply_to_message_id:
+            reply_row = db.query(Message).filter(Message.id == m.reply_to_message_id).first()
+        msg_dict = _inbox_message_api_dict(m, conv, rec, reply_row)
+        await push_inbox_sync_event(
+            db,
+            conv.tenant_id,
+            conv.agent_id,
+            {"type": "inbox_message_updated", "conversation_id": conv.id, "message": msg_dict},
+        )
+    return MessageOut(
+        id=m.id,
+        conversation_id=m.conversation_id,
+        content=m.content,
+        sender_type=m.sender_type,
+        sender_id=m.sender_id,
+        language=m.language,
+        created_at=m.created_at,
+        reply_to_message_id=m.reply_to_message_id,
+        edited_at=m.edited_at,
+    )
+
+
+@router.delete("/messages/{message_id}/for-me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_inbox_for_me(
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    m = db.query(Message).filter(Message.id == message_id).first()
+    if not m:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    conv = db.query(Conversation).filter(Conversation.id == m.conversation_id).first()
+    if not conv or conv.tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    exists = (
+        db.query(MessageUserDeletion)
+        .filter(
+            MessageUserDeletion.message_id == message_id,
+            MessageUserDeletion.user_id == current_user.id,
+            MessageUserDeletion.channel == "inbox",
+        )
+        .first()
+    )
+    if not exists:
+        db.add(
+            MessageUserDeletion(
+                channel="inbox",
+                message_id=message_id,
+                user_id=current_user.id,
+                deleted_by_role=(current_user.role or "").lower(),
+            )
+        )
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/messages/{message_id}/for-everyone", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_inbox_for_everyone(
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    m = db.query(Message).filter(Message.id == message_id).first()
+    if not m:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    conv = db.query(Conversation).filter(Conversation.id == m.conversation_id).first()
+    if not conv or conv.tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    if m.deleted_for_everyone_at:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    role = (current_user.role or "").lower()
+    ag = (
+        db.query(Agent)
+        .filter(Agent.user_id == current_user.id, Agent.tenant_id == conv.tenant_id)
+        .first()
+    )
+    allowed = False
+    if role == "admin":
+        allowed = True
+    elif ag and m.sender_type == "agent" and m.sender_id == ag.id:
+        if (datetime.utcnow() - m.created_at).total_seconds() <= 300:
+            allowed = True
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete this message for everyone"
+        )
+    prev = m.content or ""
+    meta = dict(m.message_metadata or {})
+    meta["deleted_original_content"] = prev
+    m.message_metadata = meta
+    m.content = "[Message deleted]"
+    m.deleted_for_everyone_at = datetime.utcnow()
+    db.add(m)
+    db.commit()
+    if conv.agent_id:
+        await push_inbox_sync_event(
+            db,
+            conv.tenant_id,
+            conv.agent_id,
+            {
+                "type": "MESSAGE_DELETED",
+                "conversation_id": conv.id,
+                "message_id": m.id,
+            },
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/whatsapp/webhook")
@@ -604,20 +866,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         db.add(conversation)
         db.commit()
         db.refresh(customer_msg)
+        ensure_receipt_for_customer_message(db, customer_msg)
+        db.commit()
         await push_inbox_message(
             db,
             tenant_id,
             conversation.agent_id,
             conversation.id,
-            {
-                "id": customer_msg.id,
-                "conversation_id": customer_msg.conversation_id,
-                "content": customer_msg.content,
-                "sender_type": customer_msg.sender_type,
-                "sender_id": customer_msg.sender_id,
-                "language": customer_msg.language,
-                "created_at": customer_msg.created_at,
-            },
+            _message_dict_for_ws(db, customer_msg),
         )
         return {
             "status": "ok",
@@ -720,21 +976,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     db.add(conversation)
     db.commit()
     db.refresh(customer_msg)
+    db.refresh(ai_msg)
+    ensure_receipt_for_customer_message(db, customer_msg)
+    db.commit()
+
     if conversation.agent_id:
         await push_inbox_message(
             db,
             tenant_id,
             conversation.agent_id,
             conversation.id,
-            {
-                "id": customer_msg.id,
-                "conversation_id": customer_msg.conversation_id,
-                "content": customer_msg.content,
-                "sender_type": customer_msg.sender_type,
-                "sender_id": customer_msg.sender_id,
-                "language": customer_msg.language,
-                "created_at": customer_msg.created_at,
-            },
+            _message_dict_for_ws(db, customer_msg),
         )
 
     wa_response: Dict[str, Any] | None = None
@@ -754,6 +1006,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                     from_phone[-6:] if from_phone else "?",
                     conversation.id,
                 )
+                ai_msg.wa_delivered_at = datetime.utcnow()
+                db.add(ai_msg)
+                db.commit()
+                db.refresh(ai_msg)
             except Exception:
                 logger.exception(
                     "WhatsApp send_text_message failed (conversation_id=%s)",

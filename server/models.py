@@ -144,8 +144,39 @@ class Message(Base):
     language = Column(String, nullable=True)
     message_metadata = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    reply_to_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
+    edited_at = Column(DateTime, nullable=True)
+    deleted_for_everyone_at = Column(DateTime, nullable=True)
+    wa_delivered_at = Column(DateTime, nullable=True)  # outbound to WhatsApp accepted by API
     
     conversation = relationship("Conversation", back_populates="messages")
+
+
+class MessageUserDeletion(Base):
+    """Soft delete: hide message only for this user (inbox / team / dm)."""
+
+    __tablename__ = "message_user_deletions"
+    __table_args__ = (UniqueConstraint("channel", "message_id", "user_id", name="uq_msg_del_user"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    channel = Column(String, nullable=False, index=True)  # inbox | team | dm
+    message_id = Column(Integer, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    deleted_by_role = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class InboxMessageReceipt(Base):
+    """Delivery/read tracking for inbox messages (per assigned agent)."""
+
+    __tablename__ = "inbox_message_receipts"
+    __table_args__ = (UniqueConstraint("message_id", "agent_id", name="uq_inbox_msg_receipt"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("messages.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    delivered_at = Column(DateTime, nullable=True)
+    read_at = Column(DateTime, nullable=True)
 
 
 # Routing Models
@@ -288,6 +319,20 @@ class InternalDmMessage(Base):
     sender_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    reply_to_message_id = Column(Integer, ForeignKey("internal_dm_messages.id"), nullable=True, index=True)
+    edited_at = Column(DateTime, nullable=True)
+    deleted_for_everyone_at = Column(DateTime, nullable=True)
+
+
+class DmMessageReceipt(Base):
+    __tablename__ = "dm_message_receipts"
+    __table_args__ = (UniqueConstraint("message_id", "recipient_agent_id", name="uq_dm_msg_receipt"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("internal_dm_messages.id"), nullable=False, index=True)
+    recipient_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    delivered_at = Column(DateTime, nullable=True)
+    read_at = Column(DateTime, nullable=True)
 
 
 class AgentAttendanceSession(Base):
@@ -328,6 +373,20 @@ class TeamChannelMessage(Base):
     posted_by_admin = Column(Boolean, nullable=False, default=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    reply_to_message_id = Column(Integer, ForeignKey("team_channel_messages.id"), nullable=True, index=True)
+    edited_at = Column(DateTime, nullable=True)
+    deleted_for_everyone_at = Column(DateTime, nullable=True)
+
+
+class TeamMessageReceipt(Base):
+    __tablename__ = "team_message_receipts"
+    __table_args__ = (UniqueConstraint("message_id", "agent_id", name="uq_team_msg_receipt"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("team_channel_messages.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    delivered_at = Column(DateTime, nullable=True)
+    read_at = Column(DateTime, nullable=True)
 
 
 class TeamChannelMemberReadState(Base):

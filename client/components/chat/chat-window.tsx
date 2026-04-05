@@ -29,6 +29,8 @@ import {
   Play,
   Pause,
   UserPlus,
+  Pencil,
+  Search,
 } from 'lucide-react';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useInboxConversations } from '@/contexts/InboxConversationsContext';
@@ -71,6 +73,11 @@ interface Message {
   channelTeamId?: number;
   /** Parsed from team JSON payload: agent ids @mentioned in this message. */
   mentionAgentIds?: number[];
+  replyToMessageId?: number;
+  editedAt?: string;
+  deletedForEveryone?: boolean;
+  messageStatus?: { sent: boolean; delivered: boolean; read: boolean };
+  sendFailed?: boolean;
 }
 
 interface TeamChannelMessageRow {
@@ -327,8 +334,44 @@ export function ChatWindow({
     if (!isInboxWithSelection || isInternalChat) return;
     const convId = inboxConv!.selectedId!;
     const stored = inboxConv.getMessages(convId);
-    setMessages(stored as Message[]);
+    setMessages((prev) => {
+      const prevById = new Map(prev.map((m) => [m.id, m]));
+      return stored.map(
+        (im): Message => ({
+          id: im.id,
+          content: im.content,
+          sender: im.sender,
+          senderName: im.senderName,
+          timestamp: im.timestamp,
+          sentAt: im.sentAt,
+          replyTo: im.replyTo,
+          replyToMessageId: im.replyToMessageId,
+          editedAt: im.editedAt,
+          deletedForEveryone: im.deletedForEveryone,
+          messageStatus: im.messageStatus,
+          sendFailed: im.sendFailed,
+          reactions: prevById.get(im.id)?.reactions,
+        }),
+      );
+    });
   }, [isInboxWithSelection, isInternalChat, inboxConv?.selectedId, inboxMessageCount]);
+
+  useEffect(() => {
+    if (!isInboxPage || isInternalChat || inboxConv?.selectedId == null) return;
+    const msgs = inboxConv.getMessages(inboxConv.selectedId);
+    if (msgs.length < inboxLastLenRef.current) {
+      inboxLastLenRef.current = msgs.length;
+      return;
+    }
+    if (msgs.length > inboxLastLenRef.current) {
+      const added = msgs.slice(inboxLastLenRef.current);
+      inboxLastLenRef.current = msgs.length;
+      const last = added[added.length - 1];
+      if (last && (last.sender === 'customer' || last.sender === 'ai') && !inboxNearBottomRef.current) {
+        setInboxNewBelowOpen(true);
+      }
+    }
+  }, [isInboxPage, isInternalChat, inboxConv, inboxMessageCount]);
 
   useEffect(() => {
     if (!isInternalChat || !isDmPage || !dmSlug) return;
@@ -399,12 +442,16 @@ export function ChatWindow({
   const BOTTOM_THRESHOLD_PX = 80;
   const teamNearBottomRef = useRef(true);
   const dmNearBottomRef = useRef(true);
+  const inboxNearBottomRef = useRef(true);
+  const inboxLastLenRef = useRef(0);
   const lastSyncedInboxReadRef = useRef<{ convId: number; id: number } | null>(null);
   const teamLastSyncIsoRef = useRef<string | null>(null);
   const dmLastSyncIsoRef = useRef<string | null>(null);
 
   useEffect(() => {
     lastSyncedInboxReadRef.current = null;
+    inboxLastLenRef.current = 0;
+    setInboxNewBelowOpen(false);
   }, [inboxConv?.selectedId]);
   const initialScrollThreadKeyDoneRef = useRef<string>('');
   const [teamHasMoreOlder, setTeamHasMoreOlder] = useState(false);
@@ -412,6 +459,39 @@ export function ChatWindow({
   const [teamLoadingOlder, setTeamLoadingOlder] = useState(false);
   const [teamNewBelowOpen, setTeamNewBelowOpen] = useState(false);
   const [dmNewBelowOpen, setDmNewBelowOpen] = useState(false);
+  const [inboxNewBelowOpen, setInboxNewBelowOpen] = useState(false);
+  const [copyToastVisible, setCopyToastVisible] = useState(false);
+  const copyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [threadSearchOpen, setThreadSearchOpen] = useState(false);
+  const [threadSearchQuery, setThreadSearchQuery] = useState('');
+  const [editingInboxMessage, setEditingInboxMessage] = useState<{ id: number; text: string } | null>(null);
+
+  useEffect(() => {
+    const inThread =
+      (isInboxPage && hasSelectedConversation && !isInternalChat) ||
+      (isInternalChat && (isTeamChannel || isDmPage));
+    const onDocKey = (e: KeyboardEvent) => {
+      if (!inThread) return;
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setThreadSearchOpen(true);
+      }
+      if (e.key === 'Escape' && threadSearchOpen) {
+        setThreadSearchOpen(false);
+        setThreadSearchQuery('');
+      }
+    };
+    window.addEventListener('keydown', onDocKey);
+    return () => window.removeEventListener('keydown', onDocKey);
+  }, [
+    isTeamChannel,
+    isDmPage,
+    isInboxPage,
+    hasSelectedConversation,
+    isInternalChat,
+    threadSearchOpen,
+  ]);
+
   const [stickyDate, setStickyDate] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -957,6 +1037,9 @@ export function ChatWindow({
       return message.senderName === 'You';
     }
     if (isInternalChat) return message.senderName === 'You';
+    if (isInboxPage && !isInternalChat) {
+      return message.sender === 'agent' || message.sender === 'ai';
+    }
     return message.sender === 'customer' || message.senderName === 'You';
   };
 
@@ -1122,6 +1205,11 @@ export function ChatWindow({
   const VOICE_WAVEFORM_BARS = [40, 70, 45, 85, 55, 65, 50, 90, 60, 75, 48, 82, 52, 68];
 
   const filteredMessages = messages.filter((m) => !deletedForMeIds.includes(m.id));
+  const threadSearchTrim = threadSearchQuery.trim().toLowerCase();
+  const threadSearchMatches =
+    threadSearchTrim.length > 0
+      ? filteredMessages.filter((m) => m.content.toLowerCase().includes(threadSearchTrim))
+      : [];
   const messageGroups = (() => {
     const list: { dateKey: string; label: string; messages: Message[] }[] = [];
     let currentKey: string | null = null;
@@ -1212,9 +1300,11 @@ export function ChatWindow({
     const near = distBottom <= BOTTOM_THRESHOLD_PX;
     teamNearBottomRef.current = near;
     dmNearBottomRef.current = near;
+    inboxNearBottomRef.current = near;
     if (near) {
       setTeamNewBelowOpen(false);
       setDmNewBelowOpen(false);
+      setInboxNewBelowOpen(false);
       if (isDmPage && dmSlug) clearDmUnread(dmSlug);
     }
     if (
@@ -1227,8 +1317,16 @@ export function ChatWindow({
       !inboxLoadingOlder &&
       scrollTop < 100
     ) {
+      const prevH = el.scrollHeight;
+      const prevT = el.scrollTop;
       setInboxLoadingOlder(true);
-      void inboxConv.loadOlderInboxMessages(inboxConv.selectedId).finally(() => setInboxLoadingOlder(false));
+      void inboxConv.loadOlderInboxMessages(inboxConv.selectedId).finally(() => {
+        setInboxLoadingOlder(false);
+        requestAnimationFrame(() => {
+          const s = scrollContainerRef.current;
+          if (s) s.scrollTop = s.scrollHeight - prevH + prevT;
+        });
+      });
     }
     if (isTeamChannel && teamHasMoreOlder && !teamLoadingOlder && scrollTop < 100) {
       void loadTeamOlderMessages();
@@ -1236,7 +1334,13 @@ export function ChatWindow({
     if (isDmPage && dmSlug && dmHasMoreOlder(dmSlug) && !loadingOlderDmSlug && scrollTop < 100) {
       void loadOlderDmMessages(dmSlug);
     }
-    if (near && isInboxPage && !isInternalChat && inboxConv?.selectedId != null && inboxConv.syncInboxReadState) {
+    if (
+      near &&
+      isInboxPage &&
+      !isInternalChat &&
+      inboxConv?.selectedId != null &&
+      inboxConv.syncInboxReadState
+    ) {
       const sid = inboxConv.selectedId;
       const msgs = inboxConv.getMessages(sid);
       const maxId = msgs.length ? Math.max(...msgs.map((m) => m.id)) : 0;
@@ -1274,7 +1378,13 @@ export function ChatWindow({
   }, [handleChatScroll, filteredMessages.length, teamEvents.length]);
 
   const initialScrollKey =
-    isTeamChannel && teamId ? `team:${teamId}` : isDmPage && dmSlug ? `dm:${dmSlug}` : '';
+    isTeamChannel && teamId
+      ? `team:${teamId}`
+      : isDmPage && dmSlug
+        ? `dm:${dmSlug}`
+        : isInboxPage && !isInternalChat && inboxConv?.selectedId != null
+          ? `inbox:${inboxConv.selectedId}`
+          : '';
 
   useLayoutEffect(() => {
     if (!initialScrollKey || showChatThreadSkeleton || filteredMessages.length === 0) return;
@@ -1285,31 +1395,143 @@ export function ChatWindow({
     initialScrollThreadKeyDoneRef.current = initialScrollKey;
     teamNearBottomRef.current = true;
     dmNearBottomRef.current = true;
+    inboxNearBottomRef.current = true;
     if (initialScrollKey.startsWith('dm:') && dmSlug) clearDmUnread(dmSlug);
   }, [initialScrollKey, showChatThreadSkeleton, filteredMessages.length, dmSlug, clearDmUnread]);
 
   useEffect(() => {
     if (!initialScrollKey) return;
-    if (!teamNearBottomRef.current) return;
+    if (
+      !teamNearBottomRef.current &&
+      !dmNearBottomRef.current &&
+      !inboxNearBottomRef.current
+    )
+      return;
     const el = scrollContainerRef.current;
     if (!el) return;
     requestAnimationFrame(() => {
-      if (!teamNearBottomRef.current) return;
+      if (
+        !teamNearBottomRef.current &&
+        !dmNearBottomRef.current &&
+        !inboxNearBottomRef.current
+      )
+        return;
       el.scrollTop = el.scrollHeight;
     });
   }, [filteredMessages.length, initialScrollKey]);
 
-  const deleteMessage = (id: number) => {
-    setMessages((prev) => prev.filter((m) => m.id !== id));
+  const flashCopyToast = useCallback(() => {
+    if (copyToastTimerRef.current) clearTimeout(copyToastTimerRef.current);
+    setCopyToastVisible(true);
+    copyToastTimerRef.current = setTimeout(() => {
+      setCopyToastVisible(false);
+      copyToastTimerRef.current = null;
+    }, 2000);
+  }, []);
+
+  const deleteMessage = async (id: number) => {
+    if (isInboxPage && !isInternalChat) {
+      try {
+        const res = await fetch(`${API_BASE}/api/messaging/messages/${id}/for-everyone`, {
+          method: 'DELETE',
+          headers: teamChannelJsonHeaders(),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          addSystemNote(
+            typeof err.detail === 'string' ? err.detail : 'Could not delete for everyone.',
+          );
+          setActiveMessageMenuId(null);
+          return;
+        }
+        if (inboxConv?.selectedId != null) {
+          inboxConv.patchInboxMessage(inboxConv.selectedId, id, {
+            content: '[Message deleted]',
+            deletedForEveryone: true,
+          });
+        }
+      } catch {
+        addSystemNote('Could not delete for everyone.');
+        setActiveMessageMenuId(null);
+        return;
+      }
+    } else {
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+    }
     setStarredIds((prev) => prev.filter((mId) => mId !== id));
     setDeletedForMeIds((prev) => prev.filter((mId) => mId !== id));
     setActiveMessageMenuId(null);
   };
 
-  const deleteForMe = (id: number) => {
+  const deleteForMe = async (id: number) => {
+    if (isInboxPage && !isInternalChat) {
+      try {
+        const res = await fetch(`${API_BASE}/api/messaging/messages/${id}/for-me`, {
+          method: 'DELETE',
+          headers: teamChannelJsonHeaders(),
+        });
+        if (!res.ok) {
+          addSystemNote('Could not remove message.');
+          setActiveMessageMenuId(null);
+          return;
+        }
+      } catch {
+        addSystemNote('Could not remove message.');
+        setActiveMessageMenuId(null);
+        return;
+      }
+    }
     setDeletedForMeIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
     setStarredIds((prev) => prev.filter((mId) => mId !== id));
     setActiveMessageMenuId(null);
+  };
+
+  const retryFailedInboxSend = (m: Message) => {
+    if (!inboxConv?.selectedId || !isInboxPage || isInternalChat) return;
+    const convId = inboxConv.selectedId;
+    inboxConv.removeInboxMessage(convId, m.id);
+    const now = new Date();
+    const nextId = Date.now();
+    const im: InboxMessage = {
+      id: nextId,
+      content: m.content,
+      sender: 'agent',
+      senderName: 'You',
+      timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      sentAt: now.toISOString(),
+      replyTo: m.replyTo,
+      replyToMessageId: m.replyToMessageId,
+      messageStatus: { sent: true, delivered: false, read: false },
+    };
+    inboxConv.appendMessage(convId, im);
+  };
+
+  const submitInboxEdit = async () => {
+    if (!editingInboxMessage) return;
+    const convId = inboxConv?.selectedId;
+    if (convId == null || !inboxConv) return;
+    const { id, text } = editingInboxMessage;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/messaging/messages/${id}`, {
+        method: 'PATCH',
+        headers: teamChannelJsonHeaders(),
+        body: JSON.stringify({ content: trimmed }),
+      });
+      if (!res.ok) {
+        addSystemNote('Could not save edit.');
+        return;
+      }
+      const saved = (await res.json()) as { edited_at?: string | null; content?: string };
+      inboxConv.patchInboxMessage(convId, id, {
+        content: saved.content ?? trimmed,
+        editedAt: saved.edited_at ?? new Date().toISOString(),
+      });
+      setEditingInboxMessage(null);
+    } catch {
+      addSystemNote('Could not save edit.');
+    }
   };
 
   const sendMessage = async () => {
@@ -1385,15 +1607,31 @@ export function ChatWindow({
       }
       return;
     }
+    if (isInboxPage && !isInternalChat && inboxConv?.selectedId != null) {
+      const im: InboxMessage = {
+        id: nextId,
+        content: newMsg.content,
+        sender: 'agent',
+        senderName: 'You',
+        timestamp: newMsg.timestamp,
+        sentAt: newMsg.sentAt,
+        replyTo: replyingTo ?? undefined,
+        replyToMessageId: replyingTo?.id,
+        messageStatus: { sent: true, delivered: false, read: false },
+      };
+      inboxConv.appendMessage(inboxConv.selectedId, im);
+      inboxConv.markAgentReplied(inboxConv.selectedId);
+      setInputValue('');
+      setReplyingTo(null);
+      setPendingAttachment(null);
+      setShowMentionDropdown(false);
+      return;
+    }
     setMessages((prev) => [...prev, newMsg]);
     setInputValue('');
     setReplyingTo(null);
     setPendingAttachment(null);
     setShowMentionDropdown(false);
-    if (inboxConv?.selectedId != null) {
-      inboxConv.appendMessage(inboxConv.selectedId, newMsg as InboxMessage);
-      inboxConv.markAgentReplied(inboxConv.selectedId);
-    }
   };
 
   const startVoiceRecording = () => {
@@ -1557,6 +1795,10 @@ export function ChatWindow({
     }
   };
 
+  const showThreadSearchBar =
+    (isInboxPage && hasSelectedConversation && !isInternalChat) ||
+    (isInternalChat && (isTeamChannel || isDmPage));
+
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Header */}
@@ -1683,6 +1925,55 @@ export function ChatWindow({
           )}
         </div>
       </div>
+
+      {threadSearchOpen && showThreadSearchBar && (
+        <div className="shrink-0 border-b border-border bg-[#f7f8fa]">
+          <div className="flex items-center gap-2 px-4 py-2">
+            <Search className="h-4 w-4 shrink-0 text-[#667781]" aria-hidden />
+            <input
+              type="search"
+              autoFocus
+              className="min-w-0 flex-1 rounded-lg border border-black/[0.08] bg-white px-3 py-2 text-sm text-[#111b21] outline-none focus:border-[#53bdeb]"
+              placeholder="Search in this chat (⌘F / Ctrl+F)"
+              value={threadSearchQuery}
+              onChange={(e) => setThreadSearchQuery(e.target.value)}
+              aria-label="Search messages in thread"
+            />
+            <button
+              type="button"
+              className="shrink-0 text-sm font-medium text-primary"
+              onClick={() => {
+                setThreadSearchOpen(false);
+                setThreadSearchQuery('');
+              }}
+            >
+              Close
+            </button>
+          </div>
+          {threadSearchTrim.length > 0 && (
+            <div className="max-h-28 overflow-y-auto border-t border-black/[0.06] px-2 py-1">
+              {threadSearchMatches.length === 0 ? (
+                <p className="px-2 py-2 text-xs text-[#667781]">No matches</p>
+              ) : (
+                threadSearchMatches.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className="w-full truncate rounded-md px-2 py-1.5 text-left text-xs text-[#111b21] hover:bg-white"
+                    onClick={() => {
+                      scrollToMessage(m.id);
+                      setThreadSearchOpen(false);
+                    }}
+                  >
+                    {m.content.slice(0, 120)}
+                    {m.content.length > 120 ? '…' : ''}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Transfer chat modal */}
       {showTransferModal && (
@@ -1830,6 +2121,11 @@ export function ChatWindow({
             <span className="text-xs text-[#667781]">Loading older messages…</span>
           </div>
         )}
+        {!showChatThreadSkeleton && isInboxPage && !isInternalChat && inboxLoadingOlder && (
+          <div className="flex justify-center py-2 shrink-0">
+            <span className="text-xs text-[#667781]">Loading older messages…</span>
+          </div>
+        )}
         {!showChatThreadSkeleton && selectedConv?.reopenedAt && selectedConv.closedAt && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             You closed this conversation on {selectedConv.closedAt}. The customer has messaged again.
@@ -1871,7 +2167,18 @@ export function ChatWindow({
                 </div>
               );
             })}
-            {group.messages.map((message) => {
+            {group.messages.map((message, mi) => {
+              const prevInGroup = mi > 0 ? group.messages[mi - 1] : null;
+              const gapMin =
+                prevInGroup?.sentAt && message.sentAt
+                  ? (new Date(message.sentAt).getTime() - new Date(prevInGroup.sentAt).getTime()) /
+                    60000
+                  : Infinity;
+              const groupWithPrev =
+                !!prevInGroup &&
+                prevInGroup.sender === message.sender &&
+                prevInGroup.senderName === message.senderName &&
+                gapMin <= 5;
               const isSystemMessage =
                 message.senderName === 'System' ||
                 message.content.startsWith('Conversation sent back to AI') ||
@@ -1930,9 +2237,13 @@ export function ChatWindow({
                       <Smile className="h-5 w-5" />
                     </button>
                   )}
-                  {isTeamChannel && !outgoing && (
-                    <div className="mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06]">
-                      {message.senderName === 'You' && agentAvatarUrl ? (
+                  {(isTeamChannel || (isInboxPage && !isInternalChat)) && !outgoing && (
+                    <div
+                      className={`mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06] ${
+                        groupWithPrev ? 'invisible pointer-events-none' : ''
+                      }`}
+                    >
+                      {isTeamChannel && message.senderName === 'You' && agentAvatarUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={agentAvatarUrl} alt="" className="h-full w-full object-cover" />
                       ) : (
@@ -1980,7 +2291,7 @@ export function ChatWindow({
                             </p>
                           </button>
                         )}
-                        {!outgoing && (
+                        {!outgoing && !groupWithPrev && (
                           <p
                             className={`mb-0.5 text-[13px] font-semibold ${whatsappSenderNameClass(message.senderName)}`}
                           >
@@ -2077,15 +2388,45 @@ export function ChatWindow({
                             )}
                           </div>
                         )}
-                        <p
-                          className={`whitespace-pre-wrap break-words leading-relaxed text-[#111b21] ${emojiOnly ? 'text-5xl' : 'text-sm'}`}
-                        >
-                          {isTeamChannel ? renderTeamMessageBody(message.content) : message.content}
-                        </p>
-                        <div className="mt-1 flex items-center justify-end gap-2">
+                        {message.sendFailed && (
+                          <p className="mb-1 text-xs font-medium text-status-error">Failed to send</p>
+                        )}
+                        {message.deletedForEveryone || message.content === '[Message deleted]' ? (
+                          <p className="whitespace-pre-wrap text-sm italic text-[#667781]">
+                            This message was deleted.
+                          </p>
+                        ) : (
+                          <p
+                            className={`whitespace-pre-wrap break-words leading-relaxed text-[#111b21] ${emojiOnly ? 'text-5xl' : 'text-sm'}`}
+                          >
+                            {isTeamChannel ? renderTeamMessageBody(message.content) : message.content}
+                          </p>
+                        )}
+                        <div className="mt-1 flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
+                          {message.editedAt && (
+                            <span className="text-[10px] text-[#667781]">(edited)</span>
+                          )}
                           <span className="text-[11px] text-[#667781]">
                             {formatMessageTime(message.sentAt, message.timestamp)}
                           </span>
+                          {isInboxPage && !isInternalChat && outgoing && message.messageStatus && (
+                            <span className="inline-flex items-center" aria-hidden>
+                              <Check
+                                className={`h-3.5 w-3.5 stroke-[2.5] ${
+                                  message.messageStatus.delivered || message.messageStatus.read
+                                    ? 'text-[#8696a0]'
+                                    : 'text-[#8696a0]/70'
+                                }`}
+                              />
+                              {(message.messageStatus.delivered || message.messageStatus.read) && (
+                                <Check
+                                  className={`-ml-1.5 h-3.5 w-3.5 stroke-[2.5] ${
+                                    message.messageStatus.read ? 'text-[#53bdeb]' : 'text-[#8696a0]'
+                                  }`}
+                                />
+                              )}
+                            </span>
+                          )}
                           {isTeamChannel && outgoing && receiptPeers.length > 0 && (
                             <span className="relative inline-flex items-center">
                               <button
@@ -2325,7 +2666,10 @@ export function ChatWindow({
                           className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                           onClick={() => {
                             if (navigator.clipboard?.writeText) {
-                              navigator.clipboard.writeText(message.content).catch(() => undefined);
+                              void navigator.clipboard
+                                .writeText(message.content)
+                                .then(() => flashCopyToast())
+                                .catch(() => undefined);
                             }
                             setActiveMessageMenuId(null);
                           }}
@@ -2333,6 +2677,38 @@ export function ChatWindow({
                           <Copy className="h-4 w-4 text-[#54656f]" />
                           Copy
                         </button>
+                        {isInboxPage && !isInternalChat && message.sendFailed && (
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
+                            onClick={() => {
+                              retryFailedInboxSend(message);
+                              setActiveMessageMenuId(null);
+                            }}
+                          >
+                            <CornerDownLeft className="h-4 w-4 text-[#54656f]" />
+                            Retry send
+                          </button>
+                        )}
+                        {isInboxPage &&
+                          !isInternalChat &&
+                          outgoing &&
+                          message.sender === 'agent' &&
+                          !message.sendFailed &&
+                          !message.deletedForEveryone &&
+                          message.content !== '[Message deleted]' && (
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
+                              onClick={() => {
+                                setEditingInboxMessage({ id: message.id, text: message.content });
+                                setActiveMessageMenuId(null);
+                              }}
+                            >
+                              <Pencil className="h-4 w-4 text-[#54656f]" />
+                              Edit
+                            </button>
+                          )}
                         {outgoing && (
                           <button
                             type="button"
@@ -2352,25 +2728,33 @@ export function ChatWindow({
                             <button
                               type="button"
                               className="flex w-full items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-red-50"
-                              onClick={() => deleteForMe(message.id)}
+                              onClick={() => {
+                                void deleteForMe(message.id);
+                              }}
                             >
                               <Trash2 className="h-4 w-4" />
                               Delete for me
                             </button>
-                            <button
-                              type="button"
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-red-50"
-                              onClick={() => deleteMessage(message.id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                              Delete for everyone
-                            </button>
+                            {(!isInboxPage || isInternalChat || message.sender === 'agent') && (
+                              <button
+                                type="button"
+                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-red-50"
+                                onClick={() => {
+                                  void deleteMessage(message.id);
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Delete for everyone
+                              </button>
+                            )}
                           </>
                         ) : (
                           <button
                             type="button"
                             className="flex w-full items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-red-50"
-                            onClick={() => deleteForMe(message.id)}
+                            onClick={() => {
+                              void deleteForMe(message.id);
+                            }}
                           >
                             <Trash2 className="h-4 w-4" />
                             Delete for me
@@ -2420,9 +2804,13 @@ export function ChatWindow({
                       <Smile className="h-5 w-5" />
                     </button>
                   )}
-                  {isTeamChannel && outgoing && (
-                    <div className="mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06]">
-                      {message.postedByAdmin || message.senderName === 'Admin' ? (
+                  {((isTeamChannel && outgoing) || (isInboxPage && !isInternalChat && outgoing)) && (
+                    <div
+                      className={`mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06] ${
+                        isInboxPage && !isInternalChat && groupWithPrev ? 'invisible pointer-events-none' : ''
+                      }`}
+                    >
+                      {isTeamChannel && (message.postedByAdmin || message.senderName === 'Admin') ? (
                         'A'
                       ) : agentAvatarUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -2437,7 +2825,9 @@ export function ChatWindow({
             })}
           </div>
         ))}
-        {(teamNewBelowOpen && isTeamChannel) || (dmNewBelowOpen && isDmPage) ? (
+        {(teamNewBelowOpen && isTeamChannel) ||
+        (dmNewBelowOpen && isDmPage) ||
+        (inboxNewBelowOpen && isInboxPage && !isInternalChat) ? (
           <div className="pointer-events-none sticky bottom-2 z-20 flex justify-center py-2">
             <button
               type="button"
@@ -2447,8 +2837,10 @@ export function ChatWindow({
                 if (el) el.scrollTop = el.scrollHeight;
                 setTeamNewBelowOpen(false);
                 setDmNewBelowOpen(false);
+                setInboxNewBelowOpen(false);
                 teamNearBottomRef.current = true;
                 dmNearBottomRef.current = true;
+                inboxNearBottomRef.current = true;
                 if (isDmPage && dmSlug) clearDmUnread(dmSlug);
                 if (isTeamChannel && teamId && !readOnly && viewerAgentId) {
                   const ids = messages.map((m) => m.id);
@@ -2708,9 +3100,125 @@ export function ChatWindow({
         />
       )}
 
+      {copyToastVisible && (
+        <div
+          className="pointer-events-none fixed bottom-24 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-[#111b21] px-4 py-2 text-sm font-medium text-white shadow-lg"
+          role="status"
+        >
+          Copied!
+        </div>
+      )}
+
+      {editingInboxMessage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setEditingInboxMessage(null)}
+          aria-modal
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-border bg-white p-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-2 font-semibold text-text-primary">Edit message</h3>
+            <textarea
+              className="min-h-[100px] w-full resize-y rounded-lg border border-border p-2 text-sm text-text-primary outline-none focus:ring-2 focus:ring-primary"
+              value={editingInboxMessage.text}
+              onChange={(e) =>
+                setEditingInboxMessage({ ...editingInboxMessage, text: e.target.value })
+              }
+              aria-label="Edited message text"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-border px-3 py-1.5 text-sm text-text-primary hover:bg-panel"
+                onClick={() => setEditingInboxMessage(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-dark"
+                onClick={() => void submitInboxEdit()}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Message Info Modal */}
       {messageInfoId !== null && (() => {
         const targetMessage = messages.find((m) => m.id === messageInfoId) ?? null;
+        const formatReadAt = (d: Date) =>
+          `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()} ${d.getHours() % 12 || 12}:${d.getMinutes().toString().padStart(2, '0')} ${d.getHours() >= 12 ? 'PM' : 'AM'}`;
+
+        if (isInboxPage && !isInternalChat && targetMessage) {
+          const sent = targetMessage.sentAt ? new Date(targetMessage.sentAt) : null;
+          const st = targetMessage.messageStatus;
+          const sentOk = sent && !Number.isNaN(sent.getTime());
+          return (
+            <div
+              className="fixed inset-0 z-30 flex items-start justify-center bg-black/20 pt-20"
+              onClick={() => setMessageInfoId(null)}
+            >
+              <div
+                className="w-full max-w-sm overflow-hidden rounded-xl border border-border bg-white shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                  <span className="font-semibold text-text-primary">Message info</span>
+                  <button
+                    type="button"
+                    onClick={() => setMessageInfoId(null)}
+                    className="rounded-full p-1.5 text-text-muted hover:bg-panel"
+                    aria-label="Close"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div className="max-h-80 space-y-3 overflow-y-auto px-4 py-4 text-sm text-text-primary">
+                  <p>
+                    <span className="text-text-muted">Sender · </span>
+                    {targetMessage.senderName}
+                  </p>
+                  {sentOk && (
+                    <p>
+                      <span className="text-text-muted">Sent · </span>
+                      {formatReadAt(sent!)}
+                    </p>
+                  )}
+                  {targetMessage.editedAt && (
+                    <p>
+                      <span className="text-text-muted">Edited · </span>
+                      {formatReadAt(new Date(targetMessage.editedAt))}
+                    </p>
+                  )}
+                  {st && (targetMessage.sender === 'agent' || targetMessage.sender === 'ai') && (
+                    <>
+                      <p>
+                        <span className="text-text-muted">Delivered (WhatsApp) · </span>
+                        {st.delivered ? 'Yes' : 'Pending'}
+                      </p>
+                      <p>
+                        <span className="text-text-muted">Read by customer · </span>
+                        {st.read ? 'Yes' : '—'}
+                      </p>
+                    </>
+                  )}
+                  {st && targetMessage.sender === 'customer' && (
+                    <p>
+                      <span className="text-text-muted">Read by assigned agent · </span>
+                      {st.read ? 'Yes' : '—'}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         const readerName =
           targetMessage?.senderName === 'You'
             ? (agentFullName || getCurrentAgent()?.name || 'You')
@@ -2718,8 +3226,6 @@ export function ChatWindow({
               ? 'Admin'
               : (targetMessage?.senderName || title?.split(' ')[0] || 'Customer');
         const readByList = [{ name: readerName, readAt: new Date() }];
-        const formatReadAt = (d: Date) =>
-          `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()} ${d.getHours() % 12 || 12}:${d.getMinutes().toString().padStart(2, '0')} ${d.getHours() >= 12 ? 'PM' : 'AM'}`;
         return (
           <div
             className="fixed inset-0 z-30 flex items-start justify-center pt-20 bg-black/20"

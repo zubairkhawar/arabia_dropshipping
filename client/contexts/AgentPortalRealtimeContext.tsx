@@ -30,6 +30,7 @@ type AgentPortalRealtimeContextType = {
   setUnread: React.Dispatch<React.SetStateAction<AgentPortalUnread>>;
   subscribe: (fn: PortalListener) => () => void;
   refreshUnread: () => Promise<void>;
+  sendToPortal: (payload: Record<string, unknown>) => void;
 };
 
 const defaultUnread: AgentPortalUnread = { inbox: 0, team_channel: 0, dm: 0 };
@@ -69,6 +70,16 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
         // ignore listener errors
       }
     });
+  }, []);
+
+  const sendToPortal = useCallback((payload: Record<string, unknown>) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
   }, []);
 
   const refreshUnread = useCallback(async () => {
@@ -124,6 +135,18 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
           const msg = JSON.parse(String(ev.data)) as Record<string, unknown>;
           const u = parseUnread(msg);
           if (u) setUnread(u);
+          if (msg.type === 'inbox_message' && msg.message && typeof msg.message === 'object') {
+            const mid = (msg.message as Record<string, unknown>).id;
+            if (typeof mid === 'number') {
+              try {
+                ws.send(
+                  JSON.stringify({ type: 'delivery_ack', channel: 'inbox', message_ids: [mid] }),
+                );
+              } catch {
+                // ignore
+              }
+            }
+          }
           notify(msg);
         } catch {
           // ignore
@@ -155,8 +178,8 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
   }, [notify, refreshUnread]);
 
   const value = useMemo(
-    () => ({ unread, setUnread, subscribe, refreshUnread }),
-    [unread, subscribe, refreshUnread],
+    () => ({ unread, setUnread, subscribe, refreshUnread, sendToPortal }),
+    [unread, subscribe, refreshUnread, sendToPortal],
   );
 
   return (
@@ -172,6 +195,7 @@ export function useAgentPortalRealtime() {
       setUnread: (_: React.SetStateAction<AgentPortalUnread>) => {},
       subscribe: (_fn: PortalListener) => () => {},
       refreshUnread: async () => {},
+      sendToPortal: (_: Record<string, unknown>) => {},
     };
   }
   return ctx;

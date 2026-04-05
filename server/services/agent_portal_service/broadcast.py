@@ -16,6 +16,14 @@ async def push_unread_summary(db: Session, tenant_id: int, agent_id: int) -> Non
     await hub.broadcast_json(tenant_id, agent_id, {"type": "unread_summary", **data})
 
 
+async def push_inbox_sync_event(
+    db: Session, tenant_id: int, agent_id: int, payload: Dict[str, Any]
+) -> None:
+    """Generic inbox-related event (edit, delete, etc.) with unread summary."""
+    data = build_unread_summary_dict(db, tenant_id, agent_id)
+    await hub.broadcast_json(tenant_id, agent_id, {**payload, **data})
+
+
 async def push_inbox_message(
     db: Session,
     tenant_id: int,
