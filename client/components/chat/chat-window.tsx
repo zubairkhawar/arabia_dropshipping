@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, Fragment, type ReactNode } from 'react';
 import { useTeamChannelRealtime, type TeamChannelWsEvent } from '@/hooks/useTeamChannelRealtime';
 import { useDmConversationRealtime, type DmWsEvent } from '@/hooks/useDmConversationRealtime';
 import Link from 'next/link';
@@ -570,6 +570,9 @@ export function ChatWindow({
   const [inboxLoadingOlder, setInboxLoadingOlder] = useState(false);
   const [teamLoadingOlder, setTeamLoadingOlder] = useState(false);
   const teamLoadingOlderRef = useRef(false);
+  const teamUnreadDividerRef = useRef<HTMLDivElement | null>(null);
+  const teamUnreadMarkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const teamUnreadMarkedIdRef = useRef(0);
   const [teamNewBelowOpen, setTeamNewBelowOpen] = useState(false);
   const [dmNewBelowOpen, setDmNewBelowOpen] = useState(false);
   const [inboxNewBelowOpen, setInboxNewBelowOpen] = useState(false);
@@ -1193,15 +1196,8 @@ export function ChatWindow({
   };
 
   const getMessageStyle = (message: Message, outgoing: boolean) => {
-    const mentioned =
-      isTeamChannel &&
-      viewerAgentId > 0 &&
-      message.mentionAgentIds?.includes(viewerAgentId);
     if (outgoing) {
       return 'bg-[#d9fdd3] text-[#111b21] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]';
-    }
-    if (mentioned) {
-      return 'bg-[#fff9c4] text-[#111b21] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] border border-[#53bdeb]/40';
     }
     return 'bg-white text-[#111b21] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] border border-black/[0.06]';
   };
@@ -1220,6 +1216,26 @@ export function ChatWindow({
     }
     return message.sender === 'customer' || message.senderName === 'You';
   };
+
+  const teamLastReadId =
+    isTeamChannel && viewerAgentId > 0 ? memberReadStates[String(viewerAgentId)] ?? 0 : 0;
+  const teamUnreadMessages = isTeamChannel
+    ? messages.filter((m) => m.id > teamLastReadId && !isOutgoingMessage(m))
+    : [];
+  const unreadTeamCount = teamUnreadMessages.length;
+  const unreadTeamFirstMessageId = unreadTeamCount > 0 ? teamUnreadMessages[0].id : null;
+
+  const markTeamUnreadAsReadNow = useCallback(() => {
+    if (!isTeamChannel || !teamId || readOnly || viewerAgentId < 1 || unreadTeamCount < 1) return;
+    const maxId = Math.max(0, ...messages.map((m) => m.id));
+    if (maxId < 1) return;
+    teamUnreadMarkedIdRef.current = Math.max(teamUnreadMarkedIdRef.current, maxId);
+    void fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/read-state`, {
+      method: 'POST',
+      headers: teamChannelJsonHeaders(),
+      body: JSON.stringify({ tenant_id: TENANT_ID, last_read_message_id: maxId }),
+    }).catch(() => undefined);
+  }, [isTeamChannel, teamId, readOnly, viewerAgentId, unreadTeamCount, messages, API_BASE, TENANT_ID]);
 
   const addSystemNote = (content: string) => {
     const now = new Date();
@@ -1509,6 +1525,37 @@ export function ChatWindow({
     if (isTeamChannel && teamHasMoreOlder && !teamLoadingOlderRef.current && scrollTop < 100) {
       void loadTeamOlderMessages();
     }
+    if (
+      isTeamChannel &&
+      !readOnly &&
+      viewerAgentId > 0 &&
+      unreadTeamCount > 0 &&
+      unreadTeamFirstMessageId != null &&
+      teamUnreadDividerRef.current
+    ) {
+      const dividerRect = teamUnreadDividerRef.current.getBoundingClientRect();
+      const containerRect = el.getBoundingClientRect();
+      const crossed = dividerRect.top <= containerRect.top + 84;
+      if (crossed) {
+        if (!teamUnreadMarkTimerRef.current) {
+          teamUnreadMarkTimerRef.current = setTimeout(() => {
+            teamUnreadMarkTimerRef.current = null;
+            if (!teamId) return;
+            const maxId = Math.max(0, ...messages.map((m) => m.id));
+            if (maxId < 1 || maxId <= teamUnreadMarkedIdRef.current) return;
+            teamUnreadMarkedIdRef.current = maxId;
+            void fetch(`${API_BASE}/api/teams/${Number(teamId)}/channel/read-state`, {
+              method: 'POST',
+              headers: teamChannelJsonHeaders(),
+              body: JSON.stringify({ tenant_id: TENANT_ID, last_read_message_id: maxId }),
+            }).catch(() => undefined);
+          }, 1200);
+        }
+      } else if (teamUnreadMarkTimerRef.current) {
+        clearTimeout(teamUnreadMarkTimerRef.current);
+        teamUnreadMarkTimerRef.current = null;
+      }
+    }
     if (isDmPage && dmSlug && dmHasMoreOlder(dmSlug) && !loadingOlderDmSlug && scrollTop < 100) {
       void loadOlderDmMessages(dmSlug);
     }
@@ -1541,11 +1588,23 @@ export function ChatWindow({
     teamHasMoreOlder,
     teamLoadingOlder,
     loadTeamOlderMessages,
+    readOnly,
+    viewerAgentId,
+    unreadTeamCount,
+    unreadTeamFirstMessageId,
+    teamId,
+    messages,
     dmHasMoreOlder,
     loadingOlderDmSlug,
     loadOlderDmMessages,
     clearDmUnread,
   ]);
+
+  useEffect(() => {
+    return () => {
+      if (teamUnreadMarkTimerRef.current) clearTimeout(teamUnreadMarkTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -2872,11 +2931,25 @@ export function ChatWindow({
                   : reactionList.filter((r) => r.emoji === reactionDetailFilter);
 
               return (
-                <div
-                  key={message.id}
-                  id={`message-${message.id}`}
-                  className={`group/message flex w-full items-end gap-1.5 ${outgoing ? 'justify-end' : 'justify-start'}`}
-                >
+                <Fragment key={message.id}>
+                  {isTeamChannel &&
+                    unreadTeamFirstMessageId != null &&
+                    unreadTeamCount > 0 &&
+                    message.id === unreadTeamFirstMessageId && (
+                      <div ref={teamUnreadDividerRef} className="flex justify-center py-2">
+                        <button
+                          type="button"
+                          onClick={markTeamUnreadAsReadNow}
+                          className="rounded-full border border-dashed border-[#c7ced6] bg-white/90 px-3 py-1 text-xs text-[#667781] shadow-sm hover:bg-white"
+                        >
+                          {unreadTeamCount} unread message{unreadTeamCount === 1 ? '' : 's'}
+                        </button>
+                      </div>
+                    )}
+                  <div
+                    id={`message-${message.id}`}
+                    className={`group/message flex w-full items-end gap-1.5 ${outgoing ? 'justify-end' : 'justify-start'}`}
+                  >
                   {(isTeamChannel || (isInboxPage && !isInternalChat)) && !outgoing && (
                     <div
                       className={`mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06] ${
@@ -3471,7 +3544,7 @@ export function ChatWindow({
                       </div>
                     )}
                   </div>
-                  {((isTeamChannel && outgoing) || (isInboxPage && !isInternalChat && outgoing)) && (
+                    {((isTeamChannel && outgoing) || (isInboxPage && !isInternalChat && outgoing)) && (
                     <div
                       className={`mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06] ${
                         isInboxPage && !isInternalChat && groupWithPrev ? 'invisible pointer-events-none' : ''
@@ -3486,8 +3559,9 @@ export function ChatWindow({
                         (agentFullName || 'You').charAt(0)
                       )}
                     </div>
-                  )}
-                </div>
+                    )}
+                  </div>
+                </Fragment>
               );
             })}
           </div>
