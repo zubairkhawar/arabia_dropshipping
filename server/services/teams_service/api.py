@@ -283,6 +283,28 @@ class TeamChannelMessageUpdate(BaseModel):
 
 MAX_ASSET_BYTES = 10 * 1024 * 1024
 
+TEAM_MSG_PREFIX = "__TEAM_MSG_JSON__"
+
+
+def _decode_team_msg_payload(raw: str) -> Dict[str, Any]:
+    if isinstance(raw, str) and raw.startswith(TEAM_MSG_PREFIX):
+        try:
+            obj = json.loads(raw[len(TEAM_MSG_PREFIX):])
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    return {"text": raw if isinstance(raw, str) else str(raw)}
+
+
+def _payload_without_reactions(raw: str) -> Dict[str, Any]:
+    obj = _decode_team_msg_payload(raw)
+    if "reactions" in obj:
+        obj = dict(obj)
+        obj.pop("reactions", None)
+    return obj
+
+
 
 @router.get("", response_model=List[TeamOut])
 async def list_teams(tenant_id: int, db: Session = Depends(get_db)):
@@ -1142,15 +1164,22 @@ async def update_team_channel_message(
         .filter(Agent.user_id == current_user.id, Agent.tenant_id == payload.tenant_id)
         .first()
     )
-    allowed = False
+    can_edit_message = False
     if role == "admin":
-        allowed = True
+        can_edit_message = True
     elif ag and row.sender_agent_id == ag.id and not bool(getattr(row, "posted_by_admin", False)):
-        allowed = True
-    if not allowed:
-        raise HTTPException(status_code=403, detail="Cannot edit this message")
+        can_edit_message = True
+
+    if not can_edit_message:
+        # Team members can only modify reactions on someone else's message.
+        prev_base = _payload_without_reactions(row.content or "")
+        next_base = _payload_without_reactions(content)
+        if prev_base != next_base:
+            raise HTTPException(status_code=403, detail="Cannot edit this message")
+
     row.content = content
-    row.edited_at = datetime.utcnow()
+    if can_edit_message:
+        row.edited_at = datetime.utcnow()
     db.add(row)
     db.commit()
     db.refresh(row)

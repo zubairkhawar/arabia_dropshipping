@@ -337,7 +337,7 @@ export function ChatWindow({
       })
       .filter((a): a is { id: string; name: string } => a != null);
   })();
-  const isTeamChannel = pathname?.startsWith('/agent/team') || (pathname?.startsWith('/admin/teams') && !!teamName);
+  const isTeamChannel = pathname?.startsWith('/agent/team') || pathname?.startsWith('/admin/teams');
   const isDmPage = pathname?.startsWith('/agent/dm');
   const dmSlug = isDmPage ? (pathname.replace('/agent/dm/', '').split('/')[0] || null) : null;
   const isInboxPage = pathname?.startsWith('/agent/inbox') || pathname?.startsWith('/admin/inbox');
@@ -858,8 +858,6 @@ export function ChatWindow({
     [teamId, mapTeamRowToMessage, API_BASE, TENANT_ID],
   );
 
-  const fetchTeamMessagesSinceRef = useRef(fetchTeamMessagesSince);
-  fetchTeamMessagesSinceRef.current = fetchTeamMessagesSince;
 
   const loadTeamOlderMessages = useCallback(async () => {
     if (!isInternalChat || !isTeamChannel || !teamId || teamLoadingOlderRef.current || !teamHasMoreOlder) return;
@@ -995,12 +993,6 @@ export function ChatWindow({
     teamId ? Number(teamId) : null,
     TENANT_ID,
     handleTeamChannelWs,
-    {
-      onOpen: () => {
-        const since = teamLastSyncIsoRef.current;
-        if (since) void fetchTeamMessagesSinceRef.current(since);
-      },
-    },
   );
   teamSendDeliveryAckRef.current = teamSendDeliveryAck;
 
