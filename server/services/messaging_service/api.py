@@ -32,6 +32,11 @@ from services.agent_portal_service.broadcast import (
     push_unread_summary,
 )
 from services.auth_service.api import get_current_user, get_current_user_optional
+from services.media_storage.r2 import (
+    delete_object,
+    enrich_metadata_for_api,
+    store_inbound_whatsapp_media,
+)
 from services.messaging_service.inbox_receipts import (
     ensure_receipt_for_customer_message,
     get_receipt_map,
@@ -71,6 +76,7 @@ class MessageCreate(BaseModel):
     sender_type: str  # customer, agent, ai
     channel: str  # whatsapp, web, portal
     reply_to_message_id: Optional[int] = None
+    message_metadata: Optional[Dict[str, Any]] = None
 
 
 class MessageOut(BaseModel):
@@ -83,6 +89,7 @@ class MessageOut(BaseModel):
     created_at: datetime
     reply_to_message_id: Optional[int] = None
     edited_at: Optional[datetime] = None
+    message_metadata: Optional[Dict[str, Any]] = None
 
 
 class MessageEditIn(BaseModel):
@@ -158,6 +165,7 @@ def _inbox_message_api_dict(
     else:
         delivered = receipt.delivered_at is not None if receipt else False
         read = receipt.read_at is not None if receipt else False
+    meta_raw = None if deleted else m.message_metadata
     out: Dict[str, Any] = {
         "id": m.id,
         "conversation_id": m.conversation_id,
@@ -170,6 +178,7 @@ def _inbox_message_api_dict(
         "edited_at": m.edited_at,
         "deleted_for_everyone_at": m.deleted_for_everyone_at,
         "status": {"sent": True, "delivered": delivered, "read": read},
+        "message_metadata": enrich_metadata_for_api(meta_raw) if meta_raw else None,
     }
     if m.reply_to_message_id and reply_row:
         txt = reply_row.content or ""
@@ -223,6 +232,7 @@ def _message_dict_for_ws(db: Session, m: Message) -> Dict[str, Any]:
             "language": m.language,
             "created_at": m.created_at,
             "status": {"sent": True, "delivered": False, "read": False},
+            "message_metadata": enrich_metadata_for_api(m.message_metadata),
         }
     rec = get_receipt_map(db, [m.id], conv.agent_id).get(m.id)
     reply_row = None
@@ -231,9 +241,9 @@ def _message_dict_for_ws(db: Session, m: Message) -> Dict[str, Any]:
     return _inbox_message_api_dict(m, conv, rec, reply_row)
 
 
-def _extract_meta_text_message(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _parse_meta_whatsapp_inbound(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Parse Meta webhook payload and return first inbound text message.
+    Parse Meta webhook: first inbound user message as text, image, or audio.
     """
     if payload.get("object") != "whatsapp_business_account":
         return None
@@ -249,14 +259,40 @@ def _extract_meta_text_message(payload: Dict[str, Any]) -> Optional[Dict[str, An
                 profile = contacts[0].get("profile") or {}
                 contact_name = profile.get("name")
             for msg in messages:
-                if msg.get("type") != "text":
+                from_phone = msg.get("from")
+                wa_message_id = msg.get("id")
+                if not from_phone or not wa_message_id:
                     continue
-                return {
-                    "from_phone": msg.get("from"),
-                    "text": (msg.get("text") or {}).get("body", ""),
-                    "wa_message_id": msg.get("id"),
+                base = {
+                    "from_phone": from_phone,
+                    "wa_message_id": wa_message_id,
                     "contact_name": contact_name,
                 }
+                mtype = msg.get("type")
+                if mtype == "text":
+                    text = (msg.get("text") or {}).get("body", "")
+                    if not text:
+                        continue
+                    return {**base, "kind": "text", "text": text}
+                if mtype == "image":
+                    img = msg.get("image") or {}
+                    mid = img.get("id")
+                    if not mid:
+                        continue
+                    cap = (img.get("caption") or "") if isinstance(img.get("caption"), str) else ""
+                    return {**base, "kind": "image", "media_id": str(mid), "caption": cap}
+                if mtype == "audio":
+                    au = msg.get("audio") or {}
+                    mid = au.get("id")
+                    if not mid:
+                        continue
+                    return {**base, "kind": "audio", "media_id": str(mid)}
+                if mtype == "sticker":
+                    st = msg.get("sticker") or {}
+                    mid = st.get("id")
+                    if not mid:
+                        continue
+                    return {**base, "kind": "image", "media_id": str(mid), "caption": ""}
     return None
 
 
@@ -543,6 +579,7 @@ async def create_conversation(
 async def send_message(
     message: MessageCreate,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """
     Persist a message in a conversation.
@@ -560,17 +597,62 @@ async def send_message(
         )
 
     sender_id: Optional[int] = None
+    meta_to_store: Optional[Dict[str, Any]] = None
+    if message.message_metadata and isinstance(message.message_metadata, dict):
+        meta_to_store = {k: v for k, v in message.message_metadata.items() if k != "media_url"}
+
+    content_stripped = (message.content or "").strip()
     if message.sender_type == "agent":
-        # Best-effort: use currently assigned agent
-        sender_id = conversation.agent_id
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
+        agent = (
+            db.query(Agent)
+            .filter(Agent.user_id == current_user.id, Agent.tenant_id == conversation.tenant_id)
+            .first()
+        )
+        if not agent:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not an agent",
+            )
+        if conversation.agent_id != agent.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not assigned to this conversation",
+            )
+        sender_id = agent.id
+    else:
+        sender_id = None
+
+    has_media = bool(meta_to_store and meta_to_store.get("object_key"))
+    if not content_stripped and not has_media:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Content or media (object_key) is required",
+        )
+
+    mt = meta_to_store.get("type") if meta_to_store else None
+    if not content_stripped and has_media:
+        if mt == "image":
+            content_stripped = "Image"
+        elif mt == "voice":
+            content_stripped = "Voice message"
+        elif mt == "file":
+            content_stripped = (meta_to_store.get("filename") if meta_to_store else None) or "Attachment"
+        else:
+            content_stripped = "Attachment"
 
     msg = Message(
         conversation_id=message.conversation_id,
-        content=message.content,
+        content=content_stripped,
         sender_type=message.sender_type,
         sender_id=sender_id,
         created_at=datetime.utcnow(),
         reply_to_message_id=message.reply_to_message_id,
+        message_metadata=meta_to_store,
     )
     conversation.updated_at = datetime.utcnow()
 
@@ -586,6 +668,36 @@ async def send_message(
     if conversation.agent_id is not None:
         await push_unread_summary(db, conversation.tenant_id, conversation.agent_id)
 
+    if (
+        msg.sender_type == "agent"
+        and (conversation.channel or "").lower() == "whatsapp"
+        and has_media
+    ):
+        customer = (
+            db.query(Customer).filter(Customer.id == conversation.customer_id).first()
+        )
+        phone = customer.phone if customer else None
+        wa = MetaWhatsAppClient()
+        if phone and wa.is_configured():
+            line = content_stripped
+            if meta_to_store and meta_to_store.get("type") == "image":
+                line = content_stripped if content_stripped != "Image" else "[Image — view in our support chat link]"
+            elif meta_to_store and meta_to_store.get("type") == "voice":
+                line = content_stripped if content_stripped != "Voice message" else "[Voice message — view in support portal]"
+            elif meta_to_store and meta_to_store.get("type") == "file":
+                line = content_stripped
+            try:
+                await wa.send_text_message(to_phone=str(phone), text=line[:4096])
+                msg.wa_delivered_at = datetime.utcnow()
+                db.add(msg)
+                db.commit()
+                db.refresh(msg)
+            except Exception:
+                logger.exception(
+                    "WhatsApp fallback text failed conversation_id=%s",
+                    conversation.id,
+                )
+
     return MessageOut(
         id=msg.id,
         conversation_id=msg.conversation_id,
@@ -596,6 +708,7 @@ async def send_message(
         created_at=msg.created_at,
         reply_to_message_id=msg.reply_to_message_id,
         edited_at=msg.edited_at,
+        message_metadata=enrich_metadata_for_api(msg.message_metadata),
     )
 
 
@@ -707,6 +820,7 @@ async def patch_inbox_message(
         created_at=m.created_at,
         reply_to_message_id=m.reply_to_message_id,
         edited_at=m.edited_at,
+        message_metadata=enrich_metadata_for_api(m.message_metadata),
     )
 
 
@@ -774,8 +888,12 @@ async def delete_inbox_for_everyone(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete this message for everyone"
         )
+    prev_meta = m.message_metadata or {}
+    ok = prev_meta.get("object_key")
+    if isinstance(ok, str) and ok:
+        delete_object(ok)
     prev = m.content or ""
-    meta = dict(m.message_metadata or {})
+    meta = dict(prev_meta)
     meta["deleted_original_content"] = prev
     m.message_metadata = meta
     m.content = "[Message deleted]"
@@ -822,14 +940,40 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     - persist outbound AI reply
     """
     body = await request.json()
-    inbound = _extract_meta_text_message(body)
+    inbound = _parse_meta_whatsapp_inbound(body)
     if not inbound:
         # Non-message webhooks (delivery/read/status) are valid and should ACK.
         return {"status": "ignored"}
 
     from_phone = inbound["from_phone"]
-    text = inbound["text"]
-    if not from_phone or not text:
+    if not from_phone:
+        return {"status": "ignored"}
+
+    msg_meta: Optional[Dict[str, Any]] = None
+    kind = inbound.get("kind")
+    if kind == "text":
+        text = inbound.get("text") or ""
+        if not str(text).strip():
+            return {"status": "ignored"}
+    elif kind == "image":
+        text = (inbound.get("caption") or "").strip() or "Image"
+        try:
+            wa_dl = MetaWhatsAppClient()
+            if wa_dl.is_configured():
+                raw, mime = await wa_dl.download_media(inbound["media_id"])
+                msg_meta = store_inbound_whatsapp_media(raw, "image", mime)
+        except Exception:
+            logger.exception("Inbound WhatsApp image download/R2 failed")
+    elif kind == "audio":
+        text = "Voice message"
+        try:
+            wa_dl = MetaWhatsAppClient()
+            if wa_dl.is_configured():
+                raw, mime = await wa_dl.download_media(inbound["media_id"])
+                msg_meta = store_inbound_whatsapp_media(raw, "audio", mime)
+        except Exception:
+            logger.exception("Inbound WhatsApp audio download/R2 failed")
+    else:
         return {"status": "ignored"}
 
     tenant_id = 1
@@ -860,6 +1004,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             sender_id=None,
             language=detected_language,
             created_at=datetime.utcnow(),
+            message_metadata=msg_meta,
         )
         db.add(customer_msg)
         conversation.updated_at = datetime.utcnow()
@@ -961,6 +1106,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         sender_id=None,
         language=detected_language,
         created_at=datetime.utcnow(),
+        message_metadata=msg_meta,
     )
     ai_msg = Message(
         conversation_id=conversation.id,

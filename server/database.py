@@ -195,6 +195,33 @@ def ensure_message_enhancements() -> None:
         pass
 
 
+def ensure_dm_team_message_metadata_json() -> None:
+    """JSON metadata column for internal DM and team channel messages (R2 object keys)."""
+    try:
+        insp = inspect(engine)
+        names = insp.get_table_names()
+    except Exception:
+        return
+
+    def add_metadata(table: str) -> None:
+        if table not in names:
+            return
+        try:
+            cols = {c["name"] for c in insp.get_columns(table)}
+        except Exception:
+            return
+        if "metadata" in cols:
+            return
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN metadata JSONB"))
+        except Exception:
+            pass
+
+    add_metadata("internal_dm_messages")
+    add_metadata("team_channel_messages")
+
+
 def get_db():
     db = SessionLocal()
     try:

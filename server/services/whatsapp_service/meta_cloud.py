@@ -60,3 +60,30 @@ class MetaWhatsAppClient:
                 )
             resp.raise_for_status()
             return resp.json()
+
+    async def download_media(self, media_id: str) -> tuple[bytes, Optional[str]]:
+        """
+        Fetch WhatsApp media bytes via Graph API (media URL is short-lived).
+        Returns (body, mime_type).
+        """
+        if not self.is_configured():
+            raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
+        graph = f"https://graph.facebook.com/{self.graph_version}/{media_id}"
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            info = await client.get(graph, headers=headers)
+            if info.status_code >= 400:
+                logger.error(
+                    "Meta media info HTTP %s: %s",
+                    info.status_code,
+                    (info.text or "")[:500],
+                )
+            info.raise_for_status()
+            data = info.json()
+            url = data.get("url")
+            mime = data.get("mime_type")
+            if not url or not isinstance(url, str):
+                raise RuntimeError("Meta media response missing url")
+            binary = await client.get(url, headers=headers)
+            binary.raise_for_status()
+            return binary.content, mime if isinstance(mime, str) else None

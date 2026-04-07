@@ -43,6 +43,9 @@ export interface InboxMessage {
   deletedForEveryone?: boolean;
   messageStatus?: { sent: boolean; delivered: boolean; read: boolean };
   sendFailed?: boolean;
+  /** Stored server-side (object_key, type); omit media_url — API adds signed URL when loading. */
+  messageMetadata?: Record<string, unknown> | null;
+  attachment?: { type: 'photo' | 'voice' | 'file'; name: string; url: string; durationSeconds?: number };
   [key: string]: unknown;
 }
 
@@ -122,17 +125,39 @@ interface ConversationDetailsApi {
     deleted_for_everyone_at?: string | null;
     reply_preview?: { id: number; sender_type: string; content: string };
     status?: { sent: boolean; delivered: boolean; read: boolean };
+    message_metadata?: Record<string, unknown> | null;
   }>;
   has_more_older?: boolean;
+}
+
+export function inboxMetaToAttachment(meta: unknown): InboxMessage['attachment'] | undefined {
+  if (!meta || typeof meta !== 'object') return undefined;
+  const o = meta as Record<string, unknown>;
+  const url = typeof o.media_url === 'string' ? o.media_url : undefined;
+  if (!url) return undefined;
+  if (o.type === 'image') return { type: 'photo', name: 'Image', url };
+  if (o.type === 'voice')
+    return { type: 'voice', name: 'Voice', url, durationSeconds: Number(o.duration_seconds) || 0 };
+  if (o.type === 'file') return { type: 'file', name: String(o.filename || 'File'), url };
+  return undefined;
 }
 
 function apiMessageToInbox(m: ConversationDetailsApi['messages'][number]): InboxMessage {
   const st = m.sender_type;
   const senderName = st === 'agent' ? 'You' : st === 'customer' ? 'Customer' : 'AI';
   const rp = m.reply_preview;
+  let content = m.content;
+  let attachment = inboxMetaToAttachment(m.message_metadata);
+  if (!attachment && content.startsWith('data:image')) {
+    attachment = { type: 'photo', name: 'Image', url: content };
+    content = '';
+  } else if (!attachment && (content.startsWith('data:audio') || content.startsWith('data:video'))) {
+    attachment = { type: 'voice', name: 'Voice', url: content };
+    content = '';
+  }
   return {
     id: m.id,
-    content: m.content,
+    content,
     sender: st,
     senderName,
     timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -141,6 +166,8 @@ function apiMessageToInbox(m: ConversationDetailsApi['messages'][number]): Inbox
     editedAt: m.edited_at ?? undefined,
     deletedForEveryone: Boolean(m.deleted_for_everyone_at),
     messageStatus: m.status,
+    messageMetadata: m.message_metadata ?? undefined,
+    attachment,
     replyTo: rp
       ? {
           id: rp.id,
@@ -602,13 +629,20 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       [convId]: [...(prev[convId] ?? []), message],
     }));
 
-    if (typeof message.content === 'string' && message.content.trim()) {
+    const hasText = typeof message.content === 'string' && message.content.trim();
+    const meta = message.messageMetadata;
+    const hasMediaMeta =
+      meta &&
+      typeof meta === 'object' &&
+      typeof (meta as Record<string, unknown>).object_key === 'string';
+    if (hasText || hasMediaMeta) {
       const body: Record<string, unknown> = {
         conversation_id: convId,
-        content: message.content,
+        content: typeof message.content === 'string' ? message.content : '',
         sender_type: message.sender,
         channel: 'whatsapp',
       };
+      if (hasMediaMeta) body.message_metadata = meta;
       const rt = message.replyToMessageId;
       if (typeof rt === 'number' && rt > 0) body.reply_to_message_id = rt;
       void fetch(`${API_BASE}/api/messaging/messages`, {
@@ -632,7 +666,9 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           created_at: string;
           reply_to_message_id?: number | null;
           edited_at?: string | null;
+          message_metadata?: Record<string, unknown> | null;
         };
+        const serverAtt = inboxMetaToAttachment(saved.message_metadata);
         setMessagesByConvId((prev) => {
           const cur = prev[convId] || [];
           const idx = cur.findIndex((x) => x.id === message.id);
@@ -645,6 +681,8 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
             replyToMessageId: saved.reply_to_message_id ?? next[idx].replyToMessageId,
             editedAt: saved.edited_at ?? next[idx].editedAt,
             messageStatus: { sent: true, delivered: false, read: false },
+            messageMetadata: saved.message_metadata ?? next[idx].messageMetadata,
+            attachment: serverAtt ?? next[idx].attachment,
           };
           return { ...prev, [convId]: next };
         });
@@ -653,7 +691,11 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
             c.id === convId
               ? {
                   ...c,
-                  lastMessage: message.content,
+                  lastMessage: hasText
+                    ? String(message.content)
+                    : hasMediaMeta
+                      ? '[Media]'
+                      : c.lastMessage,
                   lastActivityAt: 'Just now',
                   status: c.status === 'resolved' ? 'active' : c.status,
                 }

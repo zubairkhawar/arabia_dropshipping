@@ -14,6 +14,7 @@ from database import (
     ensure_agent_read_state_tables,
     ensure_user_avatar_url_column,
     ensure_message_enhancements,
+    ensure_dm_team_message_metadata_json,
 )
 from models import Tenant, User
 from services.auth_service.services import get_password_hash
@@ -32,6 +33,7 @@ from services.broadcasts_service.api import router as broadcasts_router
 from services.knowledge_service.api import router as knowledge_router
 from services.internal_dm_service.api import router as internal_dm_router
 from services.agent_portal_service.api import router as agent_portal_router
+from services.upload_service.api import router as upload_router
 
 
 def ensure_admin_user() -> None:
@@ -83,6 +85,7 @@ async def lifespan(app: FastAPI):
     ensure_agent_read_state_tables()
     ensure_user_avatar_url_column()
     ensure_message_enhancements()
+    ensure_dm_team_message_metadata_json()
     ensure_admin_user()
     yield
     # Shutdown
@@ -126,6 +129,7 @@ app.include_router(broadcasts_router, prefix="/api", tags=["broadcasts"])
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["knowledge"])
 app.include_router(internal_dm_router, prefix="/api/internal-dm", tags=["internal-dm"])
 app.include_router(agent_portal_router, prefix="/api/agent-portal", tags=["agent-portal"])
+app.include_router(upload_router, prefix="/api/upload", tags=["upload"])
 
 
 @app.get("/")

@@ -27,6 +27,7 @@ from services.internal_dm_service.dm_receipt_helpers import (
     mark_dm_read_through_receipts,
 )
 from services.internal_dm_service.dm_hub import hub
+from services.media_storage.r2 import delete_object, enrich_metadata_for_api
 
 router = APIRouter()
 
@@ -54,6 +55,7 @@ class DmMessageOut(BaseModel):
     deleted_for_everyone_at: Optional[datetime] = None
     peer_delivered_at: Optional[datetime] = None
     peer_read_at: Optional[datetime] = None
+    message_metadata: Optional[Dict[str, Any]] = None
 
 
 class DmDeliveryAckIn(BaseModel):
@@ -77,6 +79,7 @@ class CreateDmMessageIn(BaseModel):
     sender_agent_id: int
     content: str
     reply_to_message_id: Optional[int] = None
+    message_metadata: Optional[Dict[str, Any]] = None
 
 
 class PatchDmMessageIn(BaseModel):
@@ -139,6 +142,7 @@ def _dm_message_to_out(
         deleted_for_everyone_at=m.deleted_for_everyone_at,
         peer_delivered_at=rec.delivered_at if rec else None,
         peer_read_at=rec.read_at if rec else None,
+        message_metadata=enrich_metadata_for_api(m.message_metadata) if not deleted else None,
     )
 
 
@@ -355,9 +359,23 @@ async def create_message(payload: CreateDmMessageIn, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail="Conversation not found")
     if payload.sender_agent_id not in (conversation.agent_one_id, conversation.agent_two_id):
         raise HTTPException(status_code=403, detail="Access denied")
+    meta_in: Optional[Dict[str, Any]] = None
+    if payload.message_metadata and isinstance(payload.message_metadata, dict):
+        meta_in = {k: v for k, v in payload.message_metadata.items() if k != "media_url"}
     text = (payload.content or "").strip()
-    if not text:
+    has_media = bool(meta_in and meta_in.get("object_key"))
+    if not text and not has_media:
         raise HTTPException(status_code=400, detail="Message content is required")
+    if not text and has_media:
+        mt = meta_in.get("type") if meta_in else None
+        if mt == "image":
+            text = "Image"
+        elif mt == "voice":
+            text = "Voice message"
+        elif mt == "file":
+            text = (meta_in.get("filename") if meta_in else None) or "Attachment"
+        else:
+            text = "Attachment"
     reply_to_id = payload.reply_to_message_id
     if reply_to_id is not None:
         parent = (
@@ -375,6 +393,7 @@ async def create_message(payload: CreateDmMessageIn, db: Session = Depends(get_d
         conversation_id=payload.conversation_id,
         sender_agent_id=payload.sender_agent_id,
         content=text,
+        message_metadata=meta_in,
         created_at=datetime.utcnow(),
         reply_to_message_id=reply_to_id,
     )
@@ -540,6 +559,10 @@ async def delete_dm_message_for_everyone(
         raise HTTPException(status_code=403, detail="Cannot delete this message for everyone")
     if (datetime.utcnow() - row.created_at).total_seconds() > 300:
         raise HTTPException(status_code=403, detail="Cannot delete this message for everyone")
+    prev_meta = row.message_metadata or {}
+    ok = prev_meta.get("object_key")
+    if isinstance(ok, str) and ok:
+        delete_object(ok)
     row.content = "[Message deleted]"
     row.deleted_for_everyone_at = datetime.utcnow()
     db.add(row)

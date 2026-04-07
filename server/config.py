@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
+
+    # Cloudflare R2 (S3-compatible). Optional; enables presigned uploads and inbox media.
+    r2_account_id: Optional[str] = None
+    r2_access_key_id: Optional[str] = None
+    r2_secret_access_key: Optional[str] = None
+    r2_bucket_name: Optional[str] = None
+    r2_presign_put_seconds: int = 60
+    r2_presign_get_seconds: int = 3600
     
     # JWT
     jwt_secret_key: str

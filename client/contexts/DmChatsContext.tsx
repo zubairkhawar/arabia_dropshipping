@@ -57,6 +57,7 @@ type DmApiMessageRow = {
   deleted_for_everyone_at?: string | null;
   peer_delivered_at?: string | null;
   peer_read_at?: string | null;
+  message_metadata?: Record<string, unknown> | null;
 };
 
 function parseDmMessagesPayload(data: unknown): {
@@ -93,6 +94,7 @@ export interface DmMessage {
   deletedForEveryone?: boolean;
   peerDeliveredAt?: string;
   peerReadAt?: string;
+  messageMetadata?: Record<string, unknown> | null;
 }
 
 interface DmChatsContextType {
@@ -110,7 +112,12 @@ interface DmChatsContextType {
   mergeIncomingDmMessage: (slug: string, row: DmApiMessageRow) => void;
   patchDmMessage: (slug: string, messageId: number, patch: Partial<DmMessage>) => void;
   dmHasMoreOlder: (slug: string) => boolean;
-  sendMessageBySlug: (slug: string, content: string, replyToMessageId?: number) => Promise<void>;
+  sendMessageBySlug: (
+    slug: string,
+    content: string,
+    replyToMessageId?: number,
+    messageMetadata?: Record<string, unknown>,
+  ) => Promise<void>;
   getConversations: () => DmConversation[];
   refreshConversations: () => Promise<void>;
   isDmListLoading: boolean;
@@ -150,6 +157,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         deletedForEveryone: Boolean(row.deleted_for_everyone_at),
         peerDeliveredAt: row.peer_delivered_at ?? undefined,
         peerReadAt: row.peer_read_at ?? undefined,
+        messageMetadata: row.message_metadata ?? undefined,
       }));
     },
     [conversations, currentAgentId],
@@ -417,6 +425,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
           deletedForEveryone: Boolean(row.deleted_for_everyone_at),
           peerDeliveredAt: row.peer_delivered_at ?? prevSame?.peerDeliveredAt,
           peerReadAt: row.peer_read_at ?? prevSame?.peerReadAt,
+          messageMetadata: row.message_metadata ?? prevSame?.messageMetadata,
         };
         const next = wasNew
           ? [...cur, msg].sort((a, b) => a.id - b.id)
@@ -459,16 +468,24 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
   const getDmUnreadCount = useCallback((slug: string) => dmUnreadBySlug[slug] ?? 0, [dmUnreadBySlug]);
 
   const sendMessageBySlug = useCallback(
-    async (slug: string, content: string, replyToMessageId?: number) => {
+    async (
+      slug: string,
+      content: string,
+      replyToMessageId?: number,
+      messageMetadata?: Record<string, unknown>,
+    ) => {
       if (!currentAgentId) return;
       const conversation = conversations.find((c) => c.slug === slug);
       if (!conversation) return;
       try {
-        const body: Record<string, number | string> = {
+        const body: Record<string, number | string | Record<string, unknown>> = {
           conversation_id: Number(conversation.id),
           sender_agent_id: Number(currentAgentId),
           content,
         };
+        if (messageMetadata && Object.keys(messageMetadata).length > 0) {
+          body.message_metadata = messageMetadata;
+        }
         if (typeof replyToMessageId === 'number' && replyToMessageId > 0) {
           body.reply_to_message_id = replyToMessageId;
         }
@@ -497,6 +514,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
                 deletedForEveryone: Boolean(row.deleted_for_everyone_at),
                 peerDeliveredAt: row.peer_delivered_at ?? undefined,
                 peerReadAt: row.peer_read_at ?? undefined,
+                messageMetadata: row.message_metadata ?? undefined,
               },
             ].sort((a, b) => a.id - b.id),
           };
@@ -584,7 +602,7 @@ export function useDmChats() {
       mergeIncomingDmMessage: (_slug: string, _row: DmApiMessageRow) => {},
       patchDmMessage: (_slug: string, _messageId: number, _patch: Partial<DmMessage>) => {},
       dmHasMoreOlder: (_slug: string) => false,
-      sendMessageBySlug: async (_slug: string, _content: string, _replyTo?: number) => {},
+      sendMessageBySlug: async (_slug: string, _content: string, _replyTo?: number, _meta?: Record<string, unknown>) => {},
       getConversations: () => [] as DmConversation[],
       refreshConversations: async () => {},
       isDmListLoading: false,

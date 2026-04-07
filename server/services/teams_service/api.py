@@ -33,6 +33,7 @@ from models import (
     TeamMembership,
     User,
 )
+from services.media_storage.r2 import delete_object, enrich_metadata_for_api
 from services.auth_service.api import get_current_user, get_current_user_optional
 from services.teams_service.receipt_helpers import (
     batch_team_receipt_summaries,
@@ -190,6 +191,7 @@ class TeamChannelMessageOut(BaseModel):
     edited_at: Optional[datetime] = None
     deleted_for_everyone_at: Optional[datetime] = None
     receipt_summary: Optional[TeamReceiptSummaryOut] = None
+    message_metadata: Optional[Dict[str, Any]] = None
 
 
 class TeamDeliveryAckIn(BaseModel):
@@ -217,6 +219,7 @@ class TeamChannelMessageCreate(BaseModel):
     sender_agent_id: Optional[int] = None
     posted_by_admin: bool = False
     reply_to_message_id: Optional[int] = None
+    message_metadata: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -851,6 +854,7 @@ def _team_channel_message_to_out(
 ) -> TeamChannelMessageOut:
     deleted = bool(getattr(r, "deleted_for_everyone_at", None))
     text = "[Message deleted]" if deleted else (r.content or "")
+    meta_raw = None if deleted else getattr(r, "message_metadata", None)
     return TeamChannelMessageOut(
         id=r.id,
         team_id=r.team_id,
@@ -863,6 +867,7 @@ def _team_channel_message_to_out(
         edited_at=getattr(r, "edited_at", None),
         deleted_for_everyone_at=getattr(r, "deleted_for_everyone_at", None),
         receipt_summary=receipt_summary,
+        message_metadata=enrich_metadata_for_api(meta_raw) if meta_raw else None,
     )
 
 
@@ -1012,9 +1017,23 @@ async def create_team_channel_message(
     team = db.query(Team).filter(Team.id == team_id, Team.tenant_id == payload.tenant_id).first()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
+    meta_row: Optional[Dict[str, Any]] = None
+    if payload.message_metadata and isinstance(payload.message_metadata, dict):
+        meta_row = {k: v for k, v in payload.message_metadata.items() if k != "media_url"}
     content = (payload.content or "").strip()
-    if not content:
+    has_media = bool(meta_row and meta_row.get("object_key"))
+    if not content and not has_media:
         raise HTTPException(status_code=400, detail="Message content is required")
+    if not content and has_media:
+        mt = meta_row.get("type") if meta_row else None
+        if mt == "image":
+            content = "Image"
+        elif mt == "voice":
+            content = "Voice message"
+        elif mt == "file":
+            content = (meta_row.get("filename") if meta_row else None) or "Attachment"
+        else:
+            content = "Attachment"
     reply_to_id = payload.reply_to_message_id
     if reply_to_id is not None:
         parent = (
@@ -1051,6 +1070,7 @@ async def create_team_channel_message(
             sender_agent_id=None,
             posted_by_admin=True,
             content=content,
+            message_metadata=meta_row,
             created_at=datetime.utcnow(),
             reply_to_message_id=reply_to_id,
         )
@@ -1066,6 +1086,7 @@ async def create_team_channel_message(
             sender_agent_id=payload.sender_agent_id,
             posted_by_admin=False,
             content=content,
+            message_metadata=meta_row,
             created_at=datetime.utcnow(),
             reply_to_message_id=reply_to_id,
         )
@@ -1269,6 +1290,10 @@ async def delete_team_channel_message_for_everyone(
             allowed = True
     if not allowed:
         raise HTTPException(status_code=403, detail="Cannot delete this message for everyone")
+    prev_meta = getattr(row, "message_metadata", None) or {}
+    ok = prev_meta.get("object_key") if isinstance(prev_meta, dict) else None
+    if isinstance(ok, str) and ok:
+        delete_object(ok)
     row.content = "[Message deleted]"
     row.deleted_for_everyone_at = datetime.utcnow()
     db.add(row)

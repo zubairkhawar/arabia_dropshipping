@@ -40,6 +40,7 @@ import { useTeams } from '@/contexts/TeamsContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { useDmChats } from '@/contexts/DmChatsContext';
+import { uploadAttachmentToR2 } from '@/lib/media-upload';
 
 interface MessageAttachment {
   type: 'file' | 'photo' | 'voice';
@@ -103,6 +104,7 @@ interface TeamChannelMessageRow {
     delivered_count: number;
     read_count: number;
   } | null;
+  message_metadata?: Record<string, unknown> | null;
 }
 
 interface TeamChannelPayload {
@@ -395,6 +397,7 @@ export function ChatWindow({
           deletedForEveryone: im.deletedForEveryone,
           messageStatus: im.messageStatus,
           sendFailed: im.sendFailed,
+          attachment: im.attachment,
           reactions: prevById.get(im.id)?.reactions,
         }),
       );
@@ -444,9 +447,24 @@ export function ChatWindow({
       const parentParsed =
         parent != null ? decodeDmMessageContent(parent.content) : { text: '', attachment: undefined };
       const outgoingDm = m.senderName === 'You';
+      const md = m.messageMetadata;
+      let attachment = parsed.attachment;
+      if (md && typeof md === 'object' && typeof md.media_url === 'string') {
+        const url = md.media_url;
+        if (md.type === 'image') attachment = { type: 'photo' as const, name: 'Image', url };
+        else if (md.type === 'voice')
+          attachment = {
+            type: 'voice' as const,
+            name: 'Voice',
+            url,
+            durationSeconds: Number(md.duration_seconds) || 0,
+          };
+        else if (md.type === 'file')
+          attachment = { type: 'file' as const, name: String(md.filename || 'File'), url };
+      }
       return {
         id: m.id,
-        content: parsed.text || (parsed.attachment ? '' : m.content),
+        content: parsed.text || (attachment ? '' : m.content),
         sender: 'agent' as const,
         senderName: m.senderName,
         senderAgentId: Number.parseInt(m.senderAgentId, 10) || undefined,
@@ -465,7 +483,7 @@ export function ChatWindow({
             : undefined,
         editedAt: m.editedAt,
         deletedForEveryone: m.deletedForEveryone,
-        attachment: parsed.attachment,
+        attachment,
         messageStatus: outgoingDm
           ? {
               sent: true,
@@ -551,6 +569,7 @@ export function ChatWindow({
   const [teamHasMoreOlder, setTeamHasMoreOlder] = useState(false);
   const [inboxLoadingOlder, setInboxLoadingOlder] = useState(false);
   const [teamLoadingOlder, setTeamLoadingOlder] = useState(false);
+  const teamLoadingOlderRef = useRef(false);
   const [teamNewBelowOpen, setTeamNewBelowOpen] = useState(false);
   const [dmNewBelowOpen, setDmNewBelowOpen] = useState(false);
   const [inboxNewBelowOpen, setInboxNewBelowOpen] = useState(false);
@@ -768,6 +787,22 @@ export function ChatWindow({
           ? 'You'
           : m.sender_name;
       const mentionIds = payload.mentions?.filter((x) => Number.isFinite(Number(x))).map((x) => Number(x));
+      const md = m.message_metadata;
+      let attachment = deletedForEveryone ? undefined : payload.attachment;
+      if (!deletedForEveryone && md && typeof md === 'object' && typeof md.media_url === 'string') {
+        const url = md.media_url;
+        if (md.type === 'image')
+          attachment = { type: 'photo' as const, name: 'Image', url };
+        else if (md.type === 'voice')
+          attachment = {
+            type: 'voice' as const,
+            name: 'Voice',
+            url,
+            durationSeconds: Number(md.duration_seconds) || 0,
+          };
+        else if (md.type === 'file')
+          attachment = { type: 'file' as const, name: String(md.filename || 'File'), url };
+      }
       return {
         id: m.id,
         content: deletedForEveryone ? '' : payload.text || '',
@@ -778,7 +813,7 @@ export function ChatWindow({
         channelTeamId: m.team_id,
         timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
         sentAt: m.created_at,
-        attachment: deletedForEveryone ? undefined : payload.attachment,
+        attachment,
         replyTo: deletedForEveryone ? undefined : payload.replyTo,
         replyToMessageId: m.reply_to_message_id ?? undefined,
         editedAt: m.edited_at ?? undefined,
@@ -827,12 +862,16 @@ export function ChatWindow({
   fetchTeamMessagesSinceRef.current = fetchTeamMessagesSince;
 
   const loadTeamOlderMessages = useCallback(async () => {
-    if (!isInternalChat || !isTeamChannel || !teamId || teamLoadingOlder || !teamHasMoreOlder) return;
+    if (!isInternalChat || !isTeamChannel || !teamId || teamLoadingOlderRef.current || !teamHasMoreOlder) return;
+    teamLoadingOlderRef.current = true;
     const el = scrollContainerRef.current;
     const prevH = el?.scrollHeight ?? 0;
     const prevT = el?.scrollTop ?? 0;
     const oldestId = messages[0]?.id;
-    if (oldestId == null) return;
+    if (oldestId == null) {
+      teamLoadingOlderRef.current = false;
+      return;
+    }
     setTeamLoadingOlder(true);
     try {
       const url = new URL(`${API_BASE}/api/teams/${Number(teamId)}/channel/messages`);
@@ -859,13 +898,13 @@ export function ChatWindow({
     } catch {
       // ignore
     } finally {
+      teamLoadingOlderRef.current = false;
       setTeamLoadingOlder(false);
     }
   }, [
     isInternalChat,
     isTeamChannel,
     teamId,
-    teamLoadingOlder,
     teamHasMoreOlder,
     messages,
     mapTeamRowToMessage,
@@ -1475,7 +1514,7 @@ export function ChatWindow({
         });
       });
     }
-    if (isTeamChannel && teamHasMoreOlder && !teamLoadingOlder && scrollTop < 100) {
+    if (isTeamChannel && teamHasMoreOlder && !teamLoadingOlderRef.current && scrollTop < 100) {
       void loadTeamOlderMessages();
     }
     if (isDmPage && dmSlug && dmHasMoreOlder(dmSlug) && !loadingOlderDmSlug && scrollTop < 100) {
@@ -1857,22 +1896,29 @@ export function ChatWindow({
       let outContent = text;
       try {
         if (pendingAttachment?.type === 'voice') {
-          const dataUrl = await blobUrlToDataUrl(pendingAttachment.url);
-          if (dataUrl.length > 2_000_000) {
-            addSystemNote('Voice message is too large. Try a shorter recording.');
-            return;
+          try {
+            const meta = await uploadAttachmentToR2(pendingAttachment);
+            await sendMessageBySlug(dmSlug, text || 'Voice message', replyingTo?.id, meta);
+          } catch {
+            const dataUrl = await blobUrlToDataUrl(pendingAttachment.url);
+            if (dataUrl.length > 2_000_000) {
+              addSystemNote('Voice message is too large. Try a shorter recording.');
+              return;
+            }
+            outContent = encodeDmMessagePayload({
+              text: text,
+              attachment: { ...pendingAttachment, url: dataUrl },
+            });
+            await sendMessageBySlug(dmSlug, outContent, replyingTo?.id);
           }
-          outContent = encodeDmMessagePayload({
-            text: text,
-            attachment: { ...pendingAttachment, url: dataUrl },
-          });
         } else if (pendingAttachment) {
           addSystemNote('Direct messages support text or voice only.');
           return;
         } else if (!text) {
           return;
+        } else {
+          await sendMessageBySlug(dmSlug, outContent, replyingTo?.id);
         }
-        await sendMessageBySlug(dmSlug, outContent, replyingTo?.id);
       } catch {
         addSystemNote('Message failed to send. Please try again.');
         return;
@@ -1895,13 +1941,24 @@ export function ChatWindow({
         sendTypingWs(false);
         const mentionList = Array.from(mentionIdsRef.current);
         let att = pendingAttachment ?? undefined;
-        if (att?.type === 'voice' && att.url.startsWith('blob:')) {
-          const dataUrl = await blobUrlToDataUrl(att.url);
-          if (dataUrl.length > 2_000_000) {
-            addSystemNote('Voice message is too large. Try a shorter recording.');
-            return;
+        let teamMeta: Record<string, unknown> | undefined;
+        if (att) {
+          try {
+            teamMeta = await uploadAttachmentToR2(att);
+            att = undefined;
+          } catch {
+            if (att?.type === 'voice' && att.url.startsWith('blob:')) {
+              const dataUrl = await blobUrlToDataUrl(att.url);
+              if (dataUrl.length > 2_000_000) {
+                addSystemNote('Voice message is too large. Try a shorter recording.');
+                return;
+              }
+              att = { ...att, url: dataUrl };
+            } else {
+              addSystemNote('Could not upload media. Check storage configuration.');
+              return;
+            }
           }
-          att = { ...att, url: dataUrl };
         }
         const payloadJson = encodeTeamMessageContent({
           text: text || '',
@@ -1909,10 +1966,11 @@ export function ChatWindow({
           replyTo: replyingTo ?? undefined,
           mentions: mentionList.length > 0 ? mentionList : undefined,
         });
-        const body: Record<string, number | string | boolean> = {
+        const body: Record<string, number | string | boolean | Record<string, unknown>> = {
           tenant_id: Number(TENANT_ID),
           content: typeof payloadJson === 'string' ? payloadJson : String(payloadJson ?? ''),
         };
+        if (teamMeta) body.message_metadata = teamMeta;
         if (broadcastMode) {
           body.posted_by_admin = true;
         } else {
@@ -1959,6 +2017,15 @@ export function ChatWindow({
       return;
     }
     if (isInboxPage && !isInternalChat && inboxConv?.selectedId != null) {
+      let metaOut: Record<string, unknown> | undefined;
+      if (pendingAttachment) {
+        try {
+          metaOut = await uploadAttachmentToR2(pendingAttachment);
+        } catch {
+          addSystemNote('Could not upload media. Configure R2 (see server env) and try again.');
+          return;
+        }
+      }
       const im: InboxMessage = {
         id: nextId,
         content: newMsg.content,
@@ -1969,9 +2036,18 @@ export function ChatWindow({
         replyTo: replyingTo ?? undefined,
         replyToMessageId: replyingTo?.id,
         messageStatus: { sent: true, delivered: false, read: false },
+        messageMetadata: metaOut,
+        attachment: pendingAttachment ?? undefined,
       };
       inboxConv.appendMessage(inboxConv.selectedId, im);
       inboxConv.markAgentReplied(inboxConv.selectedId);
+      if (pendingAttachment?.url?.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(pendingAttachment.url);
+        } catch {
+          // ignore
+        }
+      }
       setInputValue('');
       setReplyingTo(null);
       setPendingAttachment(null);
