@@ -2218,7 +2218,6 @@ export function ChatWindow({
       attachment: pendingAttachment ?? undefined,
     };
     if (isInternalChat && isDmPage && dmSlug) {
-      let outContent = text;
       try {
         if (pendingAttachment?.type === 'voice') {
           try {
@@ -2230,19 +2229,48 @@ export function ChatWindow({
               addSystemNote('Voice message is too large. Try a shorter recording.');
               return;
             }
-            outContent = encodeDmMessagePayload({
+            const outContent = encodeDmMessagePayload({
               text: text,
               attachment: { ...pendingAttachment, url: dataUrl },
             });
             await sendMessageBySlug(dmSlug, outContent, replyingTo?.id);
           }
+        } else if (
+          pendingAttachment &&
+          (pendingAttachment.type === 'photo' || pendingAttachment.type === 'file')
+        ) {
+          const att = pendingAttachment;
+          const caption =
+            text.trim() || (att.type === 'photo' ? 'Image' : att.name || 'Attachment');
+          try {
+            const meta = await uploadAttachmentToR2(att);
+            await sendMessageBySlug(dmSlug, caption, replyingTo?.id, meta);
+          } catch {
+            const dataUrl = att.url.startsWith('blob:') ? await blobUrlToDataUrl(att.url) : att.url;
+            if (dataUrl.length > 2_500_000) {
+              addSystemNote('Could not upload media. Check storage configuration or use a smaller file.');
+              return;
+            }
+            await sendMessageBySlug(
+              dmSlug,
+              encodeDmMessagePayload({
+                text: caption,
+                attachment: {
+                  type: att.type === 'photo' ? 'photo' : 'file',
+                  name: att.name,
+                  url: dataUrl,
+                },
+              }),
+              replyingTo?.id,
+            );
+          }
         } else if (pendingAttachment) {
-          addSystemNote('Direct messages support text or voice only.');
+          addSystemNote('Unsupported attachment type.');
           return;
-        } else if (!text) {
+        } else if (!text.trim()) {
           return;
         } else {
-          await sendMessageBySlug(dmSlug, outContent, replyingTo?.id);
+          await sendMessageBySlug(dmSlug, text.trim(), replyingTo?.id);
         }
       } catch {
         addSystemNote('Message failed to send. Please try again.');
@@ -4419,17 +4447,17 @@ export function ChatWindow({
                       {formatReadAt(new Date(targetMessage.editedAt))}
                     </p>
                   )}
-                  {outgoingDmInfo && (
-                    <>
-                      <p>
-                        <span className="text-text-muted">Delivered to {peerName} · </span>
-                        {deliveredOk ? formatReadAt(deliveredDm!) : 'Pending'}
-                      </p>
-                      <p>
-                        <span className="text-text-muted">Read by {peerName} · </span>
-                        {readOk ? formatReadAt(readDm!) : '—'}
-                      </p>
-                    </>
+                  {outgoingDmInfo && deliveredOk && (
+                    <p>
+                      <span className="text-text-muted">Delivered to {peerName} · </span>
+                      {formatReadAt(deliveredDm!)}
+                    </p>
+                  )}
+                  {outgoingDmInfo && readOk && (
+                    <p>
+                      <span className="text-text-muted">Read by {peerName} · </span>
+                      {formatReadAt(readDm!)}
+                    </p>
                   )}
                 </div>
               </div>
