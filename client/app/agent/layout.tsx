@@ -2,6 +2,7 @@
 
 import { AgentSidebar } from '@/components/layout/agent-sidebar';
 import { AgentHeader } from '@/components/layout/agent-header';
+import { AgentPresenceRail } from '@/components/layout/agent-presence-rail';
 import { AgentPortalShellSkeleton } from '@/components/layout/agent-portal-shell-skeleton';
 import { SidebarProvider } from '@/contexts/SidebarContext';
 import { AgentProfileProvider } from '@/contexts/AgentProfileContext';
@@ -90,7 +91,10 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
         style={{ marginLeft: isCollapsed ? '80px' : '256px' }}
       >
         <AgentHeader />
-        <main className="flex-1 overflow-hidden bg-scaffold">{children}</main>
+        <main className="flex min-h-0 min-w-0 flex-1 bg-scaffold">
+          <AgentPresenceRail />
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
+        </main>
       </div>
     </div>
   );
