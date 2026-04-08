@@ -48,7 +48,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "https://arabia-dropshipping
 export default function AdminSettings() {
   const { schedule, setSchedule } = useOnlineSchedule();
   const { timeZone, setTimeZone, refresh: refreshTenantTimezone, tenantId } = useTenantTimezone();
-  const { enabled: soundAlertsEnabled, setEnabled: setSoundAlertsEnabled, requestPlay } = useSoundAlerts();
+  const { enabled: soundAlertsEnabled, setEnabled: setSoundAlertsEnabled } = useSoundAlerts();
   const { toast } = useToast();
   const { agents, refreshAgents } = useAgents();
   const [broadcasts, setBroadcasts] = useState<AdminBroadcast[]>([]);
@@ -78,7 +78,6 @@ export default function AdminSettings() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [maxConcurrentDraft, setMaxConcurrentDraft] = useState(5);
   const [agentMgmtLoading, setAgentMgmtLoading] = useState(false);
-  const [transferSavingId, setTransferSavingId] = useState<string | null>(null);
 
   /** Prefer JWT tenant; default 1 matches single-tenant bootstrap. */
   const effectiveTenantId = tenantId ?? 1;
@@ -119,35 +118,6 @@ export default function AdminSettings() {
       cancelled = true;
     };
   }, [refreshAgents, effectiveTenantId]);
-
-  const patchAgentCanTransfer = async (agentId: string, allowed: boolean) => {
-    if (typeof window === 'undefined') return;
-    const token = localStorage.getItem('auth_token');
-    if (!token) {
-      toast('Sign in to update agents');
-      return;
-    }
-    setTransferSavingId(agentId);
-    try {
-      const res = await fetch(`${API_BASE}/api/agents/${agentId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ can_transfer_conversations: allowed }),
-      });
-      if (!res.ok) {
-        throw new Error('Failed to update');
-      }
-      toast(allowed ? 'Agent can transfer chats' : 'Transfer disabled for agent');
-      await refreshAgents();
-    } catch {
-      toast('Failed to update transfer permission');
-    } finally {
-      setTransferSavingId(null);
-    }
-  };
 
   useEffect(() => {
     try {
@@ -565,25 +535,6 @@ export default function AdminSettings() {
               Multiple events within 3 seconds only trigger one sound. Sustained activity (e.g. several messages
               spread over 10 seconds) can play once per 3 seconds each.
             </p>
-            <div className="mt-4 max-w-xl">
-              <button
-                type="button"
-                onClick={() => {
-                  requestPlay('customer_message');
-                  toast(
-                    soundAlertsEnabled
-                      ? 'Played test chime (if audio is blocked, click again after interacting with the page).'
-                      : 'Turn sound alerts on above to hear the test chime.',
-                  );
-                }}
-                className="text-sm font-medium text-primary hover:underline"
-              >
-                Test chime (customer message sound)
-              </button>
-              <p className="mt-1 text-[10px] text-text-muted">
-                Uses the same path as live alerts (respects the master toggle and the 3 second debounce).
-              </p>
-            </div>
           </div>
 
           <div className="border-t border-border pt-6">
@@ -592,9 +543,7 @@ export default function AdminSettings() {
               Agent management
             </h3>
             <p className="text-xs text-text-secondary mb-4 max-w-2xl">
-              Cap how many active customer conversations each agent can hold at once (routing and transfers respect
-              this). Choose which agents may transfer chats to teammates; changes apply on save or immediately for
-              transfer toggles.
+              Cap how many active customer conversations each agent can hold at once.
             </p>
             <div className="space-y-4 max-w-2xl">
               <div>
@@ -611,55 +560,6 @@ export default function AdminSettings() {
                   onChange={(e) => setMaxConcurrentDraft(parseInt(e.target.value, 10) || 1)}
                   className="w-32 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                 />
-                <p className="mt-1 text-[10px] text-text-muted">
-                  Saved with <span className="font-medium">Save Changes</span> below (1–100). Updates every agent in
-                  this tenant.
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-medium text-text-primary mb-2">Can transfer conversations</p>
-                {agents.length === 0 ? (
-                  <p className="text-xs text-text-secondary">No agents yet. Add agents from the Agents screen.</p>
-                ) : (
-                  <div className="border border-border rounded-lg overflow-hidden">
-                    <table className="w-full text-xs text-left">
-                      <thead className="bg-panel text-text-muted font-medium">
-                        <tr>
-                          <th className="py-2 px-3 border-b border-border">Agent</th>
-                          <th className="py-2 px-3 border-b border-border w-32">Transfer</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-text-primary">
-                        {agents.map((a) => (
-                          <tr key={a.id} className="border-b border-border/80 last:border-0">
-                            <td className="py-2 px-3">
-                              <div className="font-medium">{a.name}</div>
-                              <div className="text-[10px] text-text-muted">{a.email}</div>
-                            </td>
-                            <td className="py-2 px-3">
-                              <button
-                                type="button"
-                                role="switch"
-                                aria-checked={a.canTransferConversations}
-                                disabled={transferSavingId === a.id}
-                                onClick={() => void patchAgentCanTransfer(a.id, !a.canTransferConversations)}
-                                className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-                                  a.canTransferConversations ? 'bg-primary' : 'bg-border'
-                                }`}
-                              >
-                                <span
-                                  className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
-                                    a.canTransferConversations ? 'translate-x-5' : 'translate-x-0.5'
-                                  }`}
-                                />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
               </div>
             </div>
           </div>
