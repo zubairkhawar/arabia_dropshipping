@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -149,8 +149,8 @@ def mark_team_read_through_receipts(
 def batch_team_receipt_summaries(
     db: Session,
     message_ids: List[int],
-) -> Dict[int, Dict[str, int]]:
-    """message_id -> {recipient_count, delivered_count, read_count}."""
+) -> Dict[int, Dict[str, Any]]:
+    """message_id -> {recipient_count, delivered_count, read_count, last_read_at?}."""
     if not message_ids:
         return {}
     rows = (
@@ -161,12 +161,21 @@ def batch_team_receipt_summaries(
     by_mid: Dict[int, List[TeamMessageReceipt]] = {}
     for r in rows:
         by_mid.setdefault(r.message_id, []).append(r)
-    out: Dict[int, Dict[str, int]] = {}
+    out: Dict[int, Dict[str, Any]] = {}
     for mid in message_ids:
         lst = by_mid.get(mid, [])
+        recipient_count = len(lst)
+        delivered_count = sum(1 for x in lst if x.delivered_at is not None)
+        read_count = sum(1 for x in lst if x.read_at is not None)
+        last_read_at: Optional[datetime] = None
+        if recipient_count > 0 and read_count == recipient_count:
+            read_times = [x.read_at for x in lst if x.read_at is not None]
+            if len(read_times) == recipient_count:
+                last_read_at = max(read_times)
         out[mid] = {
-            "recipient_count": len(lst),
-            "delivered_count": sum(1 for x in lst if x.delivered_at is not None),
-            "read_count": sum(1 for x in lst if x.read_at is not None),
+            "recipient_count": recipient_count,
+            "delivered_count": delivered_count,
+            "read_count": read_count,
+            "last_read_at": last_read_at,
         }
     return out

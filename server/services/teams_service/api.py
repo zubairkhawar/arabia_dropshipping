@@ -42,6 +42,7 @@ from services.teams_service.receipt_helpers import (
     mark_team_read_through_receipts,
 )
 from services.teams_service.team_channel_hub import hub
+from services.teams_service.team_mention_utils import collect_mention_targets_for_message
 
 
 router = APIRouter()
@@ -177,6 +178,7 @@ class TeamReceiptSummaryOut(BaseModel):
     recipient_count: int
     delivered_count: int
     read_count: int
+    last_read_at: Optional[datetime] = None
 
 
 class TeamChannelMessageOut(BaseModel):
@@ -866,6 +868,7 @@ def _team_receipt_summary_for_viewer(
         recipient_count=s["recipient_count"],
         delivered_count=s["delivered_count"],
         read_count=s["read_count"],
+        last_read_at=s.get("last_read_at"),
     )
 
 
@@ -1116,6 +1119,54 @@ async def create_team_channel_message(
     db.commit()
     db.refresh(row)
     ensure_team_message_receipt_rows(db, row)
+
+    mention_targets = collect_mention_targets_for_message(
+        db, payload.tenant_id, team_id, row.content or "", row.sender_agent_id
+    )
+    if mention_targets:
+        team_row = (
+            db.query(Team).filter(Team.id == team_id, Team.tenant_id == payload.tenant_id).first()
+        )
+        team_nm = team_row.name if team_row else "team"
+        sender_label = _team_channel_sender_display(db, row)
+        dec = _decode_team_msg_payload(row.content or "")
+        raw_snippet = dec.get("text") if isinstance(dec.get("text"), str) else ""
+        snippet = (raw_snippet or "").strip()
+        if len(snippet) > 120:
+            snippet = snippet[:117] + "..."
+        from services.agent_portal_service.broadcast import push_notification_event
+        from services.agent_portal_service.unread_compute import build_unread_summary_dict
+
+        pending_notifs: List[Notification] = []
+        for aid in mention_targets:
+            n = Notification(
+                tenant_id=payload.tenant_id,
+                agent_id=aid,
+                type="mention",
+                message=f"{sender_label} mentioned you in #{team_nm}",
+                description=snippet or None,
+                from_agent_id=row.sender_agent_id,
+                conversation_id=None,
+                read=False,
+            )
+            db.add(n)
+            pending_notifs.append(n)
+        db.commit()
+        for n in pending_notifs:
+            db.refresh(n)
+            notif_dict = {
+                "id": n.id,
+                "type": n.type,
+                "message": n.message,
+                "description": n.description,
+                "from_agent_id": n.from_agent_id,
+                "conversation_id": n.conversation_id,
+                "created_at": n.created_at,
+                "read": n.read,
+            }
+            summary = build_unread_summary_dict(db, payload.tenant_id, n.agent_id)
+            await push_notification_event(payload.tenant_id, n.agent_id, notif_dict, summary)
+
     msg_out = _team_channel_message_to_out(
         db, row, _team_receipt_summary_for_viewer(db, row, current_user)
     )

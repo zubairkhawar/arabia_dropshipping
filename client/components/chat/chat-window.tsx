@@ -91,7 +91,12 @@ interface Message {
   peerDeliveredAt?: string;
   peerReadAt?: string;
   /** Team channel: server receipt aggregate for outgoing messages (sender/admin view). */
-  teamReceiptSummary?: { recipient_count: number; delivered_count: number; read_count: number };
+  teamReceiptSummary?: {
+    recipient_count: number;
+    delivered_count: number;
+    read_count: number;
+    last_read_at?: string | null;
+  };
   sendFailed?: boolean;
 }
 
@@ -115,6 +120,7 @@ interface TeamChannelMessageRow {
     recipient_count: number;
     delivered_count: number;
     read_count: number;
+    last_read_at?: string | null;
   } | null;
   message_metadata?: Record<string, unknown> | null;
 }
@@ -569,7 +575,7 @@ export function ChatWindow({
   const [deletedForMeIds, setDeletedForMeIds] = useState<number[]>([]);
   const [replyingTo, setReplyingTo] = useState<{ id: number; senderName: string; content: string } | null>(null);
   const [messageInfoId, setMessageInfoId] = useState<number | null>(null);
-  /** DM: popover anchored to the message bubble (viewport coords). */
+  /** DM / team internal: popover anchored to the message bubble (viewport coords). */
   const [messageInfoAnchor, setMessageInfoAnchor] = useState<{
     top: number;
     left: number;
@@ -767,6 +773,40 @@ export function ChatWindow({
     o.name.toLowerCase().includes((mentionFilter || '').toLowerCase()),
   );
 
+  /** Longest roster name after @ (case-insensitive), including spaces; for send payload. */
+  const collectTeamMentionAgentIdsFromText = (text: string): number[] => {
+    const withIds = mentionRoster.filter((r) => r.agentId && r.name.trim());
+    if (!text || withIds.length === 0) return [];
+    const byLen = [...withIds].sort((a, b) => b.name.length - a.name.length);
+    const found = new Set<number>();
+    let i = 0;
+    const n = text.length;
+    while (i < n) {
+      const at = text.indexOf('@', i);
+      if (at < 0) break;
+      const rest = text.slice(at + 1);
+      let matchedLen = 0;
+      let matchedId: number | null = null;
+      for (const r of byLen) {
+        const nm = r.name;
+        if (rest.length < nm.length) continue;
+        if (rest.slice(0, nm.length).toLowerCase() !== nm.toLowerCase()) continue;
+        const next = rest[nm.length];
+        if (next !== undefined && /[\p{L}\p{N}_]/u.test(next)) continue;
+        matchedLen = nm.length;
+        matchedId = Number.parseInt(r.agentId, 10);
+        break;
+      }
+      if (matchedId != null && Number.isFinite(matchedId) && matchedId >= 1) {
+        found.add(matchedId);
+        i = at + 1 + matchedLen;
+      } else {
+        i = at + 1;
+      }
+    }
+    return Array.from(found);
+  };
+
   useEffect(() => {
     if (activeMessageMenuId === null) return;
     const el = document.getElementById(`message-${activeMessageMenuId}`);
@@ -892,6 +932,7 @@ export function ChatWindow({
               recipient_count: m.receipt_summary.recipient_count,
               delivered_count: m.receipt_summary.delivered_count,
               read_count: m.receipt_summary.read_count,
+              last_read_at: m.receipt_summary.last_read_at ?? undefined,
             }
           : undefined,
       };
@@ -1022,6 +1063,7 @@ export function ChatWindow({
                 recipient_count: s.recipient_count,
                 delivered_count: s.delivered_count,
                 read_count: s.read_count,
+                last_read_at: s.last_read_at ?? undefined,
               },
             };
           }),
@@ -1551,23 +1593,63 @@ export function ChatWindow({
 
   const renderTeamMessageBody = (content: string) => {
     if (!isTeamChannel || !content) return content;
+    const rosterForHighlight = mentionRoster.filter((r) => r.name.trim());
+    const byLen = [...rosterForHighlight].sort((a, b) => b.name.length - a.name.length);
     const parts: ReactNode[] = [];
-    const re = /@([^\s@]+)/g;
-    let last = 0;
-    let m: RegExpExecArray | null;
+    let i = 0;
     let mi = 0;
-    while ((m = re.exec(content)) !== null) {
-      if (m.index > last) parts.push(<span key={`t-${mi++}`}>{content.slice(last, m.index)}</span>);
-      const token = m[1];
-      const hit = mentionRoster.find((r) => r.name.toLowerCase() === token.toLowerCase());
-      parts.push(
-        <span key={`m-${m.index}`} className={hit ? 'font-semibold text-[#53bdeb]' : 'text-[#8696a0]'}>
-          @{token}
-        </span>,
-      );
-      last = m.index + m[0].length;
+    const n = content.length;
+    while (i < n) {
+      const at = content.indexOf('@', i);
+      if (at < 0) {
+        parts.push(<span key={`t-${mi++}`}>{content.slice(i)}</span>);
+        break;
+      }
+      if (at > i) parts.push(<span key={`t-${mi++}`}>{content.slice(i, at)}</span>);
+      const rest = content.slice(at + 1);
+      let matchedLen = 0;
+      let hit: MentionRosterItem | null = null;
+      for (const r of byLen) {
+        const nm = r.name;
+        if (rest.length < nm.length) continue;
+        if (rest.slice(0, nm.length).toLowerCase() !== nm.toLowerCase()) continue;
+        const next = rest[nm.length];
+        if (next !== undefined && /[\p{L}\p{N}_]/u.test(next)) continue;
+        matchedLen = nm.length;
+        hit = r;
+        break;
+      }
+      if (hit && matchedLen > 0) {
+        const shown = rest.slice(0, matchedLen);
+        parts.push(
+          <span
+            key={`m-${at}`}
+            className="rounded-sm bg-[#53bdeb]/15 font-semibold text-[#53bdeb]"
+          >
+            @{shown}
+          </span>,
+        );
+        i = at + 1 + matchedLen;
+      } else {
+        const loose = /^[^\s@]+/.exec(rest);
+        const token = loose ? loose[0] : '';
+        if (token) {
+          parts.push(
+            <span key={`m-${at}`} className="text-[#8696a0]">
+              @{token}
+            </span>,
+          );
+          i = at + 1 + token.length;
+        } else {
+          parts.push(
+            <span key={`m-${at}`} className="text-[#8696a0]">
+              @
+            </span>,
+          );
+          i = at + 1;
+        }
+      }
     }
-    if (last < content.length) parts.push(<span key={`t-end-${mi}`}>{content.slice(last)}</span>);
     return parts.length > 0 ? parts : content;
   };
 
@@ -1976,8 +2058,11 @@ export function ChatWindow({
     setMessageInfoPopoverEnter(false);
   }, []);
 
+  const anchoredInternalMessageInfo =
+    isInternalChat && (isDmPage || isTeamChannel) && messageInfoAnchor;
+
   useLayoutEffect(() => {
-    if (messageInfoId == null || !isDmPage || !messageInfoAnchor) {
+    if (messageInfoId == null || !anchoredInternalMessageInfo) {
       setMessageInfoPopoverEnter(false);
       return;
     }
@@ -1986,10 +2071,10 @@ export function ChatWindow({
       requestAnimationFrame(() => setMessageInfoPopoverEnter(true));
     });
     return () => cancelAnimationFrame(raf);
-  }, [messageInfoId, isDmPage, messageInfoAnchor]);
+  }, [messageInfoId, anchoredInternalMessageInfo]);
 
   useEffect(() => {
-    if (messageInfoId == null || !isDmPage) return;
+    if (messageInfoId == null || !isInternalChat || (!isDmPage && !isTeamChannel)) return;
     const el = scrollContainerRef.current;
     if (!el) return;
     const onScroll = () => {
@@ -1997,7 +2082,7 @@ export function ChatWindow({
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [messageInfoId, isDmPage, closeMessageInfo]);
+  }, [messageInfoId, isDmPage, isTeamChannel, isInternalChat, closeMessageInfo]);
 
   const deleteMessage = async (id: number) => {
     if (isInboxPage && !isInternalChat) {
@@ -2353,7 +2438,10 @@ export function ChatWindow({
     if (isInternalChat && isTeamChannel && teamId) {
       try {
         sendTypingWs(false);
-        const mentionList = Array.from(mentionIdsRef.current);
+        const fromText = collectTeamMentionAgentIdsFromText(text || '');
+        const mentionList = Array.from(
+          new Set<number>([...Array.from(mentionIdsRef.current), ...fromText]),
+        );
         let att = pendingAttachment ?? undefined;
         let teamMeta: Record<string, unknown> | undefined;
         if (att) {
@@ -2663,11 +2751,15 @@ export function ChatWindow({
         );
       } else if (isTeamChannel && teamId) {
         sendTypingWs(false);
+        const fromTextVoice = collectTeamMentionAgentIdsFromText(inputValue || '');
+        const voiceMentions = Array.from(
+          new Set<number>([...Array.from(mentionIdsRef.current), ...fromTextVoice]),
+        );
         const payloadJson = encodeTeamMessageContent({
           text: '',
           attachment: resolved,
           replyTo: replyingTo ?? undefined,
-          mentions: mentionIdsRef.current.size > 0 ? Array.from(mentionIdsRef.current) : undefined,
+          mentions: voiceMentions.length > 0 ? voiceMentions : undefined,
         });
         const body: Record<string, number | string | boolean> = {
           tenant_id: Number(TENANT_ID),
@@ -2797,12 +2889,18 @@ export function ChatWindow({
     const lastAt = textToCursor.lastIndexOf('@');
     if (lastAt >= 0) {
       const afterAt = textToCursor.slice(lastAt + 1);
-      if (!/\s/.test(afterAt)) {
-        setMentionFilter(afterAt);
-        mentionAnchorRef.current = lastAt;
-        setShowMentionDropdown(true);
-        setMentionIndex(0);
-        return;
+      if (!afterAt.includes('@')) {
+        const filterLower = afterAt.toLowerCase();
+        const couldExtend =
+          afterAt.length === 0 ||
+          mentionRoster.some((o) => o.name.toLowerCase().startsWith(filterLower));
+        if (couldExtend) {
+          setMentionFilter(afterAt);
+          mentionAnchorRef.current = lastAt;
+          setShowMentionDropdown(true);
+          setMentionIndex(0);
+          return;
+        }
       }
     }
     setShowMentionDropdown(false);
@@ -3877,7 +3975,7 @@ export function ChatWindow({
                             type="button"
                             className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                             onClick={() => {
-                              if (isDmPage) {
+                              if (isDmPage || (isTeamChannel && isInternalChat)) {
                                 const el = document.getElementById(`message-${message.id}`);
                                 const r = el?.getBoundingClientRect();
                                 setMessageInfoAnchor(
@@ -4550,6 +4648,90 @@ export function ChatWindow({
                         <p>
                           <span className="text-text-muted">Delivered · </span>
                           {formatSoftMessageInfoTime(deliveredAtForDisplay)}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            </>
+          );
+        }
+
+        if (isTeamChannel && isInternalChat && targetMessage) {
+          const outgoingTeamBubble = isOutgoingMessage(targetMessage);
+          const sentTeam = targetMessage.sentAt ? new Date(targetMessage.sentAt) : null;
+          const sentOkTeam = sentTeam && !Number.isNaN(sentTeam.getTime());
+          const sumT = targetMessage.teamReceiptSummary;
+          const rcT = sumT?.recipient_count ?? 0;
+          const allReadTeam = Boolean(sumT && rcT > 0 && sumT.read_count >= rcT);
+          const readTeamAt =
+            allReadTeam && sumT?.last_read_at ? new Date(sumT.last_read_at) : null;
+          const readOkTeam = readTeamAt && !Number.isNaN(readTeamAt.getTime());
+
+          const anchor = messageInfoAnchor;
+          const margin = 10;
+          const popW = 288;
+          const estH = 96;
+          const vw = typeof window !== 'undefined' ? window.innerWidth : 400;
+          const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+          let top = Math.max(margin, (vh - estH) / 2);
+          let left = Math.max(margin, (vw - popW) / 2);
+          if (anchor) {
+            top = anchor.top - estH - margin;
+            if (top < margin) top = anchor.bottom + margin;
+            top = Math.max(margin, Math.min(top, vh - estH - margin));
+            left = outgoingTeamBubble ? anchor.right - popW : anchor.left;
+            left = Math.max(margin, Math.min(left, vw - popW - margin));
+          }
+
+          return (
+            <>
+              <button
+                type="button"
+                className={`fixed inset-0 z-[40] cursor-default bg-black/20 transition-opacity duration-200 ease-out ${
+                  messageInfoPopoverEnter ? 'opacity-100' : 'opacity-0'
+                }`}
+                onClick={closeMessageInfo}
+                aria-label="Dismiss"
+              />
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Delivery and read times"
+                className={`fixed z-[50] w-72 rounded-xl border border-border bg-white py-3 pl-3 pr-10 shadow-2xl transition-all duration-200 ease-out ${
+                  outgoingTeamBubble ? 'origin-top-right' : 'origin-top-left'
+                } ${
+                  messageInfoPopoverEnter
+                    ? 'translate-y-0 scale-100 opacity-100'
+                    : 'translate-y-1 scale-[0.96] opacity-0'
+                }`}
+                style={{ top: `${top}px`, left: `${left}px` }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={closeMessageInfo}
+                  className="absolute right-2 top-2 rounded-full p-1 text-text-muted hover:bg-panel"
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+                <div className="space-y-2.5 text-sm text-text-primary">
+                  {outgoingTeamBubble && (
+                    <>
+                      <p>
+                        <span className="text-text-muted">Read · </span>
+                        {readOkTeam ? (
+                          formatSoftMessageInfoTime(readTeamAt!)
+                        ) : (
+                          <span className="text-text-muted tracking-[0.35em]">···</span>
+                        )}
+                      </p>
+                      {sentOkTeam && (
+                        <p>
+                          <span className="text-text-muted">Delivered · </span>
+                          {formatSoftMessageInfoTime(sentTeam!)}
                         </p>
                       )}
                     </>

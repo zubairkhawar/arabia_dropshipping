@@ -11,6 +11,7 @@ export interface TeamReceiptSummaryPayload {
   recipient_count: number;
   delivered_count: number;
   read_count: number;
+  last_read_at?: string | null;
 }
 
 export interface TeamChannelWsMessage {
