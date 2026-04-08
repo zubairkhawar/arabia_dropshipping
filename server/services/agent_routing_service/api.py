@@ -10,6 +10,8 @@ from sqlalchemy import func, desc
 
 from database import get_db
 from models import Agent, Conversation, Customer, Store, StoreAgentMapping, AgentAttendanceSession
+from services.auth_service.api import get_current_user
+from services.auth_service.models import User as AuthUser
 
 
 router = APIRouter()
@@ -50,8 +52,8 @@ class AssignRequest(BaseModel):
     )
 
 
-# Hard cap per product spec (also respects Agent.max_concurrent_chats when lower).
-MAX_ROUTING_CHATS_PER_AGENT = 7
+# Upper sanity bound; per-agent limit comes from Agent.max_concurrent_chats (tenant-synced).
+MAX_ROUTING_CHATS_PER_AGENT = 100
 
 
 class AssignResponse(BaseModel):
@@ -237,11 +239,7 @@ def _active_assigned_conversations(db: Session, agent_id: int) -> int:
 
 
 def _agent_capacity_limit(agent: Agent) -> int:
-    raw = (
-        agent.max_concurrent_chats
-        if agent.max_concurrent_chats is not None
-        else MAX_ROUTING_CHATS_PER_AGENT
-    )
+    raw = agent.max_concurrent_chats if agent.max_concurrent_chats is not None else 5
     return min(MAX_ROUTING_CHATS_PER_AGENT, max(1, int(raw)))
 
 
@@ -387,7 +385,7 @@ async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_
     1. Old customer → previous agent if exists (when under capacity).
     2. Store mapped to an agent → mapped agent (when under capacity).
     3. Otherwise → random online agent in routed team (if provided) or any team.
-    Each agent accepts at most min(7, max_concurrent_chats) active conversations.
+    Each agent accepts at most max_concurrent_chats active conversations (1–100, tenant default).
     """
     result = perform_conversation_assignment(db, payload)
     if result is None:
@@ -400,21 +398,59 @@ async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_
 
 
 @router.post("/transfer", response_model=AssignResponse)
-async def transfer_conversation(payload: TransferRequest, db: Session = Depends(get_db)):
+async def transfer_conversation(
+    payload: TransferRequest,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(get_current_user),
+):
     """
     Transfer conversation between agents.
 
     - If target_agent_id provided → direct transfer.
     - Else if target_team provided → random online agent from that team.
+
+    Caller must be tenant admin, or the currently assigned agent with transfer permission enabled.
     """
     conversation = db.query(Conversation).filter(Conversation.id == payload.conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
+    if current_user.tenant_id != conversation.tenant_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant mismatch")
+
+    role = (current_user.role or "").lower()
+    if role == "admin":
+        pass
+    elif role == "agent":
+        caller_agent = (
+            db.query(Agent)
+            .filter(Agent.user_id == current_user.id, Agent.tenant_id == conversation.tenant_id)
+            .first()
+        )
+        if not caller_agent:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent profile not found")
+        if conversation.agent_id is None or conversation.agent_id != caller_agent.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the assigned agent can transfer this conversation",
+            )
+        if not bool(getattr(caller_agent, "can_transfer_conversations", True)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Transfer is disabled for your account",
+            )
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to transfer")
+
     if payload.target_agent_id is not None:
         agent = db.query(Agent).filter(Agent.id == payload.target_agent_id).first()
         if not agent:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target agent not found")
+        if agent.tenant_id != conversation.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target agent is not in this tenant",
+            )
     else:
         agent = _get_random_available_agent(
             db, tenant_id=conversation.tenant_id, team=payload.target_team
@@ -424,6 +460,19 @@ async def transfer_conversation(payload: TransferRequest, db: Session = Depends(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="No available agent to transfer conversation",
             )
+
+    if agent.id == conversation.agent_id:
+        return AssignResponse(
+            conversation_id=conversation.id,
+            agent_id=agent.id,
+            reason="transfer_noop",
+        )
+
+    if not _agent_has_capacity(db, agent):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Target agent is at maximum concurrent conversations",
+        )
 
     prev_agent_id = conversation.agent_id
     conversation.agent_id = agent.id

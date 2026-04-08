@@ -1,14 +1,13 @@
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Tenant, TenantSchedule
+from models import Agent, Tenant, TenantSchedule
 from services.auth_service.api import get_current_user
 from services.auth_service.models import User
-
 
 router = APIRouter()
 
@@ -55,6 +54,73 @@ class SchedulePayload(BaseModel):
 
 class TenantDisplayTimezonePayload(BaseModel):
     display_timezone: str
+
+
+class AgentManagementOut(BaseModel):
+    max_concurrent_chats_per_agent: int
+
+
+class AgentManagementPatch(BaseModel):
+    max_concurrent_chats_per_agent: int = Field(ge=1, le=100)
+
+
+def _require_tenant_admin(current_user: User, tenant_id: int) -> None:
+    if (current_user.role or "").lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tenant admin can manage this setting",
+        )
+    if current_user.tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant mismatch",
+        )
+
+
+@router.get("/{tenant_id}/agent-management", response_model=AgentManagementOut)
+async def get_agent_management(
+    tenant_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Max concurrent customer chats per agent (tenant default, synced to all agents).
+    """
+    _require_tenant_admin(current_user, tenant_id)
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    cap = getattr(tenant, "max_concurrent_chats_per_agent", None)
+    if cap is None:
+        cap = 5
+    return AgentManagementOut(max_concurrent_chats_per_agent=int(cap))
+
+
+@router.patch("/{tenant_id}/agent-management", response_model=AgentManagementOut)
+async def patch_agent_management(
+    tenant_id: int,
+    payload: AgentManagementPatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Set tenant-wide max concurrent chats and apply to every agent in the tenant.
+    """
+    _require_tenant_admin(current_user, tenant_id)
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    tenant.max_concurrent_chats_per_agent = payload.max_concurrent_chats_per_agent
+    db.add(tenant)
+    db.query(Agent).filter(Agent.tenant_id == tenant_id).update(
+        {Agent.max_concurrent_chats: payload.max_concurrent_chats_per_agent},
+        synchronize_session=False,
+    )
+    db.commit()
+    db.refresh(tenant)
+    return AgentManagementOut(
+        max_concurrent_chats_per_agent=int(tenant.max_concurrent_chats_per_agent),
+    )
 
 
 def _validate_iana_timezone(tz: str) -> str:

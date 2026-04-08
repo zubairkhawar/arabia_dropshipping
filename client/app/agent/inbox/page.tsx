@@ -6,10 +6,15 @@ import { ContextPanel } from '@/components/chat/context-panel';
 import { InboxAgentPresenceStack } from '@/components/inbox/inbox-agent-presence';
 import { InboxPanelsProvider, useInboxPanels } from '@/contexts/InboxPanelsContext';
 import { InboxConversationsProvider } from '@/contexts/InboxConversationsContext';
+import { useAgents } from '@/contexts/AgentsContext';
 import { PanelRightOpen, SquareChevronRight, Search } from 'lucide-react';
 
 function AgentInboxContent() {
   const { chatListCollapsed, contextCollapsed, setChatListCollapsed, setContextCollapsed } = useInboxPanels();
+  const { getCurrentAgent, currentAgentId } = useAgents();
+  const me = getCurrentAgent();
+  const canTransfer =
+    Boolean(currentAgentId) && me !== null ? me.canTransferConversations !== false : false;
 
   return (
     <div className="flex h-full">
@@ -49,7 +54,7 @@ function AgentInboxContent() {
 
       {/* Middle panel: chat window (always visible) */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <ChatWindow showTransferControls />
+        <ChatWindow showTransferControls canTransferConversations={canTransfer} />
       </div>
 
       {/* Right panel: context or expand strip */}

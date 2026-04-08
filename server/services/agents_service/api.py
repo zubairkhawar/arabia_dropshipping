@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import (
     Agent,
+    Tenant,
     User,
     Conversation,
     StoreAgentMapping,
@@ -17,7 +18,7 @@ from models import (
     Notification,
     Team,
 )
-from services.auth_service.api import get_current_user
+from services.auth_service.api import get_current_user, get_current_user_optional
 from services.auth_service.services import get_password_hash
 
 
@@ -73,6 +74,8 @@ class AgentOut(BaseModel):
     avatar_url: Optional[str] = None
     status: str
     team: Optional[str] = None
+    max_concurrent_chats: int = 5
+    can_transfer_conversations: bool = True
     created_at: datetime
 
     class Config:
@@ -102,6 +105,7 @@ class AgentUpdate(BaseModel):
     full_name: Optional[str] = None
     team: Optional[str] = None
     avatar_url: Optional[str] = None
+    can_transfer_conversations: Optional[bool] = None
 
     @field_validator("full_name")
     @classmethod
@@ -132,6 +136,10 @@ async def list_agents(tenant_id: int, db: Session = Depends(get_db)):
                 avatar_url=getattr(user, "avatar_url", None),
                 status=agent.status,
                 team=agent.team,
+                max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+                can_transfer_conversations=bool(
+                    getattr(agent, "can_transfer_conversations", True)
+                ),
                 created_at=agent.created_at,
             )
         )
@@ -160,11 +168,20 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.flush()
 
+    tenant_row = db.query(Tenant).filter(Tenant.id == payload.tenant_id).first()
+    cap = 5
+    if tenant_row is not None:
+        tcap = getattr(tenant_row, "max_concurrent_chats_per_agent", None)
+        if tcap is not None:
+            cap = int(tcap)
+
     agent = Agent(
         tenant_id=payload.tenant_id,
         user_id=user.id,
         status="offline",
         team=payload.team,
+        max_concurrent_chats=cap,
+        can_transfer_conversations=True,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
@@ -244,12 +261,21 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
         avatar_url=getattr(user, "avatar_url", None),
         status=agent.status,
         team=agent.team,
+        max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+        can_transfer_conversations=bool(
+            getattr(agent, "can_transfer_conversations", True)
+        ),
         created_at=agent.created_at,
     )
 
 
 @router.patch("/{agent_id}", response_model=AgentOut)
-async def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depends(get_db)):
+async def update_agent(
+    agent_id: int,
+    payload: AgentUpdate,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """
     Update basic agent fields (name, email, team).
     """
@@ -262,6 +288,18 @@ async def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depend
         raise HTTPException(status_code=404, detail="User not found")
 
     data = payload.model_dump(exclude_unset=True)
+    if "can_transfer_conversations" in data:
+        if (
+            current_user is None
+            or (current_user.role or "").lower() != "admin"
+            or current_user.tenant_id != agent.tenant_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only tenant admin can change transfer permission",
+            )
+        agent.can_transfer_conversations = bool(data["can_transfer_conversations"])
+        del data["can_transfer_conversations"]
     if "email" in data:
         user.email = data["email"]
     if "full_name" in data:
@@ -289,6 +327,10 @@ async def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depend
         avatar_url=getattr(user, "avatar_url", None),
         status=agent.status,
         team=agent.team,
+        max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+        can_transfer_conversations=bool(
+            getattr(agent, "can_transfer_conversations", True)
+        ),
         created_at=agent.created_at,
     )
 
@@ -370,6 +412,10 @@ async def get_me(current_user: User = Depends(get_current_user), db: Session = D
         avatar_url=getattr(current_user, "avatar_url", None),
         status=agent.status,
         team=agent.team,
+        max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+        can_transfer_conversations=bool(
+            getattr(agent, "can_transfer_conversations", True)
+        ),
         created_at=agent.created_at,
     )
 

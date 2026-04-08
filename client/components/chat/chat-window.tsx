@@ -49,6 +49,7 @@ import { useTeams } from '@/contexts/TeamsContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { useDmChats } from '@/contexts/DmChatsContext';
+import { useSoundAlerts } from '@/contexts/SoundAlertsContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import {
   addDaysToCalendarKey,
@@ -171,6 +172,8 @@ export interface ChatWindowProps {
   title?: string;
   subtitle?: string;
   showTransferControls?: boolean;
+  /** When false, hides customer transfer UI even if showTransferControls is true (tenant policy). */
+  canTransferConversations?: boolean;
   teamId?: string;
   /** For team channel: e.g. "Team A". Shown next to "# Team Channel" in header. */
   teamName?: string;
@@ -260,11 +263,21 @@ const internalTeamMembers = [
   { id: 'hamza', name: 'Hamza' },
 ];
 
+function teamMessageMentionsViewer(content: string, viewerDisplayName: string | undefined): boolean {
+  if (!content.includes('@') || !viewerDisplayName?.trim()) return false;
+  const name = viewerDisplayName.trim();
+  const first = (name.split(/\s+/)[0] ?? '').trim();
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (first && new RegExp(`@${esc(first)}\\b`, 'i').test(content)) return true;
+  return new RegExp(`@${esc(name)}`, 'i').test(content);
+}
+
 export function ChatWindow({
   isInternalChat = false,
   title = 'Ahmed Ali',
   subtitle = 'Store: My Shopify Store',
   showTransferControls = false,
+  canTransferConversations = true,
   teamId,
   teamName,
   teamMemberNames = [],
@@ -275,6 +288,7 @@ export function ChatWindow({
 }: ChatWindowProps) {
   const pathname = usePathname();
   const { timeZone } = useTenantTimezone();
+  const { requestPlay: playAlertSound } = useSoundAlerts();
   const { avatarUrl: agentAvatarUrl, fullName: agentFullName } = useAgentProfile();
   const inboxConv = useInboxConversations();
   const { teams } = useTeams();
@@ -1079,6 +1093,13 @@ export function ChatWindow({
             : mapped.senderAgentId === viewerAgentId;
           if (!isMine) {
             teamSendDeliveryAckRef.current([mapped.id]);
+            const txt = mapped.content ?? '';
+            const me = agentFullName || getCurrentAgent()?.name || '';
+            if (teamMessageMentionsViewer(txt, me)) {
+              playAlertSound('mention');
+            } else {
+              playAlertSound('new_dm');
+            }
           }
         }
         return;
@@ -1125,7 +1146,15 @@ export function ChatWindow({
         }
       }
     },
-    [mapTeamRowToMessage, viewerAgentId, broadcastMode, showBroadcastInput],
+    [
+      mapTeamRowToMessage,
+      viewerAgentId,
+      broadcastMode,
+      showBroadcastInput,
+      playAlertSound,
+      agentFullName,
+      getCurrentAgent,
+    ],
   );
 
   const { sendTyping: sendTypingWs, sendDeliveryAck: teamSendDeliveryAck } = useTeamChannelRealtime(
@@ -1261,6 +1290,7 @@ export function ChatWindow({
         }
         if (String(row.sender_agent_id) !== String(viewerAgentId) && viewerAgentId > 0) {
           dmSendDeliveryAckRef.current([row.id]);
+          playAlertSound('new_dm');
         }
         return;
       }
@@ -1268,7 +1298,7 @@ export function ChatWindow({
         mergeIncomingDmMessage(dmSlug, ev.message);
       }
     },
-    [dmSlug, mergeIncomingDmMessage, viewerAgentId, reportDmUnread, patchDmMessage],
+    [dmSlug, mergeIncomingDmMessage, viewerAgentId, reportDmUnread, patchDmMessage, playAlertSound],
   );
 
   const { sendDeliveryAck: dmSendDeliveryAck } = useDmConversationRealtime(
@@ -3107,7 +3137,7 @@ export function ChatWindow({
                       <Bot className="w-4 h-4" />
                       Send back to AI
                     </button>
-                    {showTransferControls && hasSelectedConversation && (
+                    {showTransferControls && canTransferConversations && hasSelectedConversation && (
                       <button
                         type="button"
                         onClick={() => {

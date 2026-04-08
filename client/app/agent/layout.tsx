@@ -8,6 +8,7 @@ import { AgentProfileProvider } from '@/contexts/AgentProfileContext';
 import { AgentPresenceProvider } from '@/contexts/AgentPresenceContext';
 import { DmChatsProvider } from '@/contexts/DmChatsContext';
 import { AgentPortalRealtimeProvider } from '@/contexts/AgentPortalRealtimeContext';
+import { SoundAlertsBridge } from '@/components/agent/SoundAlertsBridge';
 import { NotificationsProvider } from '@/contexts/NotificationsContext';
 import { AgentSearchProvider } from '@/contexts/AgentSearchContext';
 import { useSidebar } from '@/contexts/SidebarContext';
@@ -108,6 +109,7 @@ export default function AgentLayout({
         <AgentPresenceProvider>
           <AgentPortalRealtimeProvider>
             <NotificationsProvider>
+              <SoundAlertsBridge />
               <AgentSearchProvider>
                 <DmChatsProvider>
                   <AgentLayoutContent>{children}</AgentLayoutContent>

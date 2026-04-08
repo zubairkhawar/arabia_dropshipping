@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { Radio, XCircle, Clock, Download, Globe } from 'lucide-react';
+import { Radio, XCircle, Clock, Download, Globe, Volume2, Users } from 'lucide-react';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { TIMEZONE_GROUPS } from '@/lib/timezone-options';
@@ -10,6 +10,7 @@ import { useAgents } from '@/contexts/AgentsContext';
 import { getDayAttendance } from '@/components/agents/activity-bar';
 import { buildAllAgentsPdf } from '@/lib/attendance-pdf';
 import type { OnlineSchedule } from '@/contexts/OnlineScheduleContext';
+import { useSoundAlerts } from '@/contexts/SoundAlertsContext';
 
 interface Broadcast {
   id: string;
@@ -59,8 +60,9 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "https://arabia-dropshipping
 export default function AdminSettings() {
   const { schedule, setSchedule } = useOnlineSchedule();
   const { timeZone, setTimeZone, refresh: refreshTenantTimezone } = useTenantTimezone();
+  const { enabled: soundAlertsEnabled, setEnabled: setSoundAlertsEnabled, requestPlay } = useSoundAlerts();
   const { toast } = useToast();
-  const { agents } = useAgents();
+  const { agents, refreshAgents } = useAgents();
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
   const [broadcastsLoading, setBroadcastsLoading] = useState(false);
   const [broadcastSubmitting, setBroadcastSubmitting] = useState(false);
@@ -79,6 +81,9 @@ export default function AdminSettings() {
   const [scheduleDraft, setScheduleDraft] = useState<OnlineSchedule>(schedule);
   const [displayTimezoneDraft, setDisplayTimezoneDraft] = useState(timeZone);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [maxConcurrentDraft, setMaxConcurrentDraft] = useState(5);
+  const [agentMgmtLoading, setAgentMgmtLoading] = useState(false);
+  const [transferSavingId, setTransferSavingId] = useState<string | null>(null);
 
   const TENANT_ID = 1;
 
@@ -104,6 +109,64 @@ export default function AdminSettings() {
   useEffect(() => {
     setDisplayTimezoneDraft(timeZone);
   }, [timeZone]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAgentManagement() {
+      if (typeof window === 'undefined') return;
+      const token = localStorage.getItem('auth_token');
+      if (!token) return;
+      setAgentMgmtLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/agent-management`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { max_concurrent_chats_per_agent?: number };
+        if (!cancelled && typeof data.max_concurrent_chats_per_agent === 'number') {
+          setMaxConcurrentDraft(data.max_concurrent_chats_per_agent);
+        }
+      } catch {
+        // non-fatal
+      } finally {
+        if (!cancelled) setAgentMgmtLoading(false);
+      }
+    }
+    void loadAgentManagement();
+    void refreshAgents();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshAgents]);
+
+  const patchAgentCanTransfer = async (agentId: string, allowed: boolean) => {
+    if (typeof window === 'undefined') return;
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      toast('Sign in to update agents');
+      return;
+    }
+    setTransferSavingId(agentId);
+    try {
+      const res = await fetch(`${API_BASE}/api/agents/${agentId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ can_transfer_conversations: allowed }),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to update');
+      }
+      toast(allowed ? 'Agent can transfer chats' : 'Transfer disabled for agent');
+      await refreshAgents();
+    } catch {
+      toast('Failed to update transfer permission');
+    } finally {
+      setTransferSavingId(null);
+    }
+  };
 
   useEffect(() => {
     async function loadBroadcasts() {
@@ -293,9 +356,32 @@ export default function AdminSettings() {
         throw new Error('Failed to save agent schedule');
       }
 
+      const cap = Math.min(100, Math.max(1, parseInt(String(maxConcurrentDraft), 10) || 5));
+      const amRes = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/agent-management`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ max_concurrent_chats_per_agent: cap }),
+      });
+      if (!amRes.ok) {
+        const err = await amRes.json().catch(() => ({}));
+        const msg =
+          typeof (err as { detail?: string }).detail === 'string'
+            ? (err as { detail: string }).detail
+            : 'Failed to save agent capacity';
+        throw new Error(msg);
+      }
+      const amData = (await amRes.json()) as { max_concurrent_chats_per_agent?: number };
+      if (typeof amData.max_concurrent_chats_per_agent === 'number') {
+        setMaxConcurrentDraft(amData.max_concurrent_chats_per_agent);
+      }
+
       setTimeZone(displayTimezoneDraft);
       await refreshTenantTimezone();
       setSchedule(scheduleDraft);
+      await refreshAgents();
       toast('Changes saved successfully');
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : 'Failed to save settings');
@@ -364,11 +450,177 @@ export default function AdminSettings() {
         <div className="bg-sidebar rounded-lg p-6 border border-border space-y-6">
           <div>
             <h3 className="font-semibold text-text-primary mb-4">System Configuration</h3>
-            <p className="text-xs text-text-secondary mb-4">
-              The AI bot uses your OpenAI API key from the server environment variable{' '}
-              <span className="font-mono text-text-primary">OPENAI_API_KEY</span> (for example in the Render
-              dashboard). Updating it there changes what the backend uses; it is not editable from this page.
+          </div>
+
+          <div className="border-t border-border pt-6">
+            <h3 className="font-semibold text-text-primary mb-2 flex items-center gap-2">
+              <Volume2 className="w-4 h-4" />
+              Sound alerts
+            </h3>
+            <p className="text-xs text-text-secondary mb-3">
+              Plays in this browser when agents receive new customer messages, notifications, team @mentions, or DMs.
+              At most one sound every 3 seconds to avoid spam.
             </p>
+            <div className="flex items-center justify-between gap-4 max-w-xl py-2 px-3 rounded-lg border border-border bg-panel">
+              <span className="text-sm text-text-primary">Play sound on new message / notification</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={soundAlertsEnabled}
+                onClick={() => {
+                  setSoundAlertsEnabled(!soundAlertsEnabled);
+                  toast(soundAlertsEnabled ? 'Sound alerts off' : 'Sound alerts on');
+                }}
+                className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${
+                  soundAlertsEnabled ? 'bg-primary' : 'bg-border'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+                    soundAlertsEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full max-w-2xl text-[11px] text-left border border-border rounded-lg overflow-hidden">
+                <thead className="bg-panel text-text-muted font-medium">
+                  <tr>
+                    <th className="py-2 px-2 border-b border-border">Alert</th>
+                    <th className="py-2 px-2 border-b border-border">Sound</th>
+                    <th className="py-2 px-2 border-b border-border">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="text-text-primary">
+                  <tr className="border-b border-border/80">
+                    <td className="py-1.5 px-2">New customer message</td>
+                    <td className="py-1.5 px-2">Soft chime (2 notes)</td>
+                    <td className="py-1.5 px-2 text-text-secondary">Gentle, not urgent</td>
+                  </tr>
+                  <tr className="border-b border-border/80">
+                    <td className="py-1.5 px-2">@Mention in team channel</td>
+                    <td className="py-1.5 px-2">Single ping</td>
+                    <td className="py-1.5 px-2 text-text-secondary">Higher pitch, urgent</td>
+                  </tr>
+                  <tr className="border-b border-border/80">
+                    <td className="py-1.5 px-2">New DM</td>
+                    <td className="py-1.5 px-2">Soft pop</td>
+                    <td className="py-1.5 px-2 text-text-secondary">Casual, friendly</td>
+                  </tr>
+                  <tr className="border-b border-border/80">
+                    <td className="py-1.5 px-2">Agent assigned to conversation</td>
+                    <td className="py-1.5 px-2">Short click</td>
+                    <td className="py-1.5 px-2 text-text-secondary">Informational</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1.5 px-2">Customer escalated / transfer</td>
+                    <td className="py-1.5 px-2">Double beep</td>
+                    <td className="py-1.5 px-2 text-text-secondary">Needs attention</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-3 text-[10px] text-text-muted max-w-2xl">
+              Multiple events within 3 seconds only trigger one sound. Sustained activity (e.g. several messages
+              spread over 10 seconds) can play once per 3 seconds each.
+            </p>
+            <div className="mt-4 max-w-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  requestPlay('customer_message');
+                  toast(
+                    soundAlertsEnabled
+                      ? 'Played test chime (if audio is blocked, click again after interacting with the page).'
+                      : 'Turn sound alerts on above to hear the test chime.',
+                  );
+                }}
+                className="text-sm font-medium text-primary hover:underline"
+              >
+                Test chime (customer message sound)
+              </button>
+              <p className="mt-1 text-[10px] text-text-muted">
+                Uses the same path as live alerts (respects the master toggle and the 3 second debounce).
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-border pt-6">
+            <h3 className="font-semibold text-text-primary mb-2 flex items-center gap-2">
+              <Users className="w-4 h-4" />
+              Agent management
+            </h3>
+            <p className="text-xs text-text-secondary mb-4 max-w-2xl">
+              Cap how many active customer conversations each agent can hold at once (routing and transfers respect
+              this). Choose which agents may transfer chats to teammates; changes apply on save or immediately for
+              transfer toggles.
+            </p>
+            <div className="space-y-4 max-w-2xl">
+              <div>
+                <label htmlFor="max-concurrent-chats" className="block text-xs font-medium text-text-primary mb-1">
+                  Max concurrent chats per agent
+                </label>
+                <input
+                  id="max-concurrent-chats"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={maxConcurrentDraft}
+                  disabled={agentMgmtLoading}
+                  onChange={(e) => setMaxConcurrentDraft(parseInt(e.target.value, 10) || 1)}
+                  className="w-32 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                />
+                <p className="mt-1 text-[10px] text-text-muted">
+                  Saved with <span className="font-medium">Save Changes</span> below (1–100). Updates every agent in
+                  this tenant.
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-text-primary mb-2">Can transfer conversations</p>
+                {agents.length === 0 ? (
+                  <p className="text-xs text-text-secondary">No agents yet. Add agents from the Agents screen.</p>
+                ) : (
+                  <div className="border border-border rounded-lg overflow-hidden">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-panel text-text-muted font-medium">
+                        <tr>
+                          <th className="py-2 px-3 border-b border-border">Agent</th>
+                          <th className="py-2 px-3 border-b border-border w-32">Transfer</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-text-primary">
+                        {agents.map((a) => (
+                          <tr key={a.id} className="border-b border-border/80 last:border-0">
+                            <td className="py-2 px-3">
+                              <div className="font-medium">{a.name}</div>
+                              <div className="text-[10px] text-text-muted">{a.email}</div>
+                            </td>
+                            <td className="py-2 px-3">
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={a.canTransferConversations}
+                                disabled={transferSavingId === a.id}
+                                onClick={() => void patchAgentCanTransfer(a.id, !a.canTransferConversations)}
+                                className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                                  a.canTransferConversations ? 'bg-primary' : 'bg-border'
+                                }`}
+                              >
+                                <span
+                                  className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+                                    a.canTransferConversations ? 'translate-x-5' : 'translate-x-0.5'
+                                  }`}
+                                />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="border-t border-border pt-6">
@@ -474,9 +726,6 @@ export default function AdminSettings() {
             >
               {settingsSaving ? 'Saving…' : 'Save Changes'}
             </button>
-            <p className="mt-2 text-[11px] text-text-muted">
-              Saves display timezone and agent online schedule together.
-            </p>
           </div>
         </div>
 

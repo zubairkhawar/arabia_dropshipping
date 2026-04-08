@@ -16,6 +16,8 @@ export interface AgentRecord {
   password: string;
   avatarUrl: string | null;
   createdAt: string;
+  maxConcurrentChats: number;
+  canTransferConversations: boolean;
 }
 
 interface AgentsContextType {
@@ -23,6 +25,7 @@ interface AgentsContextType {
   currentAgentId: string | null;
   setCurrentAgentId: (id: string | null) => void;
   getCurrentAgent: () => AgentRecord | null;
+  refreshAgents: () => Promise<boolean>;
   addAgent: (email: string, name: string, password: string) => Promise<boolean>;
   updateAgent: (id: string, updates: Partial<Pick<AgentRecord, 'name' | 'password' | 'avatarUrl'>>) => Promise<boolean>;
   removeAgent: (id: string) => Promise<boolean>;
@@ -50,6 +53,8 @@ interface AgentApiModel {
   avatar_url?: string | null;
   status: string;
   team: string | null;
+  max_concurrent_chats?: number;
+  can_transfer_conversations?: boolean;
   created_at: string;
 }
 
@@ -88,6 +93,8 @@ function mapApiToRecord(a: AgentApiModel, storedPasswords: Record<string, string
     password: storedPasswords[String(a.id)] ?? '',
     avatarUrl: a.avatar_url ?? null,
     createdAt: a.created_at,
+    maxConcurrentChats: typeof a.max_concurrent_chats === 'number' ? a.max_concurrent_chats : 5,
+    canTransferConversations: a.can_transfer_conversations !== false,
   };
 }
 
@@ -247,6 +254,8 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           password,
           avatarUrl: created.avatar_url ?? null,
           createdAt: created.created_at,
+          maxConcurrentChats: typeof created.max_concurrent_chats === 'number' ? created.max_concurrent_chats : 5,
+          canTransferConversations: created.can_transfer_conversations !== false,
         };
         const storedPasswords = loadStoredPasswords();
         storedPasswords[String(created.id)] = password;
@@ -302,6 +311,12 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
                   ...a,
                   name: row.full_name || a.name,
                   avatarUrl: row.avatar_url ?? null,
+                  maxConcurrentChats:
+                    typeof row.max_concurrent_chats === 'number' ? row.max_concurrent_chats : a.maxConcurrentChats,
+                  canTransferConversations:
+                    row.can_transfer_conversations !== undefined
+                      ? row.can_transfer_conversations !== false
+                      : a.canTransferConversations,
                 }
               : a,
           ),
@@ -377,6 +392,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         currentAgentId,
         setCurrentAgentId,
         getCurrentAgent,
+        refreshAgents,
         addAgent,
         updateAgent,
         removeAgent,
@@ -396,6 +412,7 @@ export function useAgents() {
       currentAgentId: null as string | null,
       setCurrentAgentId: () => {},
       getCurrentAgent: () => null,
+      refreshAgents: async () => false,
       addAgent: async () => false,
       updateAgent: async () => false,
       removeAgent: async () => false,

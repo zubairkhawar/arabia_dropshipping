@@ -4,6 +4,7 @@ import { TeamsProvider } from '@/contexts/TeamsContext';
 import { AgentsProvider } from '@/contexts/AgentsContext';
 import { OnlineScheduleProvider } from '@/contexts/OnlineScheduleContext';
 import { TenantTimezoneProvider } from '@/contexts/TenantTimezoneContext';
+import { SoundAlertsProvider } from '@/contexts/SoundAlertsContext';
 import { ToastProvider } from '@/contexts/ToastContext';
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -12,7 +13,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <TeamsProvider>
         <AgentsProvider>
           <OnlineScheduleProvider>
-            <ToastProvider>{children}</ToastProvider>
+            <SoundAlertsProvider>
+              <ToastProvider>{children}</ToastProvider>
+            </SoundAlertsProvider>
           </OnlineScheduleProvider>
         </AgentsProvider>
       </TeamsProvider>

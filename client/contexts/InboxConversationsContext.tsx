@@ -597,9 +597,12 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           : c,
       ),
     );
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
     void fetch(`${API_BASE}/api/routing/transfer`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         conversation_id: convId,
         target_agent_id: Number(toAgentId),

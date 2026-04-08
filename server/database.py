@@ -146,6 +146,37 @@ def ensure_tenant_display_timezone_column() -> None:
         pass
 
 
+def ensure_tenant_agent_management_columns() -> None:
+    """Tenant-wide max concurrent chats + per-agent transfer permission."""
+    try:
+        insp = inspect(engine)
+        names = insp.get_table_names()
+    except Exception:
+        return
+    try:
+        with engine.begin() as conn:
+            if "tenants" in names:
+                tcols = {c["name"] for c in insp.get_columns("tenants")}
+                if "max_concurrent_chats_per_agent" not in tcols:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE tenants ADD COLUMN max_concurrent_chats_per_agent "
+                            "INTEGER NOT NULL DEFAULT 5"
+                        )
+                    )
+            if "agents" in names:
+                acols = {c["name"] for c in insp.get_columns("agents")}
+                if "can_transfer_conversations" not in acols:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE agents ADD COLUMN can_transfer_conversations "
+                            "BOOLEAN NOT NULL DEFAULT true"
+                        )
+                    )
+    except Exception:
+        pass
+
+
 def ensure_user_avatar_url_column() -> None:
     try:
         insp = inspect(engine)

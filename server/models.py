@@ -19,6 +19,8 @@ class Tenant(Base):
     display_timezone = Column(String, nullable=False, default="UTC")
     # OpenAI key for this tenant (admin Settings); loaded at startup into runtime override.
     openai_api_key = Column(Text, nullable=True)
+    # Applied to all agents in this tenant (routing capacity); synced to Agent.max_concurrent_chats on update.
+    max_concurrent_chats_per_agent = Column(Integer, nullable=False, default=5)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -111,6 +113,7 @@ class Agent(Base):
     status = Column(String, nullable=False, default="offline")  # online, busy, offline
     team = Column(String, nullable=True)  # Team A, B, C, etc.
     max_concurrent_chats = Column(Integer, default=5)
+    can_transfer_conversations = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
