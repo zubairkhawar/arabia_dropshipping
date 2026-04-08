@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -49,6 +49,46 @@ class BroadcastCreate(BaseModel):
     target_ai: bool = True
     delivery_notify_agents: bool = False
     delivery_notify_customers_whatsapp: bool = False
+
+
+class BroadcastUpdate(BaseModel):
+    title: Optional[str] = None
+    message: Optional[str] = None
+    occasion: Optional[str] = None
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    target_ai: Optional[bool] = None
+    delivery_notify_agents: Optional[bool] = None
+    delivery_notify_customers_whatsapp: Optional[bool] = None
+
+
+class WhatsAppRecipientCountOut(BaseModel):
+    count: int
+
+
+@router.get("/broadcasts/whatsapp-recipient-count", response_model=WhatsAppRecipientCountOut)
+async def whatsapp_recipient_count(tenant_id: int, db: Session = Depends(get_db)):
+    """
+    Distinct customer phones with an existing WhatsApp conversation for this tenant
+    (same pool used when sending a broadcast to customers).
+    """
+    rows = (
+        db.query(Customer.phone)
+        .join(Conversation, Conversation.customer_id == Customer.id)
+        .filter(
+            Customer.tenant_id == tenant_id,
+            Conversation.channel == "whatsapp",
+            Customer.phone.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+    phones: set[str] = set()
+    for (phone,) in rows:
+        n = _normalize_wa_phone(phone)
+        if n:
+            phones.add(n)
+    return WhatsAppRecipientCountOut(count=len(phones))
 
 
 @router.get("/broadcasts", response_model=List[BroadcastPayload])
@@ -209,6 +249,41 @@ async def create_broadcast(
         target_ai=bool(b.target_ai),
         delivery_notify_agents=bool(b.delivery_notify_agents),
         delivery_notify_customers_whatsapp=bool(b.delivery_notify_customers_whatsapp),
+    )
+
+
+@router.patch("/broadcasts/{broadcast_id}", response_model=BroadcastPayload)
+async def update_broadcast(
+    broadcast_id: int,
+    payload: BroadcastUpdate,
+    db: Session = Depends(get_db),
+):
+    """
+    Update an existing broadcast (does not re-send agent notifications or WhatsApp).
+    """
+    row = db.query(Broadcast).filter(Broadcast.id == broadcast_id).first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Broadcast not found")
+
+    data = payload.model_dump(exclude_unset=True)
+    for key, val in data.items():
+        setattr(row, key, val)
+
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    return BroadcastPayload(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        title=row.title,
+        message=row.message,
+        occasion=row.occasion,
+        starts_at=row.starts_at,
+        ends_at=row.ends_at,
+        target_ai=bool(row.target_ai),
+        delivery_notify_agents=bool(row.delivery_notify_agents),
+        delivery_notify_customers_whatsapp=bool(row.delivery_notify_customers_whatsapp),
     )
 
 

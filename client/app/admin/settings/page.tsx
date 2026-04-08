@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
-import { Radio, XCircle, Clock, Download, Globe, Volume2, Users } from 'lucide-react';
+import { useState, useEffect, useCallback } from "react";
+import { Clock, Download, Globe, Volume2, Users } from 'lucide-react';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { TIMEZONE_GROUPS } from '@/lib/timezone-options';
@@ -12,31 +12,20 @@ import { buildAllAgentsPdf } from '@/lib/attendance-pdf';
 import type { OnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useSoundAlerts } from '@/contexts/SoundAlertsContext';
 import { AgentScheduleSettings } from '@/components/admin/agent-schedule-settings';
+import {
+  BroadcastsPanel,
+  BroadcastDeleteModal,
+  BroadcastWhatsAppModal,
+  type AdminBroadcast,
+} from '@/components/admin/broadcasts-panel';
 
-interface Broadcast {
-  id: string;
-  title: string;
-  message: string;
-  startsAt: string;
-  endsAt: string;
-  occasion: string;
-  targetAi: boolean;
-  deliveryNotifyAgents: boolean;
-  deliveryNotifyCustomersWhatsapp: boolean;
-}
+const BROADCAST_ARCHIVE_KEY = 'arabia-broadcast-archived-v1';
 
-function parseBroadcastDate(s: string): number {
-  if (!s) return NaN;
-  const d = new Date(s);
-  return d.getTime();
-}
-
-function broadcastTargetSummary(b: Broadcast): string {
-  const parts: string[] = [];
-  if (b.targetAi) parts.push('AI bot');
-  if (b.deliveryNotifyAgents) parts.push('Agent alerts');
-  if (b.deliveryNotifyCustomersWhatsapp) parts.push('Customers (WhatsApp)');
-  return parts.length ? parts.join(' · ') : '—';
+function toDatetimeLocalValue(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 const MONTHS = [
@@ -62,10 +51,17 @@ export default function AdminSettings() {
   const { enabled: soundAlertsEnabled, setEnabled: setSoundAlertsEnabled, requestPlay } = useSoundAlerts();
   const { toast } = useToast();
   const { agents, refreshAgents } = useAgents();
-  const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
+  const [broadcasts, setBroadcasts] = useState<AdminBroadcast[]>([]);
   const [broadcastsLoading, setBroadcastsLoading] = useState(false);
   const [broadcastSubmitting, setBroadcastSubmitting] = useState(false);
   const [deletingBroadcastId, setDeletingBroadcastId] = useState<string | null>(null);
+  const [editingBroadcastId, setEditingBroadcastId] = useState<string | null>(null);
+  const [deleteModalBroadcast, setDeleteModalBroadcast] = useState<AdminBroadcast | null>(null);
+  const [waModalOpen, setWaModalOpen] = useState(false);
+  const [waModalCount, setWaModalCount] = useState(0);
+  const [waModalSubmitting, setWaModalSubmitting] = useState(false);
+  const [whatsappRecipientCount, setWhatsappRecipientCount] = useState<number | null>(null);
+  const [archivedBroadcastIds, setArchivedBroadcastIds] = useState<Set<string>>(() => new Set());
   const [reportMonth, setReportMonth] = useState(() => new Date().getMonth() + 1);
   const [reportYear, setReportYear] = useState(() => new Date().getFullYear());
   const [reportDownloading, setReportDownloading] = useState(false);
@@ -86,21 +82,6 @@ export default function AdminSettings() {
 
   /** Prefer JWT tenant; default 1 matches single-tenant bootstrap. */
   const effectiveTenantId = tenantId ?? 1;
-
-  const formatBroadcastDateTime = (s: string): string => {
-    if (!s) return '—';
-    const d = new Date(s);
-    if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleString('en-US', {
-      timeZone,
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  };
 
   useEffect(() => {
     setScheduleDraft(schedule);
@@ -169,44 +150,121 @@ export default function AdminSettings() {
   };
 
   useEffect(() => {
-    async function loadBroadcasts() {
-      setBroadcastsLoading(true);
+    try {
+      const raw = localStorage.getItem(BROADCAST_ARCHIVE_KEY);
+      if (!raw) return;
+      const arr = JSON.parse(raw) as unknown;
+      if (Array.isArray(arr)) {
+        setArchivedBroadcastIds(new Set(arr.filter((x): x is string => typeof x === 'string')));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    async function loadWaCount() {
       try {
-        const res = await fetch(`${API_BASE}/api/broadcasts?tenant_id=${effectiveTenantId}`);
-        if (!res.ok) throw new Error('Failed to fetch broadcasts');
-        const data = (await res.json()) as {
-          id: number;
-          tenant_id: number;
-          title: string;
-          message: string;
-          occasion?: string | null;
-          starts_at?: string | null;
-          ends_at?: string | null;
-          target_ai?: boolean | null;
-          delivery_notify_agents?: boolean | null;
-          delivery_notify_customers_whatsapp?: boolean | null;
-        }[];
-        setBroadcasts(
-          data.map((b) => ({
-            id: String(b.id),
-            title: b.title,
-            message: b.message,
-            occasion: b.occasion || '',
-            startsAt: b.starts_at || '',
-            endsAt: b.ends_at || '',
-            targetAi: b.target_ai !== false,
-            deliveryNotifyAgents: !!b.delivery_notify_agents,
-            deliveryNotifyCustomersWhatsapp: !!b.delivery_notify_customers_whatsapp,
-          })),
+        const res = await fetch(
+          `${API_BASE}/api/broadcasts/whatsapp-recipient-count?tenant_id=${effectiveTenantId}`,
         );
+        if (!res.ok) return;
+        const j = (await res.json()) as { count?: number };
+        if (typeof j.count === 'number') setWhatsappRecipientCount(j.count);
       } catch {
-        toast('Failed to load broadcasts');
-      } finally {
-        setBroadcastsLoading(false);
+        /* ignore */
       }
     }
-    void loadBroadcasts();
-  }, [toast, effectiveTenantId]);
+    void loadWaCount();
+  }, [effectiveTenantId]);
+
+  const loadBroadcastsList = useCallback(async () => {
+    setBroadcastsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/broadcasts?tenant_id=${effectiveTenantId}`);
+      if (!res.ok) throw new Error('Failed to fetch broadcasts');
+      const data = (await res.json()) as {
+        id: number;
+        tenant_id: number;
+        title: string;
+        message: string;
+        occasion?: string | null;
+        starts_at?: string | null;
+        ends_at?: string | null;
+        target_ai?: boolean | null;
+        delivery_notify_agents?: boolean | null;
+        delivery_notify_customers_whatsapp?: boolean | null;
+      }[];
+      setBroadcasts(
+        data.map((b) => ({
+          id: String(b.id),
+          title: b.title,
+          message: b.message,
+          occasion: b.occasion || '',
+          startsAt: b.starts_at || '',
+          endsAt: b.ends_at || '',
+          targetAi: b.target_ai !== false,
+          deliveryNotifyAgents: !!b.delivery_notify_agents,
+          deliveryNotifyCustomersWhatsapp: !!b.delivery_notify_customers_whatsapp,
+        })),
+      );
+    } catch {
+      toast('Failed to load broadcasts');
+    } finally {
+      setBroadcastsLoading(false);
+    }
+  }, [effectiveTenantId, toast]);
+
+  useEffect(() => {
+    void loadBroadcastsList();
+  }, [loadBroadcastsList]);
+
+  const clearBroadcastForm = useCallback(() => {
+    setTitle('');
+    setOccasion('');
+    setStartsAt('');
+    setEndsAt('');
+    setMessage('');
+    setTargetAi(true);
+    setDeliveryNotifyAgents(true);
+    setDeliveryNotifyCustomersWhatsapp(false);
+    setEditingBroadcastId(null);
+  }, []);
+
+  const fillFormFromBroadcast = useCallback((b: AdminBroadcast, duplicate: boolean) => {
+    setTitle(duplicate ? `${b.title} (copy)` : b.title);
+    setOccasion(b.occasion);
+    setStartsAt(b.startsAt ? toDatetimeLocalValue(b.startsAt) : '');
+    setEndsAt(b.endsAt ? toDatetimeLocalValue(b.endsAt) : '');
+    setMessage(b.message);
+    setTargetAi(b.targetAi);
+    setDeliveryNotifyAgents(b.deliveryNotifyAgents);
+    setDeliveryNotifyCustomersWhatsapp(duplicate ? false : b.deliveryNotifyCustomersWhatsapp);
+    setEditingBroadcastId(duplicate ? null : b.id);
+  }, []);
+
+  const performCreateBroadcast = async () => {
+    const res = await fetch(`${API_BASE}/api/broadcasts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenant_id: effectiveTenantId,
+        title: title.trim(),
+        message: message.trim(),
+        occasion: occasion.trim() || null,
+        starts_at: startsAt,
+        ends_at: endsAt,
+        target_ai: targetAi,
+        delivery_notify_agents: deliveryNotifyAgents,
+        delivery_notify_customers_whatsapp: deliveryNotifyCustomersWhatsapp,
+      }),
+    });
+    if (!res.ok) throw new Error('Failed to create broadcast');
+    await res.json();
+    clearBroadcastForm();
+    toast('Broadcast added');
+    await loadBroadcastsList();
+  };
 
   const addBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -222,62 +280,93 @@ export default function AdminSettings() {
       toast('Broadcast end time must be after start time');
       return;
     }
+
+    if (editingBroadcastId) {
+      setBroadcastSubmitting(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/broadcasts/${editingBroadcastId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: title.trim(),
+            message: message.trim(),
+            occasion: occasion.trim() || null,
+            starts_at: startsAt,
+            ends_at: endsAt,
+            target_ai: targetAi,
+            delivery_notify_agents: deliveryNotifyAgents,
+            delivery_notify_customers_whatsapp: deliveryNotifyCustomersWhatsapp,
+          }),
+        });
+        if (!res.ok) throw new Error('Failed to update');
+        const row = (await res.json()) as {
+          id: number;
+          title: string;
+          message: string;
+          occasion?: string | null;
+          starts_at?: string | null;
+          ends_at?: string | null;
+          target_ai?: boolean | null;
+          delivery_notify_agents?: boolean | null;
+          delivery_notify_customers_whatsapp?: boolean | null;
+        };
+        const updated: AdminBroadcast = {
+          id: String(row.id),
+          title: row.title,
+          message: row.message,
+          occasion: row.occasion || '',
+          startsAt: row.starts_at || '',
+          endsAt: row.ends_at || '',
+          targetAi: row.target_ai !== false,
+          deliveryNotifyAgents: !!row.delivery_notify_agents,
+          deliveryNotifyCustomersWhatsapp: !!row.delivery_notify_customers_whatsapp,
+        };
+        setBroadcasts((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
+        clearBroadcastForm();
+        toast('Broadcast updated');
+        void loadBroadcastsList();
+      } catch {
+        toast('Failed to update broadcast');
+      } finally {
+        setBroadcastSubmitting(false);
+      }
+      return;
+    }
+
+    if (deliveryNotifyCustomersWhatsapp) {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/broadcasts/whatsapp-recipient-count?tenant_id=${effectiveTenantId}`,
+        );
+        const j = (await res.json()) as { count?: number };
+        const c = typeof j.count === 'number' ? j.count : 0;
+        setWaModalCount(c);
+        setWaModalOpen(true);
+      } catch {
+        toast('Could not load WhatsApp recipient count');
+      }
+      return;
+    }
+
     setBroadcastSubmitting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/broadcasts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tenant_id: effectiveTenantId,
-          title: title.trim(),
-          message: message.trim(),
-          occasion: occasion.trim() || null,
-          starts_at: startsAt,
-          ends_at: endsAt,
-          target_ai: targetAi,
-          delivery_notify_agents: deliveryNotifyAgents,
-          delivery_notify_customers_whatsapp: deliveryNotifyCustomersWhatsapp,
-        }),
-      });
-      if (!res.ok) {
-        throw new Error('Failed to create broadcast');
-      }
-      const created = (await res.json()) as {
-        id: number;
-        title: string;
-        message: string;
-        occasion?: string | null;
-        starts_at?: string | null;
-        ends_at?: string | null;
-        target_ai?: boolean | null;
-        delivery_notify_agents?: boolean | null;
-        delivery_notify_customers_whatsapp?: boolean | null;
-      };
-      const next: Broadcast = {
-        id: String(created.id),
-        title: created.title,
-        message: created.message,
-        startsAt: created.starts_at || startsAt,
-        endsAt: created.ends_at || endsAt,
-        occasion: created.occasion || occasion.trim(),
-        targetAi: created.target_ai !== false,
-        deliveryNotifyAgents: !!created.delivery_notify_agents,
-        deliveryNotifyCustomersWhatsapp: !!created.delivery_notify_customers_whatsapp,
-      };
-      setBroadcasts((prev) => [next, ...prev]);
-      setTitle('');
-      setOccasion('');
-      setStartsAt('');
-      setEndsAt('');
-      setMessage('');
-      setTargetAi(true);
-      setDeliveryNotifyAgents(false);
-      setDeliveryNotifyCustomersWhatsapp(false);
-      toast("Broadcast added");
+      await performCreateBroadcast();
     } catch {
-      toast("Failed to add broadcast");
+      toast('Failed to add broadcast');
     } finally {
       setBroadcastSubmitting(false);
+    }
+  };
+
+  const confirmWhatsAppAndCreate = async () => {
+    setWaModalSubmitting(true);
+    try {
+      await performCreateBroadcast();
+      setWaModalOpen(false);
+    } catch {
+      toast('Failed to add broadcast');
+    } finally {
+      setWaModalSubmitting(false);
     }
   };
 
@@ -285,21 +374,33 @@ export default function AdminSettings() {
     setBroadcasts((prev) => prev.filter((b) => b.id !== id));
   };
 
-  /** End/cancel a broadcast (remove from list so it stops being active). */
-  const cancelBroadcast = async (id: string) => {
-    if (typeof window === "undefined") return;
-    if (confirm("End this broadcast now? The AI will no longer use this message.")) {
-      setDeletingBroadcastId(id);
-      try {
-        const res = await fetch(`${API_BASE}/api/broadcasts/${id}`, { method: "DELETE" });
-        if (!res.ok) throw new Error('Failed to delete');
-        removeBroadcast(id);
-        toast("Broadcast ended");
-      } catch {
-        toast("Failed to end broadcast");
-      } finally {
-        setDeletingBroadcastId(null);
-      }
+  const executeDeleteBroadcast = async () => {
+    if (!deleteModalBroadcast) return;
+    const id = deleteModalBroadcast.id;
+    setDeletingBroadcastId(id);
+    try {
+      const res = await fetch(`${API_BASE}/api/broadcasts/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete');
+      removeBroadcast(id);
+      setArchivedBroadcastIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        try {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(BROADCAST_ARCHIVE_KEY, JSON.stringify([...next]));
+          }
+        } catch {
+          /* ignore */
+        }
+        return next;
+      });
+      if (editingBroadcastId === id) clearBroadcastForm();
+      toast('Broadcast deleted');
+      setDeleteModalBroadcast(null);
+    } catch {
+      toast('Failed to delete broadcast');
+    } finally {
+      setDeletingBroadcastId(null);
     }
   };
 
@@ -414,31 +515,6 @@ export default function AdminSettings() {
       setReportDownloading(false);
     }
   };
-
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(t);
-  }, []);
-  const activeBroadcast = useMemo(
-    () =>
-      broadcasts.find((b) => {
-        const start = parseBroadcastDate(b.startsAt);
-        const end = parseBroadcastDate(b.endsAt);
-        return !Number.isNaN(start) && !Number.isNaN(end) && start <= now && end >= now;
-      }),
-    [broadcasts, now],
-  );
-  const scheduledBroadcasts = useMemo(
-    () =>
-      broadcasts.filter((b) => {
-        const start = parseBroadcastDate(b.startsAt);
-        const end = parseBroadcastDate(b.endsAt);
-        if (Number.isNaN(start) || Number.isNaN(end)) return true;
-        return end < now || start > now;
-      }),
-    [broadcasts, now],
-  );
 
   return (
     <div className="space-y-6">
@@ -660,6 +736,20 @@ export default function AdminSettings() {
           </div>
 
           <form onSubmit={addBroadcast} className="space-y-4 bg-card rounded-lg p-4 border border-border">
+            {editingBroadcastId && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200/80 bg-amber-50/80 px-3 py-2 text-sm text-amber-950">
+                <span>
+                  Editing broadcast <span className="font-semibold">#{editingBroadcastId}</span> — save with the button below.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => clearBroadcastForm()}
+                  className="text-xs font-medium text-amber-900 underline hover:no-underline"
+                >
+                  Cancel edit
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-text-primary mb-1">
@@ -771,7 +861,7 @@ export default function AdminSettings() {
                   </span>
                 </span>
               </label>
-              <label className="flex items-start gap-2 text-sm text-text-primary cursor-pointer">
+              <label className="flex items-start gap-2 text-sm text-text-primary cursor-pointer group relative">
                 <input
                   type="checkbox"
                   checked={deliveryNotifyCustomersWhatsapp}
@@ -779,10 +869,26 @@ export default function AdminSettings() {
                   className="mt-0.5 rounded border-border"
                 />
                 <span>
-                  <span className="font-medium">Customers (WhatsApp)</span>
+                  <span className="font-medium border-b border-dotted border-text-muted/40 cursor-help">
+                    Customers (WhatsApp)
+                  </span>
                   <span className="block text-[11px] text-text-muted">
                     Send one text per distinct phone that has a WhatsApp thread here (not your
                     full Shopify customer export unless those users are synced and messaged).
+                  </span>
+                </span>
+                <span
+                  role="tooltip"
+                  className="pointer-events-none invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity absolute left-0 top-full z-30 mt-2 w-[min(100%,280px)] rounded-lg border border-border bg-white p-3 text-[11px] text-text-primary shadow-lg"
+                >
+                  <span className="font-semibold text-text-primary">
+                    {whatsappRecipientCount !== null
+                      ? `This will send to ${whatsappRecipientCount.toLocaleString()} customers`
+                      : 'Recipient count loading…'}
+                  </span>
+                  <span className="mt-2 block text-text-secondary leading-relaxed">
+                    Only customers who have an existing WhatsApp conversation in this system. Delivery may still
+                    require an active session or approved template per Meta rules.
                   </span>
                 </span>
               </label>
@@ -794,117 +900,73 @@ export default function AdminSettings() {
                 disabled={broadcastSubmitting}
                 className="bg-primary text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {broadcastSubmitting ? 'Adding...' : 'Add broadcast'}
+                {broadcastSubmitting
+                  ? editingBroadcastId
+                    ? 'Saving…'
+                    : 'Adding…'
+                  : editingBroadcastId
+                    ? 'Update broadcast'
+                    : 'Add broadcast'}
               </button>
             </div>
           </form>
 
-          <div className="space-y-3">
-            <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-              Active & Scheduled Broadcasts
-            </p>
-
-            {activeBroadcast && (
-              <div className="bg-status-success/5 border border-status-success/30 rounded-lg p-4 space-y-2">
-                <div className="flex items-center gap-2">
-                  <Radio className="w-4 h-4 text-status-success shrink-0" />
-                  <span className="text-xs font-semibold text-status-success uppercase tracking-wider">
-                    Currently live
-                  </span>
-                </div>
-                <p className="font-semibold text-text-primary text-sm">
-                  {activeBroadcast.title}
-                </p>
-                {activeBroadcast.occasion && (
-                  <p className="text-[11px] text-text-secondary">
-                    Occasion: {activeBroadcast.occasion}
-                  </p>
-                )}
-                <p className="text-xs text-text-secondary">
-                  {activeBroadcast.message}
-                </p>
-                <p className="text-[10px] text-text-muted">
-                  {formatBroadcastDateTime(activeBroadcast.startsAt)} →{' '}
-                  {formatBroadcastDateTime(activeBroadcast.endsAt)}
-                </p>
-                <p className="text-[10px] text-text-secondary">
-                  Targets: {broadcastTargetSummary(activeBroadcast)}
-                </p>
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => void cancelBroadcast(activeBroadcast.id)}
-                    disabled={deletingBroadcastId === activeBroadcast.id}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-status-error/50 text-status-error text-xs font-medium hover:bg-status-error/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <XCircle className="w-3.5 h-3.5" />
-                    {deletingBroadcastId === activeBroadcast.id ? 'Ending...' : 'End broadcast now'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {broadcastsLoading ? (
-              <p className="text-xs text-text-muted">Loading broadcasts...</p>
-            ) : broadcasts.length === 0 ? (
-              <p className="text-xs text-text-muted">
-                No broadcasts yet. Add one above to tell the AI about agent availability during a
-                festival or special event.
-              </p>
-            ) : (
-              <ul className="space-y-2 max-h-64 overflow-y-auto">
-                {scheduledBroadcasts.map((b) => {
-                  const isPast = parseBroadcastDate(b.endsAt) < now;
-                  return (
-                    <li
-                      key={b.id}
-                      className="bg-card border border-border rounded-lg p-3 text-xs flex flex-col gap-1"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="font-semibold text-text-primary truncate">
-                            {b.title}
-                          </p>
-                          {b.occasion && (
-                            <p className="text-[11px] text-text-secondary">
-                              Occasion: {b.occasion}
-                            </p>
-                          )}
-                        </div>
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0 ${
-                            isPast ? 'bg-panel text-text-muted' : 'bg-primary/10 text-primary'
-                          }`}
-                        >
-                          {isPast ? 'ENDED' : 'SCHEDULED'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-text-secondary line-clamp-2">
-                        {b.message}
-                      </p>
-                      <p className="text-[10px] text-text-muted">
-                        {formatBroadcastDateTime(b.startsAt)} → {formatBroadcastDateTime(b.endsAt)}
-                      </p>
-                      <p className="text-[10px] text-text-secondary">
-                        Targets: {broadcastTargetSummary(b)}
-                      </p>
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => void cancelBroadcast(b.id)}
-                          disabled={deletingBroadcastId === b.id}
-                          className="inline-flex items-center gap-1 text-status-error hover:underline text-[10px] font-medium disabled:opacity-50 disabled:no-underline"
-                        >
-                          <XCircle className="w-3 h-3" />
-                          {deletingBroadcastId === b.id ? 'Removing...' : isPast ? 'Remove' : 'Cancel'}
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+          <div className="max-h-[min(70vh,900px)] overflow-y-auto pr-1">
+            <BroadcastsPanel
+              broadcasts={broadcasts}
+              loading={broadcastsLoading}
+              timeZone={timeZone}
+              agentCount={agents.length}
+              archivedIds={archivedBroadcastIds}
+              onArchive={(id) => {
+                setArchivedBroadcastIds((prev) => {
+                  const next = new Set(prev);
+                  next.add(id);
+                  try {
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem(BROADCAST_ARCHIVE_KEY, JSON.stringify([...next]));
+                    }
+                  } catch {
+                    /* ignore */
+                  }
+                  return next;
+                });
+              }}
+              onUnarchive={(id) => {
+                setArchivedBroadcastIds((prev) => {
+                  const next = new Set(prev);
+                  next.delete(id);
+                  try {
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem(BROADCAST_ARCHIVE_KEY, JSON.stringify([...next]));
+                    }
+                  } catch {
+                    /* ignore */
+                  }
+                  return next;
+                });
+              }}
+              onEdit={(b) => fillFormFromBroadcast(b, false)}
+              onDuplicate={(b) => fillFormFromBroadcast(b, true)}
+              onDeleteClick={(b) => setDeleteModalBroadcast(b)}
+              deletingId={deletingBroadcastId}
+            />
           </div>
+
+          <BroadcastDeleteModal
+            open={deleteModalBroadcast !== null}
+            title={deleteModalBroadcast?.title ?? ''}
+            busy={deletingBroadcastId !== null}
+            onCancel={() => setDeleteModalBroadcast(null)}
+            onConfirm={() => void executeDeleteBroadcast()}
+          />
+          <BroadcastWhatsAppModal
+            open={waModalOpen}
+            count={waModalCount}
+            busy={waModalSubmitting}
+            onCancel={() => setWaModalOpen(false)}
+            onConfirm={() => void confirmWhatsAppAndCreate()}
+          />
         </div>
       </div>
 
