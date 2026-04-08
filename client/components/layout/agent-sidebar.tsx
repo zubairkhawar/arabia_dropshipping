@@ -93,7 +93,14 @@ export function AgentSidebar() {
                   const n = portalUnreadForPath(item.path, unread);
                   return (
                     <Link key={item.path} href={item.path} className={linkClass(item.path)}>
-                      <Icon className="w-5 h-5 flex-shrink-0" />
+                      <span className="relative shrink-0">
+                        <Icon className="w-5 h-5 flex-shrink-0" />
+                        {isCollapsed && n > 0 && (
+                          <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-semibold flex items-center justify-center leading-none">
+                            {n > 99 ? '99+' : n}
+                          </span>
+                        )}
+                      </span>
                       {!isCollapsed && (
                         <>
                           <span className="font-medium text-sm flex-1 min-w-0">{item.label}</span>
@@ -118,7 +125,14 @@ export function AgentSidebar() {
               const n = notificationUnread;
               return (
                 <Link key={item.path} href={item.path} className={linkClass(item.path)}>
-                  <Icon className="w-5 h-5 flex-shrink-0" />
+                  <span className="relative shrink-0">
+                    <Icon className="w-5 h-5 flex-shrink-0" />
+                    {isCollapsed && n > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-semibold flex items-center justify-center leading-none">
+                        {n > 99 ? '99+' : n}
+                      </span>
+                    )}
+                  </span>
                   {!isCollapsed && (
                     <>
                       <span className="font-medium text-sm flex-1 min-w-0">{item.label}</span>

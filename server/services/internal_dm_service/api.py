@@ -74,6 +74,14 @@ class DmConversationOut(BaseModel):
     last_message_at: Optional[datetime] = None
 
 
+class DmConversationSearchOut(BaseModel):
+    id: int
+    tenant_id: int
+    peer: DmPeerOut
+    last_message_at: Optional[datetime] = None
+    match_snippet: Optional[str] = None
+
+
 class DmMessageOut(BaseModel):
     id: int
     conversation_id: int
@@ -233,6 +241,15 @@ def _dm_peer_out(db: Session, peer_id: int) -> DmPeerOut:
     )
 
 
+def _fit_dm_snippet(text: Optional[str], max_len: int = 140) -> Optional[str]:
+    if not text:
+        return None
+    s = " ".join(str(text).split())
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 3] + "..."
+
+
 @router.post("/conversations/find-or-create", response_model=DmConversationOut)
 async def find_or_create_conversation(payload: FindOrCreateConversationIn, db: Session = Depends(get_db)):
     if payload.agent_id == payload.peer_agent_id:
@@ -312,6 +329,66 @@ async def list_conversations(
             )
         )
     return result
+
+
+@router.get("/conversations/search", response_model=List[DmConversationSearchOut])
+async def search_conversations(
+    tenant_id: int = Query(...),
+    agent_id: int = Query(...),
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query_text = (q or "").strip()
+    if not query_text:
+        return []
+    like = f"%{query_text}%"
+    rows = (
+        db.query(InternalDmConversation)
+        .filter(
+            InternalDmConversation.tenant_id == tenant_id,
+            or_(
+                InternalDmConversation.agent_one_id == agent_id,
+                InternalDmConversation.agent_two_id == agent_id,
+            ),
+        )
+        .order_by(desc(InternalDmConversation.updated_at))
+        .limit(500)
+        .all()
+    )
+
+    out: List[DmConversationSearchOut] = []
+    for c in rows:
+        peer_id = _peer_for(c, agent_id)
+        peer = _dm_peer_out(db, peer_id)
+        peer_name = (peer.name or "").strip()
+        peer_match = query_text.lower() in peer_name.lower()
+        matched_message = (
+            db.query(InternalDmMessage)
+            .filter(InternalDmMessage.conversation_id == c.id, InternalDmMessage.content.ilike(like))
+            .order_by(desc(InternalDmMessage.created_at))
+            .first()
+        )
+        if not (peer_match or matched_message):
+            continue
+        matched_at = c.updated_at
+        snippet: Optional[str] = None
+        if matched_message is not None:
+            decoded = _decode_dm_msg_payload(matched_message.content or "")
+            text = decoded.get("text")
+            snippet = _fit_dm_snippet(text if isinstance(text, str) else matched_message.content)
+            matched_at = matched_message.created_at
+        out.append(
+            DmConversationSearchOut(
+                id=c.id,
+                tenant_id=c.tenant_id,
+                peer=peer,
+                last_message_at=matched_at,
+                match_snippet=snippet,
+            )
+        )
+    out.sort(key=lambda x: x.last_message_at or datetime.min, reverse=True)
+    return out[:limit]
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=DmMessagesPage)

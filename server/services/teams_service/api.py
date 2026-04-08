@@ -891,6 +891,9 @@ async def upsert_team_channel_read_state(
             await _broadcast_team_receipt_summaries(payload.tenant_id, team_id, db_receipt, mids)
     finally:
         db_receipt.close()
+    from services.agent_portal_service.broadcast import push_refresh_unread
+
+    await push_refresh_unread(db, payload.tenant_id, ag.id)
     return Response(status_code=204)
 
 

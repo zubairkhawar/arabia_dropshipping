@@ -13,6 +13,7 @@ import type { AgentNotification } from '@/contexts/NotificationsContext';
 import { useToast } from '@/contexts/ToastContext';
 import { usePathname, useRouter } from 'next/navigation';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
+import { useAgentSearch } from '@/contexts/AgentSearchContext';
 
 type AgentStatus = 'active' | 'offline';
 const ACTIVE_SINCE_PREFIX = 'agent-active-since:';
@@ -94,6 +95,8 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const { toast } = useToast();
   const pathname = usePathname();
   const router = useRouter();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const { inboxQuery, setInboxQuery } = useAgentSearch();
   const displayName = fullName || userName || 'Support Agent';
   const profileNameSkeleton = !currentAgent && !!readAuthAgentId();
   const {
@@ -103,6 +106,33 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
     isNotificationsLoading,
   } = useNotifications();
   const notificationList = getNotificationsForCurrentAgent();
+  const onInboxRoute = pathname?.startsWith('/agent/inbox');
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!onInboxRoute) return;
+      const t = e.target as HTMLElement | null;
+      const tag = (t?.tagName || '').toLowerCase();
+      const isTypingTarget = tag === 'input' || tag === 'textarea' || t?.isContentEditable;
+      if ((e.key === '/' && !isTypingTarget) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f')) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+      if (e.key === 'Escape' && document.activeElement === searchInputRef.current) {
+        setInboxQuery('');
+        searchInputRef.current?.blur();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onInboxRoute, setInboxQuery]);
+
+  useEffect(() => {
+    if (pathname?.startsWith('/agent/inbox')) return;
+    if (inboxQuery) setInboxQuery('');
+  }, [pathname, inboxQuery, setInboxQuery]);
 
   const applyStatusChange = useCallback(
     (status: AgentStatus) => {
@@ -244,8 +274,13 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-muted" />
               <input
+                ref={searchInputRef}
                 type="text"
-                placeholder="Search my chats..."
+                value={onInboxRoute ? inboxQuery : ''}
+                onChange={(e) => {
+                  if (onInboxRoute) setInboxQuery(e.target.value);
+                }}
+                placeholder={onInboxRoute ? 'Search my chats...' : 'Search...'}
                 className="w-full pl-10 pr-4 py-2 bg-panel border border-border rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-primary focus:bg-white text-sm"
               />
             </div>

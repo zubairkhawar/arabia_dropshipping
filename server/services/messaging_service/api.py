@@ -62,6 +62,15 @@ class ConversationSummary(BaseModel):
     unread_count: int = 0
 
 
+class ConversationSearchResult(BaseModel):
+    id: int
+    customer_name: str
+    customer_phone: Optional[str] = None
+    last_activity_at: Optional[datetime] = None
+    match_snippet: Optional[str] = None
+    unread_count: int = 0
+
+
 class ConversationCreate(BaseModel):
     tenant_id: int
     store_id: int
@@ -133,6 +142,15 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
         last_activity_at=last_msg.created_at if last_msg else c.updated_at,
         unread_count=unread_count,
     )
+
+
+def _fit_snippet(text: Optional[str], max_len: int = 140) -> Optional[str]:
+    if not text:
+        return None
+    s = " ".join(str(text).split())
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 3] + "..."
 
 
 def _filter_hidden_inbox_ids(db: Session, user_id: int, conversation_id: int) -> set[int]:
@@ -417,6 +435,68 @@ async def list_conversations(
             u = _inbox_unread_for_conversation(db, tenant_id, agent_id, c.id)
         out.append(_build_conversation_summary(c, unread_count=u))
     return out
+
+
+@router.get("/conversations/search", response_model=List[ConversationSearchResult])
+async def search_conversations(
+    tenant_id: int,
+    q: str = Query(..., min_length=1),
+    agent_id: Optional[int] = None,
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """
+    Search conversations by customer name/phone and any message content.
+    Returns conversation-level results (not individual messages).
+    """
+    query_text = (q or "").strip()
+    if not query_text:
+        return []
+    like = f"%{query_text}%"
+
+    base = db.query(Conversation).filter(Conversation.tenant_id == tenant_id)
+    if agent_id is not None:
+        base = base.filter(Conversation.agent_id == agent_id)
+    conversations = base.order_by(desc(Conversation.updated_at)).limit(500).all()
+
+    out: List[ConversationSearchResult] = []
+    for c in conversations:
+        customer_name = (getattr(c.customer, "name", None) or "").strip() or f"Customer #{c.customer_id}"
+        customer_phone = (getattr(c.customer, "phone", None) or "").strip() or None
+        name_match = query_text.lower() in customer_name.lower()
+        phone_match = bool(customer_phone and query_text.lower() in customer_phone.lower())
+        matched_message = (
+            db.query(Message)
+            .filter(Message.conversation_id == c.id, Message.content.ilike(like))
+            .order_by(desc(Message.created_at))
+            .first()
+        )
+        if not (name_match or phone_match or matched_message):
+            continue
+
+        snippet = None
+        matched_at = c.updated_at
+        if matched_message is not None:
+            snippet = _fit_snippet(matched_message.content)
+            matched_at = matched_message.created_at
+        elif name_match or phone_match:
+            snippet = _fit_snippet(c.messages[-1].content if c.messages else None)
+            matched_at = c.messages[-1].created_at if c.messages else c.updated_at
+
+        unread = _inbox_unread_for_conversation(db, tenant_id, agent_id, c.id) if agent_id is not None else 0
+        out.append(
+            ConversationSearchResult(
+                id=c.id,
+                customer_name=customer_name,
+                customer_phone=customer_phone,
+                last_activity_at=matched_at,
+                match_snippet=snippet,
+                unread_count=unread,
+            )
+        )
+
+    out.sort(key=lambda x: x.last_activity_at or datetime.min, reverse=True)
+    return out[:limit]
 
 
 @router.get("/conversations/{conversation_id}", response_model=Dict[str, Any])

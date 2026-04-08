@@ -11,6 +11,19 @@ import { useAgents } from '@/contexts/AgentsContext';
 
 const DM_MIDDLE_BAR_WIDTH = 280;
 const DM_MIDDLE_BAR_COLLAPSED_WIDTH = 56;
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  'https://arabia-dropshipping.onrender.com';
+const TENANT_ID = 1;
+
+type DmSearchRow = {
+  id: number;
+  tenant_id: number;
+  peer: { agent_id: number; name: string; avatar_url?: string | null };
+  last_message_at?: string | null;
+  match_snippet?: string | null;
+};
 
 export function DmMiddleBar() {
   const pathname = usePathname();
@@ -23,6 +36,9 @@ export function DmMiddleBar() {
   const { middleBarCollapsed, toggleMiddleBar } = useDmLayout();
   const [showDropup, setShowDropup] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchRows, setSearchRows] = useState<DmSearchRow[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchActiveIndex, setSearchActiveIndex] = useState(0);
   const [menuSlug, setMenuSlug] = useState<string | null>(null);
   const dropupRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -50,6 +66,74 @@ export function DmMiddleBar() {
         (c) => c.name.toLowerCase().includes(searchQuery.trim().toLowerCase()),
       )
     : conversations;
+  const hasSearch = searchQuery.trim().length > 0;
+  const showSearchResults = hasSearch && searchRows.length > 0;
+
+  useEffect(() => {
+    if (!currentAgentId) return;
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchRows([]);
+      setSearchLoading(false);
+      setSearchActiveIndex(0);
+      return;
+    }
+    setSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      const url = new URL(`${API_BASE}/api/internal-dm/conversations/search`);
+      url.searchParams.set('tenant_id', String(TENANT_ID));
+      url.searchParams.set('agent_id', String(Number(currentAgentId)));
+      url.searchParams.set('q', q);
+      url.searchParams.set('limit', '50');
+      const headers: Record<string, string> = {};
+      if (typeof window !== 'undefined') {
+        const t = localStorage.getItem('auth_token');
+        if (t) headers.Authorization = `Bearer ${t}`;
+      }
+      void fetch(url.toString(), {
+        headers,
+      })
+        .then((r) => (r.ok ? r.json() : Promise.resolve([])))
+        .then((rows: DmSearchRow[]) => {
+          const list = Array.isArray(rows) ? rows : [];
+          setSearchRows(list);
+          setSearchActiveIndex(0);
+        })
+        .catch(() => setSearchRows([]))
+        .finally(() => setSearchLoading(false));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery, currentAgentId]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!pathname?.startsWith('/agent/dm')) return;
+      const t = e.target as HTMLElement | null;
+      const tag = (t?.tagName || '').toLowerCase();
+      const isTypingTarget = tag === 'input' || tag === 'textarea' || t?.isContentEditable;
+      if ((e.key === '/' && !isTypingTarget) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f')) {
+        e.preventDefault();
+        focusSearch();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pathname]);
+
+  const renderHighlighted = (text: string, query: string) => {
+    if (!query) return text;
+    const i = text.toLowerCase().indexOf(query.toLowerCase());
+    if (i < 0) return text;
+    return (
+      <>
+        {text.slice(0, i)}
+        <span className="rounded-sm bg-yellow-200 px-0.5 font-semibold text-text-primary">
+          {text.slice(i, i + query.length)}
+        </span>
+        {text.slice(i + query.length)}
+      </>
+    );
+  };
 
   const handleDeleteChat = (slug: string) => {
     removeConversation(slug);
@@ -181,6 +265,31 @@ export function DmMiddleBar() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (!hasSearch) return;
+                  if (e.key === 'Escape') {
+                    setSearchQuery('');
+                    return;
+                  }
+                  if (!showSearchResults) return;
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setSearchActiveIndex((i) => (i + 1) % searchRows.length);
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setSearchActiveIndex((i) => (i - 1 + searchRows.length) % searchRows.length);
+                  } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const row = searchRows[searchActiveIndex];
+                    if (!row) return;
+                    const slug = row.peer.name
+                      .toLowerCase()
+                      .replace(/[^a-z0-9]+/g, '-')
+                      .replace(/^-+|-+$/g, '') || String(row.peer.agent_id);
+                    void addOrUpdateConversation(String(row.peer.agent_id), slug, row.peer.name);
+                    router.push(`/agent/dm/${slug}`);
+                  }
+                }}
                 placeholder="Search..."
                 className="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-white placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
               />
@@ -276,6 +385,58 @@ export function DmMiddleBar() {
                     </div>
                   </div>
                 ))}
+              </div>
+            ) : hasSearch ? (
+              <div className="space-y-1">
+                <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                  Search results {searchLoading ? '...' : `(${searchRows.length})`}
+                </p>
+                {searchLoading ? (
+                  <p className="text-sm text-text-muted px-3 py-2">Searching…</p>
+                ) : searchRows.length === 0 ? (
+                  <div className="px-3 py-3">
+                    <p className="text-sm text-text-primary">No results found for "{searchQuery.trim()}"</p>
+                    <p className="text-xs text-text-muted mt-1">Try different words or check spelling.</p>
+                  </div>
+                ) : (
+                  <ul className="space-y-0.5">
+                    {searchRows.map((r, idx) => {
+                      const slug = r.peer.name
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '-')
+                        .replace(/^-+|-+$/g, '') || String(r.peer.agent_id);
+                      const isActiveResult = idx === searchActiveIndex;
+                      const when = r.last_message_at
+                        ? new Date(r.last_message_at).toLocaleString([], {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })
+                        : '—';
+                      return (
+                        <li key={`s-${r.id}-${r.peer.agent_id}`}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void addOrUpdateConversation(String(r.peer.agent_id), slug, r.peer.name);
+                              router.push(`/agent/dm/${slug}`);
+                            }}
+                            className={`w-full text-left rounded-lg px-3 py-2.5 border ${
+                              isActiveResult ? 'bg-primary/10 border-primary/30' : 'bg-white border-border hover:bg-panel'
+                            }`}
+                          >
+                            <p className="text-sm font-medium text-text-primary">{r.peer.name}</p>
+                            <p className="text-xs text-text-secondary truncate">
+                              {renderHighlighted((r.match_snippet || '').trim() || 'Open conversation', searchQuery.trim())}
+                            </p>
+                            <p className="text-[11px] text-text-muted mt-0.5">{when}</p>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </div>
             ) : filteredConversations.length === 0 ? (
               <p className="text-sm text-text-muted px-3 py-4">

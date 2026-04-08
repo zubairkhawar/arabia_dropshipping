@@ -9,6 +9,7 @@ import { AgentPresenceProvider } from '@/contexts/AgentPresenceContext';
 import { DmChatsProvider } from '@/contexts/DmChatsContext';
 import { AgentPortalRealtimeProvider } from '@/contexts/AgentPortalRealtimeContext';
 import { NotificationsProvider } from '@/contexts/NotificationsContext';
+import { AgentSearchProvider } from '@/contexts/AgentSearchContext';
 import { useSidebar } from '@/contexts/SidebarContext';
 import { clearAuthAgentId } from '@/lib/agent-session-storage';
 import { useEffect, useState } from 'react';
@@ -107,9 +108,11 @@ export default function AgentLayout({
         <AgentPresenceProvider>
           <AgentPortalRealtimeProvider>
             <NotificationsProvider>
-              <DmChatsProvider>
-                <AgentLayoutContent>{children}</AgentLayoutContent>
-              </DmChatsProvider>
+              <AgentSearchProvider>
+                <DmChatsProvider>
+                  <AgentLayoutContent>{children}</AgentLayoutContent>
+                </DmChatsProvider>
+              </AgentSearchProvider>
             </NotificationsProvider>
           </AgentPortalRealtimeProvider>
         </AgentPresenceProvider>

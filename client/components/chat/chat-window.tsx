@@ -651,6 +651,9 @@ export function ChatWindow({
   const [inboxNewBelowOpen, setInboxNewBelowOpen] = useState(false);
   const [threadSearchOpen, setThreadSearchOpen] = useState(false);
   const [threadSearchQuery, setThreadSearchQuery] = useState('');
+  const [threadSearchActiveIndex, setThreadSearchActiveIndex] = useState(0);
+  const threadSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const threadSearchStartScrollTopRef = useRef<number | null>(null);
   const [threadMessageEdit, setThreadMessageEdit] = useState<ThreadMessageEdit | null>(null);
 
   useEffect(() => {
@@ -678,6 +681,16 @@ export function ChatWindow({
     isInternalChat,
     threadSearchOpen,
   ]);
+
+  useEffect(() => {
+    // Team channel search only: reset on channel switches.
+    if (!isTeamChannel) {
+      setThreadSearchOpen(false);
+      setThreadSearchQuery('');
+      setThreadSearchActiveIndex(0);
+      threadSearchStartScrollTopRef.current = null;
+    }
+  }, [isTeamChannel, teamId]);
 
   const [stickyDate, setStickyDate] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1767,9 +1780,40 @@ export function ChatWindow({
   const filteredMessages = messages.filter((m) => !deletedForMeIds.includes(m.id));
   const threadSearchTrim = threadSearchQuery.trim().toLowerCase();
   const threadSearchMatches =
-    threadSearchTrim.length > 0
+    isTeamChannel && threadSearchTrim.length > 0
       ? filteredMessages.filter((m) => m.content.toLowerCase().includes(threadSearchTrim))
       : [];
+  const threadSearchMatchIds = threadSearchMatches.map((m) => m.id);
+  const threadSearchTotal = threadSearchMatchIds.length;
+  const safeActiveIndex =
+    threadSearchTotal > 0 ? Math.min(threadSearchActiveIndex, threadSearchTotal - 1) : 0;
+  const activeThreadSearchMessageId =
+    threadSearchTotal > 0 ? threadSearchMatchIds[safeActiveIndex] : null;
+
+  useEffect(() => {
+    if (!isTeamChannel) return;
+    if (!threadSearchTrim) {
+      if (threadSearchStartScrollTopRef.current != null && scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTo({
+          top: threadSearchStartScrollTopRef.current,
+          behavior: 'smooth',
+        });
+      }
+      threadSearchStartScrollTopRef.current = null;
+      setThreadSearchActiveIndex(0);
+      return;
+    }
+    if (threadSearchStartScrollTopRef.current == null && scrollContainerRef.current) {
+      threadSearchStartScrollTopRef.current = scrollContainerRef.current.scrollTop;
+    }
+    setThreadSearchActiveIndex(0);
+  }, [isTeamChannel, threadSearchTrim, teamId]);
+
+  useEffect(() => {
+    if (!isTeamChannel) return;
+    if (activeThreadSearchMessageId == null) return;
+    scrollToMessage(activeThreadSearchMessageId);
+  }, [isTeamChannel, activeThreadSearchMessageId]);
   const messageGroups = (() => {
     const list: { dateKey: string; label: string; messages: Message[] }[] = [];
     let currentKey: string | null = null;
@@ -2967,9 +3011,7 @@ export function ChatWindow({
     }
   };
 
-  const showThreadSearchBar =
-    (isInboxPage && hasSelectedConversation && !isInternalChat) ||
-    (isInternalChat && (isTeamChannel || isDmPage));
+  const showThreadSearchBar = isInternalChat && isTeamChannel;
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -3108,45 +3150,57 @@ export function ChatWindow({
           <div className="flex items-center gap-2 px-4 py-2">
             <Search className="h-4 w-4 shrink-0 text-[#667781]" aria-hidden />
             <input
+              ref={threadSearchInputRef}
               type="search"
               autoFocus
               className="min-w-0 flex-1 rounded-lg border border-black/[0.08] bg-white px-3 py-2 text-sm text-[#111b21] outline-none focus:border-[#53bdeb]"
               placeholder="Search in this chat (⌘F / Ctrl+F)"
               value={threadSearchQuery}
               onChange={(e) => setThreadSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setThreadSearchQuery('');
+                  setThreadSearchOpen(false);
+                  return;
+                }
+                if (threadSearchTotal === 0) return;
+                if (e.key === 'ArrowDown' || e.key === 'Enter') {
+                  e.preventDefault();
+                  setThreadSearchActiveIndex((i) => (i + 1) % threadSearchTotal);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setThreadSearchActiveIndex((i) => (i - 1 + threadSearchTotal) % threadSearchTotal);
+                }
+              }}
               aria-label="Search messages in thread"
             />
+            {threadSearchTrim.length > 0 && (
+              <span className="shrink-0 text-xs text-[#667781] px-2">
+                {threadSearchTotal === 0
+                  ? 'No matches found'
+                  : `${safeActiveIndex + 1} of ${threadSearchTotal} matches`}
+              </span>
+            )}
             <button
               type="button"
               className="shrink-0 text-sm font-medium text-primary"
               onClick={() => {
                 setThreadSearchOpen(false);
                 setThreadSearchQuery('');
+                setThreadSearchActiveIndex(0);
               }}
             >
               Close
             </button>
           </div>
           {threadSearchTrim.length > 0 && (
-            <div className="max-h-28 overflow-y-auto border-t border-black/[0.06] px-2 py-1">
-              {threadSearchMatches.length === 0 ? (
-                <p className="px-2 py-2 text-xs text-[#667781]">No matches</p>
-              ) : (
-                threadSearchMatches.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    className="w-full truncate rounded-md px-2 py-1.5 text-left text-xs text-[#111b21] hover:bg-white"
-                    onClick={() => {
-                      scrollToMessage(m.id);
-                      setThreadSearchOpen(false);
-                    }}
-                  >
-                    {m.content.slice(0, 120)}
-                    {m.content.length > 120 ? '…' : ''}
-                  </button>
-                ))
-              )}
+            <div className="border-t border-black/[0.06] px-4 py-1.5 text-xs text-[#667781]">
+              {teamHasMoreOlder
+                ? 'Searching first loaded messages. Load older messages to expand search.'
+                : 'Searching within this channel.'}
             </div>
           )}
         </div>
@@ -3404,6 +3458,11 @@ export function ChatWindow({
               ).map(([emoji, count]) => ({ emoji, count }));
               const showReactionDetail = reactionDetailMessageId === message.id;
               const emojiOnly = !message.attachment && isEmojiOnly(message.content);
+              const isCurrentThreadSearchHit =
+                isTeamChannel &&
+                threadSearchTrim.length > 0 &&
+                activeThreadSearchMessageId != null &&
+                message.id === activeThreadSearchMessageId;
               const reactionRowsFiltered =
                 reactionDetailFilter === 'all'
                   ? reactionList
@@ -3540,7 +3599,9 @@ export function ChatWindow({
                         message.attachment?.type === 'voice'
                           ? 'w-full min-w-[min(100%,260px)] max-w-full'
                           : 'min-w-[8rem] max-w-message-bubble'
-                      } ${getMessageStyle(message, outgoing)}`}
+                      } ${getMessageStyle(message, outgoing)} ${
+                        isCurrentThreadSearchHit ? 'ring-2 ring-yellow-300' : ''
+                      }`}
                     >
                       {!readOnly && (
                         <button
@@ -3751,7 +3812,13 @@ export function ChatWindow({
                                 }
                               >
                                 <Check
-                                  className={`h-3.5 w-3.5 stroke-[2.5] ${allDeliveredReceipt ? 'text-[#8696a0]' : 'text-[#8696a0]/50'}`}
+                                  className={`h-3.5 w-3.5 stroke-[2.5] ${
+                                    allReadReceipt
+                                      ? 'text-[#53bdeb]'
+                                      : allDeliveredReceipt
+                                        ? 'text-[#8696a0]'
+                                        : 'text-[#8696a0]/50'
+                                  }`}
                                 />
                                 <Check
                                   className={`-ml-1.5 h-3.5 w-3.5 stroke-[2.5] ${allReadReceipt ? 'text-[#53bdeb]' : anyReadReceipt ? 'text-[#8696a0]' : 'text-[#8696a0]/50'}`}
@@ -5024,15 +5091,15 @@ export function ChatWindow({
                           <>
                             {sharedChatMedia.map((m) => (
                               m.isHeic ? (
-                                <a
+                                <button
+                                  type="button"
                                   key={m.id}
-                                  href={m.url}
-                                  download={m.name}
+                                  onClick={() => setPreviewImageSrc(m.url)}
                                   className="aspect-square rounded-lg bg-panel border border-border flex items-center justify-center p-2 text-center"
                                   title={m.name}
                                 >
                                   <span className="text-[10px] text-text-muted break-all">{m.name}</span>
-                                </a>
+                                </button>
                               ) : (
                                 <button
                                   type="button"
