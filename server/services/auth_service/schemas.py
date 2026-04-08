@@ -13,6 +13,7 @@ class UserCreate(BaseModel):
 
 class UserResponse(BaseModel):
     id: int
+    tenant_id: int
     email: str
     full_name: Optional[str]
     role: str

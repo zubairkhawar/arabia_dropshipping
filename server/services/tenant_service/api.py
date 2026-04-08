@@ -123,6 +123,32 @@ async def patch_agent_management(
     )
 
 
+class TenantDisplayTimezoneOut(BaseModel):
+    display_timezone: str
+
+
+@router.get("/{tenant_id}/display-timezone", response_model=TenantDisplayTimezoneOut)
+async def get_tenant_display_timezone(
+    tenant_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Current saved display timezone for the tenant (any member of that tenant may read).
+    """
+    if current_user.tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant mismatch",
+        )
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    raw = getattr(tenant, "display_timezone", None) or "UTC"
+    cleaned = raw.strip() if isinstance(raw, str) else "UTC"
+    return TenantDisplayTimezoneOut(display_timezone=cleaned or "UTC")
+
+
 def _validate_iana_timezone(tz: str) -> str:
     cleaned = (tz or "").strip()
     if not cleaned:

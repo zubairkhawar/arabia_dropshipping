@@ -59,7 +59,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "https://arabia-dropshipping
 
 export default function AdminSettings() {
   const { schedule, setSchedule } = useOnlineSchedule();
-  const { timeZone, setTimeZone, refresh: refreshTenantTimezone } = useTenantTimezone();
+  const { timeZone, setTimeZone, refresh: refreshTenantTimezone, tenantId } = useTenantTimezone();
   const { enabled: soundAlertsEnabled, setEnabled: setSoundAlertsEnabled, requestPlay } = useSoundAlerts();
   const { toast } = useToast();
   const { agents, refreshAgents } = useAgents();
@@ -85,7 +85,8 @@ export default function AdminSettings() {
   const [agentMgmtLoading, setAgentMgmtLoading] = useState(false);
   const [transferSavingId, setTransferSavingId] = useState<string | null>(null);
 
-  const TENANT_ID = 1;
+  /** Prefer JWT tenant; default 1 matches single-tenant bootstrap. */
+  const effectiveTenantId = tenantId ?? 1;
 
   const formatBroadcastDateTime = (s: string): string => {
     if (!s) return '—';
@@ -118,7 +119,7 @@ export default function AdminSettings() {
       if (!token) return;
       setAgentMgmtLoading(true);
       try {
-        const res = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/agent-management`, {
+        const res = await fetch(`${API_BASE}/api/tenants/${effectiveTenantId}/agent-management`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) return;
@@ -137,7 +138,7 @@ export default function AdminSettings() {
     return () => {
       cancelled = true;
     };
-  }, [refreshAgents]);
+  }, [refreshAgents, effectiveTenantId]);
 
   const patchAgentCanTransfer = async (agentId: string, allowed: boolean) => {
     if (typeof window === 'undefined') return;
@@ -172,7 +173,7 @@ export default function AdminSettings() {
     async function loadBroadcasts() {
       setBroadcastsLoading(true);
       try {
-        const res = await fetch(`${API_BASE}/api/broadcasts?tenant_id=${TENANT_ID}`);
+        const res = await fetch(`${API_BASE}/api/broadcasts?tenant_id=${effectiveTenantId}`);
         if (!res.ok) throw new Error('Failed to fetch broadcasts');
         const data = (await res.json()) as {
           id: number;
@@ -206,7 +207,7 @@ export default function AdminSettings() {
       }
     }
     void loadBroadcasts();
-  }, [toast]);
+  }, [toast, effectiveTenantId]);
 
   const addBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -228,7 +229,7 @@ export default function AdminSettings() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tenant_id: TENANT_ID,
+          tenant_id: effectiveTenantId,
           title: title.trim(),
           message: message.trim(),
           occasion: occasion.trim() || null,
@@ -324,7 +325,7 @@ export default function AdminSettings() {
     }
     setSettingsSaving(true);
     try {
-      const tzRes = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/display-timezone`, {
+      const tzRes = await fetch(`${API_BASE}/api/tenants/${effectiveTenantId}/display-timezone`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -343,9 +344,12 @@ export default function AdminSettings() {
         throw new Error(msg || 'Failed to save timezone');
       }
 
-      const schedRes = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/schedule`, {
+      const schedRes = await fetch(`${API_BASE}/api/tenants/${effectiveTenantId}/schedule`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           working_days: scheduleDraft.workingDays,
           start_time: scheduleDraft.startTime,
@@ -357,7 +361,7 @@ export default function AdminSettings() {
       }
 
       const cap = Math.min(100, Math.max(1, parseInt(String(maxConcurrentDraft), 10) || 5));
-      const amRes = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/agent-management`, {
+      const amRes = await fetch(`${API_BASE}/api/tenants/${effectiveTenantId}/agent-management`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',

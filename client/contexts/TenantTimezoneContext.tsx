@@ -18,6 +18,8 @@ const API_BASE =
 
 type TenantTimezoneContextValue = {
   timeZone: string;
+  /** Logged-in user's tenant; null when signed out or not yet loaded. */
+  tenantId: number | null;
   setTimeZone: (tz: string) => void;
   refresh: () => Promise<void>;
 };
@@ -26,21 +28,45 @@ const TenantTimezoneContext = createContext<TenantTimezoneContextValue | undefin
 
 export function TenantTimezoneProvider({ children }: { children: ReactNode }) {
   const [timeZone, setTimeZoneState] = useState(DEFAULT_TENANT_TIMEZONE);
+  const [tenantId, setTenantIdState] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     if (typeof window === 'undefined') return;
     const token = localStorage.getItem('auth_token');
     if (!token) {
       setTimeZoneState(DEFAULT_TENANT_TIMEZONE);
+      setTenantIdState(null);
       return;
     }
     try {
-      const res = await fetch(`${API_BASE}/api/auth/me`, {
+      const meRes = await fetch(`${API_BASE}/api/auth/me`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) return;
-      const data = (await res.json()) as { tenant_display_timezone?: string };
-      setTimeZoneState(normalizeIanaTimeZone(data.tenant_display_timezone));
+      if (!meRes.ok) {
+        return;
+      }
+      const me = (await meRes.json()) as {
+        tenant_id?: number;
+        tenant_display_timezone?: string;
+      };
+      const tid =
+        typeof me.tenant_id === 'number' && Number.isFinite(me.tenant_id) ? me.tenant_id : null;
+      setTenantIdState(tid);
+
+      let tzSource: string | undefined = me.tenant_display_timezone;
+      if (tid != null) {
+        const tzRes = await fetch(`${API_BASE}/api/tenants/${tid}/display-timezone`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (tzRes.ok) {
+          const body = (await tzRes.json()) as { display_timezone?: string };
+          if (typeof body.display_timezone === 'string' && body.display_timezone.trim()) {
+            tzSource = body.display_timezone.trim();
+          }
+        }
+      }
+
+      setTimeZoneState(normalizeIanaTimeZone(tzSource));
     } catch {
       // keep previous
     }
@@ -50,13 +76,27 @@ export function TenantTimezoneProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const onAuthChanged = () => {
+      void refresh();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('auth-changed', onAuthChanged);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('auth-changed', onAuthChanged);
+      }
+    };
+  }, [refresh]);
+
   const setTimeZone = useCallback((tz: string) => {
     setTimeZoneState(normalizeIanaTimeZone(tz));
   }, []);
 
   const value = useMemo(
-    () => ({ timeZone, setTimeZone, refresh }),
-    [timeZone, setTimeZone, refresh],
+    () => ({ timeZone, tenantId, setTimeZone, refresh }),
+    [timeZone, tenantId, setTimeZone, refresh],
   );
 
   return (
@@ -69,6 +109,7 @@ export function useTenantTimezone(): TenantTimezoneContextValue {
   if (!ctx) {
     return {
       timeZone: DEFAULT_TENANT_TIMEZONE,
+      tenantId: null,
       setTimeZone: () => {},
       refresh: async () => {},
     };
