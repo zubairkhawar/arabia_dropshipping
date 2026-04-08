@@ -413,7 +413,12 @@ export function ChatWindow({
   const isDmPage = pathname?.startsWith('/agent/dm');
   const dmSlug = isDmPage ? (pathname.replace('/agent/dm/', '').split('/')[0] || null) : null;
   const isInboxPage = pathname?.startsWith('/agent/inbox') || pathname?.startsWith('/admin/inbox');
-  const showBroadcastInput = broadcastMode && isInternalChat && !!teamName;
+  /** Admin broadcast composer: require a team id (API target). Do not depend on teamName — empty names would hide the input while readOnly is true. */
+  const showBroadcastInput =
+    broadcastMode &&
+    isInternalChat &&
+    teamId != null &&
+    String(teamId).trim() !== '';
 
   const [messages, setMessages] = useState<Message[]>(() => {
     if (isInboxPage && !isInternalChat) {
@@ -810,7 +815,7 @@ export function ChatWindow({
 
   const mentionComposerEnabled =
     isTeamChannel &&
-    !readOnly &&
+    (!readOnly || showBroadcastInput) &&
     (showBroadcastInput || teamMemberNames.length > 0 || teamMemberRoster.length > 0);
 
   const DROPDOWN_APPROX_HEIGHT = 320;
@@ -2587,7 +2592,22 @@ export function ChatWindow({
           headers: teamChannelJsonHeaders(),
           body: JSON.stringify(body),
         });
-        if (!res.ok) throw new Error('Failed to send team message');
+        if (!res.ok) {
+          const errBody = (await res.json().catch(() => null)) as { detail?: unknown } | null;
+          const detail =
+            typeof errBody?.detail === 'string'
+              ? errBody.detail
+              : Array.isArray(errBody?.detail)
+                ? errBody.detail
+                    .map((x) =>
+                      typeof x === 'object' && x && 'msg' in x
+                        ? String((x as { msg?: string }).msg)
+                        : String(x),
+                    )
+                    .join(' ')
+                : null;
+          throw new Error(detail || `Could not send (${res.status}). Sign in as admin to post here.`);
+        }
         const saved = (await res.json()) as TeamChannelMessageRow;
         const mapped = mapTeamRowToMessage(saved);
         setMessages((prev) => {
@@ -2600,8 +2620,11 @@ export function ChatWindow({
           return [...prev, mapped].sort((a, b) => a.id - b.id);
         });
         mentionIdsRef.current = new Set();
-      } catch {
-        addSystemNote('Message failed to send. Please try again.');
+      } catch (e) {
+        const msg = e instanceof Error && e.message ? e.message : '';
+        addSystemNote(
+          msg || 'Message failed to send. Please try again.',
+        );
       } finally {
         if (pendingAttachment?.type === 'voice' && pendingAttachment.url.startsWith('blob:')) {
           try {
@@ -2879,7 +2902,22 @@ export function ChatWindow({
           headers: teamChannelJsonHeaders(),
           body: JSON.stringify(body),
         });
-        if (!res.ok) throw new Error('Failed to send team message');
+        if (!res.ok) {
+          const errBody = (await res.json().catch(() => null)) as { detail?: unknown } | null;
+          const detail =
+            typeof errBody?.detail === 'string'
+              ? errBody.detail
+              : Array.isArray(errBody?.detail)
+                ? errBody.detail
+                    .map((x) =>
+                      typeof x === 'object' && x && 'msg' in x
+                        ? String((x as { msg?: string }).msg)
+                        : String(x),
+                    )
+                    .join(' ')
+                : null;
+          throw new Error(detail || `Could not send (${res.status}). Sign in as admin to post here.`);
+        }
         const saved = (await res.json()) as TeamChannelMessageRow;
         const mapped = mapTeamRowToMessage(saved);
         setMessages((prev) => {
@@ -2893,8 +2931,9 @@ export function ChatWindow({
         });
         mentionIdsRef.current = new Set();
       }
-    } catch {
-      addSystemNote('Voice message failed to send. Please try again.');
+    } catch (e) {
+      const msg = e instanceof Error && e.message ? e.message : '';
+      addSystemNote(msg || 'Voice message failed to send. Please try again.');
       return;
     }
     if (att.url.startsWith('blob:')) {
@@ -2971,7 +3010,7 @@ export function ChatWindow({
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setInputValue(v);
-    if (isTeamChannel && !readOnly) {
+    if (isTeamChannel && (!readOnly || showBroadcastInput)) {
       sendTypingWs(true);
       if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
       typingStopTimerRef.current = setTimeout(() => {

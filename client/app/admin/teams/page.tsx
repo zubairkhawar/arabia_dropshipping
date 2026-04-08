@@ -265,9 +265,9 @@ export default function AdminTeams() {
             <ChatWindow
               isInternalChat
               title="# Team Channel"
-              subtitle={`Internal chat for ${selectedTeam.name}`}
+              subtitle={`Internal chat for ${selectedTeam.name || 'Team'}`}
               teamId={selectedTeam.id}
-              teamName={selectedTeam.name}
+              teamName={selectedTeam.name || 'Team'}
               teamMemberNames={selectedTeam.members.map((m) => m.name)}
               teamMemberRoster={selectedTeam.members.map((m) => ({
                 agentId: m.agentId,
