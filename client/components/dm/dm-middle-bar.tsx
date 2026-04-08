@@ -8,6 +8,7 @@ import { useAgentPresence } from '@/contexts/AgentPresenceContext';
 import { useDmChats } from '@/contexts/DmChatsContext';
 import { useDmLayout } from '@/contexts/DmLayoutContext';
 import { useAgents } from '@/contexts/AgentsContext';
+import { readAuthAgentId } from '@/lib/agent-session-storage';
 
 const DM_MIDDLE_BAR_WIDTH = 280;
 const DM_MIDDLE_BAR_COLLAPSED_WIDTH = 56;
@@ -28,7 +29,7 @@ type DmSearchRow = {
 export function DmMiddleBar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { conversations, addOrUpdateConversation, removeConversation, isDmListLoading, getDmUnreadCount } =
+  const { conversations, addOrUpdateConversation, removeConversation, isDmListLoading, getDmUnreadCount, getMessagesBySlug } =
     useDmChats();
   const { getPresence, agentsByTeam } = useAgentPresence();
   const { agents, getCurrentAgent } = useAgents();
@@ -67,10 +68,33 @@ export function DmMiddleBar() {
       )
     : conversations;
   const hasSearch = searchQuery.trim().length > 0;
-  const showSearchResults = hasSearch && searchRows.length > 0;
+  const localFallbackRows = (() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [] as DmSearchRow[];
+    return conversations
+      .filter((c) => {
+        if (c.name.toLowerCase().includes(q)) return true;
+        const msgs = getMessagesBySlug(c.slug);
+        return msgs.some((m) => (m.content || '').toLowerCase().includes(q));
+      })
+      .slice(0, 50)
+      .map((c) => ({
+        id: Number(c.id),
+        tenant_id: TENANT_ID,
+        peer: {
+          agent_id: Number(c.peerAgentId),
+          name: c.name,
+          avatar_url: c.peerAvatarUrl ?? null,
+        },
+        last_message_at: c.lastMessageAt,
+        match_snippet: (getMessagesBySlug(c.slug).slice(-1)[0]?.content || '').slice(0, 140),
+      }));
+  })();
+  const displayedSearchRows = searchRows.length > 0 ? searchRows : !searchLoading ? localFallbackRows : [];
+  const showSearchResults = hasSearch && displayedSearchRows.length > 0;
 
   useEffect(() => {
-    if (!currentAgentId) return;
+    const aid = currentAgentId ?? readAuthAgentId();
     const q = searchQuery.trim();
     if (!q) {
       setSearchRows([]);
@@ -78,11 +102,16 @@ export function DmMiddleBar() {
       setSearchActiveIndex(0);
       return;
     }
+    if (!aid) {
+      setSearchLoading(false);
+      setSearchRows([]);
+      return;
+    }
     setSearchLoading(true);
     const timer = window.setTimeout(() => {
       const url = new URL(`${API_BASE}/api/internal-dm/conversations/search`);
       url.searchParams.set('tenant_id', String(TENANT_ID));
-      url.searchParams.set('agent_id', String(Number(currentAgentId)));
+      url.searchParams.set('agent_id', String(Number(aid)));
       url.searchParams.set('q', q);
       url.searchParams.set('limit', '50');
       const headers: Record<string, string> = {};
@@ -274,13 +303,13 @@ export function DmMiddleBar() {
                   if (!showSearchResults) return;
                   if (e.key === 'ArrowDown') {
                     e.preventDefault();
-                    setSearchActiveIndex((i) => (i + 1) % searchRows.length);
+                    setSearchActiveIndex((i) => (i + 1) % displayedSearchRows.length);
                   } else if (e.key === 'ArrowUp') {
                     e.preventDefault();
-                    setSearchActiveIndex((i) => (i - 1 + searchRows.length) % searchRows.length);
+                    setSearchActiveIndex((i) => (i - 1 + displayedSearchRows.length) % displayedSearchRows.length);
                   } else if (e.key === 'Enter') {
                     e.preventDefault();
-                    const row = searchRows[searchActiveIndex];
+                    const row = displayedSearchRows[searchActiveIndex];
                     if (!row) return;
                     const slug = row.peer.name
                       .toLowerCase()
@@ -389,18 +418,18 @@ export function DmMiddleBar() {
             ) : hasSearch ? (
               <div className="space-y-1">
                 <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                  Search results {searchLoading ? '...' : `(${searchRows.length})`}
+                  Search results {searchLoading ? '...' : `(${displayedSearchRows.length})`}
                 </p>
                 {searchLoading ? (
                   <p className="text-sm text-text-muted px-3 py-2">Searching…</p>
-                ) : searchRows.length === 0 ? (
+                ) : displayedSearchRows.length === 0 ? (
                   <div className="px-3 py-3">
                     <p className="text-sm text-text-primary">No results found for "{searchQuery.trim()}"</p>
                     <p className="text-xs text-text-muted mt-1">Try different words or check spelling.</p>
                   </div>
                 ) : (
                   <ul className="space-y-0.5">
-                    {searchRows.map((r, idx) => {
+                    {displayedSearchRows.map((r, idx) => {
                       const slug = r.peer.name
                         .toLowerCase()
                         .replace(/[^a-z0-9]+/g, '-')

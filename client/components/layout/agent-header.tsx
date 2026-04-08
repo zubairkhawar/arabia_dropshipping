@@ -97,6 +97,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const router = useRouter();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const { inboxQuery, setInboxQuery } = useAgentSearch();
+  const [headerSearchText, setHeaderSearchText] = useState('');
   const displayName = fullName || userName || 'Support Agent';
   const profileNameSkeleton = !currentAgent && !!readAuthAgentId();
   const {
@@ -107,6 +108,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   } = useNotifications();
   const notificationList = getNotificationsForCurrentAgent();
   const onInboxRoute = pathname?.startsWith('/agent/inbox');
+  const searchValue = onInboxRoute ? inboxQuery : headerSearchText;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -276,9 +278,11 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
               <input
                 ref={searchInputRef}
                 type="text"
-                value={onInboxRoute ? inboxQuery : ''}
+                value={searchValue}
                 onChange={(e) => {
-                  if (onInboxRoute) setInboxQuery(e.target.value);
+                  const v = e.target.value;
+                  if (onInboxRoute) setInboxQuery(v);
+                  else setHeaderSearchText(v);
                 }}
                 placeholder={onInboxRoute ? 'Search my chats...' : 'Search...'}
                 className="w-full pl-10 pr-4 py-2 bg-panel border border-border rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-primary focus:bg-white text-sm"

@@ -7,6 +7,7 @@ import { useInboxConversations } from '@/contexts/InboxConversationsContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { ChevronDown } from 'lucide-react';
 import { useAgentSearch } from '@/contexts/AgentSearchContext';
+import { readAuthAgentId } from '@/lib/agent-session-storage';
 
 type ConversationStatus = 'active' | 'resolved' | 'pending';
 
@@ -183,20 +184,49 @@ export function ChatList() {
   const liveConversations = filteredConversations.filter((c) => c.status === 'active');
   const closedConversations = filteredConversations.filter((c) => c.status === 'resolved');
   const activeSearch = inboxQuery.trim();
+  const localFallbackResults = useMemo(() => {
+    const q = activeSearch.toLowerCase();
+    if (!q) return [] as InboxSearchResult[];
+    return conversations
+      .filter((c) => {
+        return (
+          c.customerName.toLowerCase().includes(q) ||
+          c.customerId.toLowerCase().includes(q) ||
+          c.lastMessage.toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 50)
+      .map((c) => ({
+        id: c.id,
+        customer_name: c.customerName,
+        customer_phone: null,
+        last_activity_at: null,
+        match_snippet: c.lastMessage || `Conversation ${c.customerId}`,
+        unread_count: c.unread,
+      }));
+  }, [activeSearch, conversations]);
+  const displayedSearchResults =
+    searchResults.length > 0 ? searchResults : !searchLoading ? localFallbackResults : [];
 
   useEffect(() => {
-    if (!isAgentInbox || !currentAgentId) return;
+    if (!isAgentInbox) return;
+    const aid = currentAgentId ?? readAuthAgentId();
     const q = activeSearch;
     if (!q) {
       setSearchResults([]);
       setSearchLoading(false);
       return;
     }
+    if (!aid) {
+      setSearchLoading(false);
+      setSearchResults([]);
+      return;
+    }
     setSearchLoading(true);
     const timer = window.setTimeout(() => {
       const url = new URL(`${API_BASE}/api/messaging/conversations/search`);
       url.searchParams.set('tenant_id', String(TENANT_ID));
-      url.searchParams.set('agent_id', String(Number(currentAgentId)));
+      url.searchParams.set('agent_id', String(Number(aid)));
       url.searchParams.set('q', q);
       url.searchParams.set('limit', '50');
       void fetch(url.toString())
@@ -290,18 +320,18 @@ export function ChatList() {
               <div className="space-y-2">
                 <p className="px-1 text-[11px] font-semibold text-text-muted uppercase tracking-wide">
                   Search results for "{activeSearch}"
-                  {searchLoading ? '...' : ` (${searchResults.length})`}
+                  {searchLoading ? '...' : ` (${displayedSearchResults.length})`}
                 </p>
                 {searchLoading ? (
                   <p className="px-2 py-2 text-xs text-text-muted">Searching…</p>
-                ) : searchResults.length === 0 ? (
+                ) : displayedSearchResults.length === 0 ? (
                   <div className="px-2 py-3 rounded-lg border border-border bg-white">
                     <p className="text-sm text-text-primary">No results found for "{activeSearch}"</p>
                     <p className="text-xs text-text-muted mt-1">Try different words or check spelling.</p>
                   </div>
                 ) : (
                   <ul className="space-y-1">
-                    {searchResults.map((r) => {
+                    {displayedSearchResults.map((r) => {
                       const isSelected = selectedId === r.id;
                       const snippet = (r.match_snippet || '').trim() || 'Open conversation';
                       return (
