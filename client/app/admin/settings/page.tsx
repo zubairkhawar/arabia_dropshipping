@@ -11,6 +11,7 @@ import { getDayAttendance } from '@/components/agents/activity-bar';
 import { buildAllAgentsPdf } from '@/lib/attendance-pdf';
 import type { OnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useSoundAlerts } from '@/contexts/SoundAlertsContext';
+import { AgentScheduleSettings } from '@/components/admin/agent-schedule-settings';
 
 interface Broadcast {
   id: string;
@@ -37,8 +38,6 @@ function broadcastTargetSummary(b: Broadcast): string {
   if (b.deliveryNotifyCustomersWhatsapp) parts.push('Customers (WhatsApp)');
   return parts.length ? parts.join(' · ') : '—';
 }
-
-const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const MONTHS = [
   "January",
@@ -486,45 +485,7 @@ export default function AdminSettings() {
                 />
               </button>
             </div>
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full max-w-2xl text-[11px] text-left border border-border rounded-lg overflow-hidden">
-                <thead className="bg-panel text-text-muted font-medium">
-                  <tr>
-                    <th className="py-2 px-2 border-b border-border">Alert</th>
-                    <th className="py-2 px-2 border-b border-border">Sound</th>
-                    <th className="py-2 px-2 border-b border-border">Notes</th>
-                  </tr>
-                </thead>
-                <tbody className="text-text-primary">
-                  <tr className="border-b border-border/80">
-                    <td className="py-1.5 px-2">New customer message</td>
-                    <td className="py-1.5 px-2">Soft chime (2 notes)</td>
-                    <td className="py-1.5 px-2 text-text-secondary">Gentle, not urgent</td>
-                  </tr>
-                  <tr className="border-b border-border/80">
-                    <td className="py-1.5 px-2">@Mention in team channel</td>
-                    <td className="py-1.5 px-2">Single ping</td>
-                    <td className="py-1.5 px-2 text-text-secondary">Higher pitch, urgent</td>
-                  </tr>
-                  <tr className="border-b border-border/80">
-                    <td className="py-1.5 px-2">New DM</td>
-                    <td className="py-1.5 px-2">Soft pop</td>
-                    <td className="py-1.5 px-2 text-text-secondary">Casual, friendly</td>
-                  </tr>
-                  <tr className="border-b border-border/80">
-                    <td className="py-1.5 px-2">Agent assigned to conversation</td>
-                    <td className="py-1.5 px-2">Short click</td>
-                    <td className="py-1.5 px-2 text-text-secondary">Informational</td>
-                  </tr>
-                  <tr>
-                    <td className="py-1.5 px-2">Customer escalated / transfer</td>
-                    <td className="py-1.5 px-2">Double beep</td>
-                    <td className="py-1.5 px-2 text-text-secondary">Needs attention</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <p className="mt-3 text-[10px] text-text-muted max-w-2xl">
+            <p className="mt-4 text-[10px] text-text-muted max-w-2xl">
               Multiple events within 3 seconds only trigger one sound. Sustained activity (e.g. several messages
               spread over 10 seconds) can play once per 3 seconds each.
             </p>
@@ -662,63 +623,15 @@ export default function AdminSettings() {
           </div>
 
           <div className="border-t border-border pt-6">
-            <h3 className="font-semibold text-text-primary mb-2 flex items-center gap-2">
+            <h3 className="font-semibold text-text-primary mb-1 flex items-center gap-2">
               <Clock className="w-4 h-4" />
               Agent online schedule
             </h3>
-            <p className="text-xs text-text-secondary mb-4">
-              Agents can only appear online during these days and hours. The AI bot uses this to tell
-              customers when agents are available. Attendance cannot be marked on days not selected below (e.g. Sunday as holiday).
+            <p className="text-xs text-text-secondary mb-5 max-w-2xl">
+              Agents can only appear online during these days and hours. The AI uses this for customer-facing
+              availability. Attendance cannot be marked on days that are off.
             </p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-text-primary mb-2">
-                  Working days
-                </label>
-                <div className="flex flex-wrap gap-4">
-                  {DAY_LABELS.map((label, dayIndex) => (
-                    <label key={dayIndex} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={scheduleDraft.workingDays.includes(dayIndex)}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                            ? [...scheduleDraft.workingDays, dayIndex].sort((a, b) => a - b)
-                            : scheduleDraft.workingDays.filter((d) => d !== dayIndex);
-                          setScheduleDraft({ ...scheduleDraft, workingDays: next.length > 0 ? next : [1] });
-                        }}
-                        className="rounded border-border text-primary focus:ring-primary"
-                      />
-                      <span className="text-sm text-text-primary">{label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-text-primary mb-1">
-                    Start time
-                  </label>
-                  <input
-                    type="time"
-                    value={scheduleDraft.startTime}
-                    onChange={(e) => setScheduleDraft({ ...scheduleDraft, startTime: e.target.value })}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-text-primary mb-1">
-                    End time
-                  </label>
-                  <input
-                    type="time"
-                    value={scheduleDraft.endTime}
-                    onChange={(e) => setScheduleDraft({ ...scheduleDraft, endTime: e.target.value })}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-              </div>
-            </div>
+            <AgentScheduleSettings value={scheduleDraft} onChange={setScheduleDraft} />
           </div>
 
           <div className="border-t border-border pt-6">
