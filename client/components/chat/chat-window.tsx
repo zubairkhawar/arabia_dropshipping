@@ -569,6 +569,16 @@ export function ChatWindow({
   const [deletedForMeIds, setDeletedForMeIds] = useState<number[]>([]);
   const [replyingTo, setReplyingTo] = useState<{ id: number; senderName: string; content: string } | null>(null);
   const [messageInfoId, setMessageInfoId] = useState<number | null>(null);
+  /** DM: popover anchored to the message bubble (viewport coords). */
+  const [messageInfoAnchor, setMessageInfoAnchor] = useState<{
+    top: number;
+    left: number;
+    right: number;
+    bottom: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [messageInfoPopoverEnter, setMessageInfoPopoverEnter] = useState(false);
   const [reactionDetailMessageId, setReactionDetailMessageId] = useState<number | null>(null);
   const [reactionDetailFilter, setReactionDetailFilter] = useState<'all' | string>('all');
   const [dropdownPlaceAbove, setDropdownPlaceAbove] = useState(true);
@@ -1959,6 +1969,35 @@ export function ChatWindow({
       el.scrollTop = el.scrollHeight;
     });
   }, [filteredMessages.length, initialScrollKey]);
+
+  const closeMessageInfo = useCallback(() => {
+    setMessageInfoId(null);
+    setMessageInfoAnchor(null);
+    setMessageInfoPopoverEnter(false);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (messageInfoId == null || !isDmPage || !messageInfoAnchor) {
+      setMessageInfoPopoverEnter(false);
+      return;
+    }
+    setMessageInfoPopoverEnter(false);
+    const raf = requestAnimationFrame(() => {
+      requestAnimationFrame(() => setMessageInfoPopoverEnter(true));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [messageInfoId, isDmPage, messageInfoAnchor]);
+
+  useEffect(() => {
+    if (messageInfoId == null || !isDmPage) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      closeMessageInfo();
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [messageInfoId, isDmPage, closeMessageInfo]);
 
   const deleteMessage = async (id: number) => {
     if (isInboxPage && !isInternalChat) {
@@ -3838,6 +3877,25 @@ export function ChatWindow({
                             type="button"
                             className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                             onClick={() => {
+                              if (isDmPage) {
+                                const el = document.getElementById(`message-${message.id}`);
+                                const r = el?.getBoundingClientRect();
+                                setMessageInfoAnchor(
+                                  r
+                                    ? {
+                                        top: r.top,
+                                        left: r.left,
+                                        right: r.right,
+                                        bottom: r.bottom,
+                                        width: r.width,
+                                        height: r.height,
+                                      }
+                                    : null,
+                                );
+                              } else {
+                                setMessageInfoAnchor(null);
+                              }
+                              setMessageInfoPopoverEnter(false);
                               setMessageInfoId(message.id);
                               setActiveMessageMenuId(null);
                             }}
@@ -4353,7 +4411,7 @@ export function ChatWindow({
           return (
             <div
               className="fixed inset-0 z-30 flex items-start justify-center bg-black/20 pt-20"
-              onClick={() => setMessageInfoId(null)}
+              onClick={closeMessageInfo}
             >
               <div
                 className="w-full max-w-sm overflow-hidden rounded-xl border border-border bg-white shadow-2xl"
@@ -4363,7 +4421,7 @@ export function ChatWindow({
                   <span className="font-semibold text-text-primary">Message info</span>
                   <button
                     type="button"
-                    onClick={() => setMessageInfoId(null)}
+                    onClick={closeMessageInfo}
                     className="rounded-full p-1.5 text-text-muted hover:bg-panel"
                     aria-label="Close"
                   >
@@ -4427,43 +4485,57 @@ export function ChatWindow({
                 ? deliveredDm!
                 : sentDm!
               : null;
+
+          const anchor = messageInfoAnchor;
+          const margin = 10;
+          const popW = 288;
+          const estH = 96;
+          const vw = typeof window !== 'undefined' ? window.innerWidth : 400;
+          const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+          let top = Math.max(margin, (vh - estH) / 2);
+          let left = Math.max(margin, (vw - popW) / 2);
+          if (anchor) {
+            top = anchor.top - estH - margin;
+            if (top < margin) top = anchor.bottom + margin;
+            top = Math.max(margin, Math.min(top, vh - estH - margin));
+            const outgoingBubble = targetMessage.senderName === 'You';
+            left = outgoingBubble ? anchor.right - popW : anchor.left;
+            left = Math.max(margin, Math.min(left, vw - popW - margin));
+          }
+
           return (
-            <div
-              className="fixed inset-0 z-30 flex items-start justify-center bg-black/20 pt-20"
-              onClick={() => setMessageInfoId(null)}
-            >
+            <>
+              <button
+                type="button"
+                className={`fixed inset-0 z-[40] cursor-default bg-black/20 transition-opacity duration-200 ease-out ${
+                  messageInfoPopoverEnter ? 'opacity-100' : 'opacity-0'
+                }`}
+                onClick={closeMessageInfo}
+                aria-label="Dismiss"
+              />
               <div
-                className="w-full max-w-sm overflow-hidden rounded-xl border border-border bg-white shadow-2xl"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Delivery and read times"
+                className={`fixed z-[50] w-72 rounded-xl border border-border bg-white py-3 pl-3 pr-10 shadow-2xl transition-all duration-200 ease-out ${
+                  outgoingDmInfo ? 'origin-top-right' : 'origin-top-left'
+                } ${
+                  messageInfoPopoverEnter
+                    ? 'translate-y-0 scale-100 opacity-100'
+                    : 'translate-y-1 scale-[0.96] opacity-0'
+                }`}
+                style={{ top: `${top}px`, left: `${left}px` }}
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                  <span className="font-semibold text-text-primary">Message info</span>
-                  <button
-                    type="button"
-                    onClick={() => setMessageInfoId(null)}
-                    className="rounded-full p-1.5 text-text-muted hover:bg-panel"
-                    aria-label="Close"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-                <div className="max-h-80 space-y-3 overflow-y-auto px-4 py-4 text-sm text-text-primary">
-                  <p>
-                    <span className="text-text-muted">Sender · </span>
-                    {targetMessage.senderName}
-                  </p>
-                  {sentOkDm && (
-                    <p>
-                      <span className="text-text-muted">Sent · </span>
-                      {formatSoftMessageInfoTime(sentDm!)}
-                    </p>
-                  )}
-                  {targetMessage.editedAt && (
-                    <p>
-                      <span className="text-text-muted">Edited · </span>
-                      {formatSoftMessageInfoTime(new Date(targetMessage.editedAt))}
-                    </p>
-                  )}
+                <button
+                  type="button"
+                  onClick={closeMessageInfo}
+                  className="absolute right-2 top-2 rounded-full p-1 text-text-muted hover:bg-panel"
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+                <div className="space-y-2.5 text-sm text-text-primary">
                   {outgoingDmInfo && (
                     <>
                       <p>
@@ -4484,7 +4556,7 @@ export function ChatWindow({
                   )}
                 </div>
               </div>
-            </div>
+            </>
           );
         }
 
@@ -4498,7 +4570,7 @@ export function ChatWindow({
         return (
           <div
             className="fixed inset-0 z-30 flex items-start justify-center pt-20 bg-black/20"
-            onClick={() => setMessageInfoId(null)}
+            onClick={closeMessageInfo}
           >
             <div
               className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden"
@@ -4510,7 +4582,7 @@ export function ChatWindow({
                 </span>
                 <button
                   type="button"
-                  onClick={() => setMessageInfoId(null)}
+                  onClick={closeMessageInfo}
                   className="p-1.5 rounded-full hover:bg-panel text-text-muted"
                   aria-label="Close"
                 >
