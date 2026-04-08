@@ -1,6 +1,15 @@
 'use client';
 
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, Fragment, type ReactNode } from 'react';
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useCallback,
+  Fragment,
+  type ReactNode,
+  type MouseEvent,
+} from 'react';
 import { useTeamChannelRealtime, type TeamChannelWsEvent } from '@/hooks/useTeamChannelRealtime';
 import { useDmConversationRealtime, type DmWsEvent } from '@/hooks/useDmConversationRealtime';
 import Link from 'next/link';
@@ -78,6 +87,9 @@ interface Message {
   editedAt?: string;
   deletedForEveryone?: boolean;
   messageStatus?: { sent: boolean; delivered: boolean; read: boolean };
+  /** DM: receipt timestamps for outgoing messages (peer = other participant). */
+  peerDeliveredAt?: string;
+  peerReadAt?: string;
   /** Team channel: server receipt aggregate for outgoing messages (sender/admin view). */
   teamReceiptSummary?: { recipient_count: number; delivered_count: number; read_count: number };
   sendFailed?: boolean;
@@ -522,6 +534,8 @@ export function ChatWindow({
               read: Boolean(m.peerReadAt),
             }
           : undefined,
+        peerDeliveredAt: m.peerDeliveredAt,
+        peerReadAt: m.peerReadAt,
         reactions: parsed.reactions,
       };
     });
@@ -570,8 +584,10 @@ export function ChatWindow({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceCaptureCancelledRef = useRef(false);
   const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
-  const [playingVoiceId, setPlayingVoiceId] = useState<number | null>(null);
+  const [activeVoiceMessageId, setActiveVoiceMessageId] = useState<number | null>(null);
+  const [voiceIsPlaying, setVoiceIsPlaying] = useState(false);
   const [voiceProgress, setVoiceProgress] = useState<Record<number, number>>({});
+  const [voiceCurrentSec, setVoiceCurrentSec] = useState<Record<number, number>>({});
   const [showTransferMenu, setShowTransferMenu] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferTargetId, setTransferTargetId] = useState<string | null>(null);
@@ -1515,16 +1531,44 @@ export function ChatWindow({
   };
 
   const formatVoiceDuration = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
+    const safe = Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
+    const m = Math.floor(safe / 60);
+    const s = Math.floor(safe % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const seekVoiceMessage = (
+    messageId: number,
+    e: MouseEvent<HTMLDivElement>,
+    durationFallbackSec?: number,
+  ) => {
+    const audio = voiceAudioRef.current;
+    if (!audio || voiceMessageIdRef.current !== messageId) return;
+    const bar = e.currentTarget;
+    const rect = bar.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    let d = audio.duration;
+    if (!Number.isFinite(d) || d <= 0 || d === Infinity) {
+      d = durationFallbackSec && durationFallbackSec > 0 ? durationFallbackSec : 0;
+    }
+    if (d <= 0) return;
+    audio.currentTime = ratio * d;
   };
 
   const toggleVoicePlayback = (messageId: number, url: string, durationSeconds: number) => {
     const id = messageId;
-    if (playingVoiceId === id) {
-      voiceAudioRef.current?.pause();
-      setPlayingVoiceId(null);
+    const durationFallback = durationSeconds > 0 && Number.isFinite(durationSeconds) ? durationSeconds : 0;
+    if (activeVoiceMessageId === id && voiceAudioRef.current) {
+      if (voiceIsPlaying) {
+        voiceAudioRef.current.pause();
+        setVoiceIsPlaying(false);
+      } else {
+        void voiceAudioRef.current.play().then(
+          () => setVoiceIsPlaying(true),
+          () => setVoiceIsPlaying(false),
+        );
+      }
       return;
     }
     if (voiceAudioRef.current) {
@@ -1534,26 +1578,55 @@ export function ChatWindow({
     const audio = new Audio(url);
     voiceAudioRef.current = audio;
     voiceMessageIdRef.current = id;
-    setPlayingVoiceId(id);
+    setActiveVoiceMessageId(id);
+    const effectiveDuration = (): number => {
+      const ad = audio.duration;
+      if (ad && Number.isFinite(ad) && ad > 0 && ad !== Infinity) return ad;
+      return durationFallback;
+    };
     const updateProgress = () => {
-      if (voiceMessageIdRef.current === id && audio.duration && isFinite(audio.duration)) {
-        setVoiceProgress((prev) => ({ ...prev, [id]: audio.currentTime / audio.duration }));
+      if (voiceMessageIdRef.current !== id) return;
+      const t = Math.max(0, audio.currentTime);
+      setVoiceCurrentSec((prev) => ({ ...prev, [id]: t }));
+      const dur = effectiveDuration();
+      if (dur > 0) {
+        setVoiceProgress((prev) => ({ ...prev, [id]: Math.min(1, t / dur) }));
       }
     };
-    audio.addEventListener('timeupdate', updateProgress);
-    audio.addEventListener('ended', () => {
-      setVoiceProgress((prev) => ({ ...prev, [id]: 1 }));
-      setPlayingVoiceId(null);
+    const onEnded = () => {
+      if (voiceMessageIdRef.current !== id) return;
+      setVoiceProgress((prev) => ({ ...prev, [id]: 0 }));
+      setVoiceCurrentSec((prev) => ({ ...prev, [id]: 0 }));
+      setActiveVoiceMessageId(null);
+      setVoiceIsPlaying(false);
       voiceAudioRef.current = null;
       voiceMessageIdRef.current = null;
-    });
-    audio.play().catch(() => {
-      setPlayingVoiceId(null);
+      audio.removeEventListener('timeupdate', updateProgress);
+      audio.removeEventListener('loadedmetadata', updateProgress);
+      audio.removeEventListener('durationchange', updateProgress);
+      audio.removeEventListener('seeked', updateProgress);
+      audio.removeEventListener('ended', onEnded);
+    };
+    audio.addEventListener('timeupdate', updateProgress);
+    audio.addEventListener('loadedmetadata', updateProgress);
+    audio.addEventListener('durationchange', updateProgress);
+    audio.addEventListener('seeked', updateProgress);
+    audio.addEventListener('ended', onEnded);
+    setVoiceProgress((prev) => ({ ...prev, [id]: 0 }));
+    setVoiceCurrentSec((prev) => ({ ...prev, [id]: 0 }));
+    setVoiceIsPlaying(true);
+    void audio.play().catch(() => {
+      setActiveVoiceMessageId(null);
+      setVoiceIsPlaying(false);
       voiceAudioRef.current = null;
+      voiceMessageIdRef.current = null;
+      audio.removeEventListener('timeupdate', updateProgress);
+      audio.removeEventListener('loadedmetadata', updateProgress);
+      audio.removeEventListener('durationchange', updateProgress);
+      audio.removeEventListener('seeked', updateProgress);
+      audio.removeEventListener('ended', onEnded);
     });
   };
-
-  const VOICE_WAVEFORM_BARS = [40, 70, 45, 85, 55, 65, 50, 90, 60, 75, 48, 82, 52, 68];
 
   const filteredMessages = messages.filter((m) => !deletedForMeIds.includes(m.id));
   const threadSearchTrim = threadSearchQuery.trim().toLowerCase();
@@ -3185,10 +3258,18 @@ export function ChatWindow({
                     </div>
                   )}
                   <div
-                    className={`relative flex max-w-[85%] min-w-0 flex-col ${outgoing ? 'items-end' : 'items-start'}`}
+                    className={`relative flex min-w-0 flex-col ${
+                      message.attachment?.type === 'voice'
+                        ? 'w-full max-w-[min(100%,22rem)] sm:max-w-[min(100%,26rem)]'
+                        : 'max-w-[85%]'
+                    } ${outgoing ? 'items-end' : 'items-start'}`}
                   >
                     <div
-                      className={`relative min-w-[8rem] max-w-message-bubble rounded-2xl px-2.5 pb-1.5 pt-2 pr-9 ${getMessageStyle(message, outgoing)}`}
+                      className={`relative rounded-2xl px-2.5 pb-1.5 pt-2 pr-9 ${
+                        message.attachment?.type === 'voice'
+                          ? 'w-full min-w-[min(100%,260px)] max-w-full'
+                          : 'min-w-[8rem] max-w-message-bubble'
+                      } ${getMessageStyle(message, outgoing)}`}
                     >
                       {!readOnly && (
                         <button
@@ -3270,14 +3351,14 @@ export function ChatWindow({
                                 <span className="truncate text-sm">{message.attachment.name}</span>
                               </a>
                             )}
-                            {message.attachment.type === 'voice' && (
-                              <div className="flex items-center gap-2 py-1 text-[#111b21]">
-                                <div className="flex min-w-0 flex-1 items-center gap-2">
-                                  <div className="relative flex-shrink-0">
-                                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10">
-                                      <Mic className="h-4 w-4 text-[#54656f]" />
-                                    </div>
-                                  </div>
+                            {message.attachment.type === 'voice' && (() => {
+                              const totalSec = message.attachment.durationSeconds ?? 0;
+                              const isVoiceActive = activeVoiceMessageId === message.id;
+                              const showCurrentTime = isVoiceActive;
+                              const currentSec = voiceCurrentSec[message.id] ?? 0;
+                              const progressPct = (voiceProgress[message.id] ?? 0) * 100;
+                              return (
+                                <div className="flex min-w-0 max-w-full items-center gap-2 py-1.5 text-[#111b21]">
                                   <button
                                     type="button"
                                     onClick={() =>
@@ -3287,38 +3368,62 @@ export function ChatWindow({
                                         message.attachment!.durationSeconds ?? 0,
                                       )
                                     }
-                                    className="flex-shrink-0 rounded-full p-1 text-[#111b21] hover:bg-black/10"
-                                    aria-label={playingVoiceId === message.id ? 'Pause' : 'Play voice message'}
+                                    className="flex h-9 w-9 flex-shrink-0 select-none items-center justify-center rounded-full bg-black/[0.08] text-lg leading-none text-[#111b21] transition-colors hover:bg-black/[0.12]"
+                                    aria-label={
+                                      isVoiceActive && voiceIsPlaying
+                                        ? 'Pause voice message'
+                                        : 'Play voice message'
+                                    }
                                   >
-                                    {playingVoiceId === message.id ? (
-                                      <Pause className="h-5 w-5" fill="currentColor" />
-                                    ) : (
-                                      <Play className="h-5 w-5" fill="currentColor" />
-                                    )}
+                                    {isVoiceActive && voiceIsPlaying ? '⏸' : '▶'}
                                   </button>
-                                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                                    <div className="min-w-[4rem] flex-1 overflow-hidden rounded-full bg-black/15 h-1.5">
-                                      <div
-                                        className="h-full rounded-full bg-[#53bdeb] transition-all duration-150"
-                                        style={{ width: `${((voiceProgress[message.id] ?? 0) * 100).toFixed(1)}%` }}
-                                      />
-                                    </div>
-                                    <div className="flex flex-shrink-0 gap-0.5">
-                                      {VOICE_WAVEFORM_BARS.map((h, i) => (
-                                        <div
-                                          key={i}
-                                          className="w-0.5 rounded-full bg-[#8696a0]"
-                                          style={{ height: `${(h / 100) * 12}px`, minHeight: 4 }}
-                                        />
-                                      ))}
-                                    </div>
+                                  <div
+                                    role="slider"
+                                    tabIndex={0}
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                    aria-valuenow={Math.round(progressPct)}
+                                    aria-label="Voice message progress"
+                                    className="relative h-2 min-w-[4rem] flex-1 cursor-pointer rounded-full bg-black/15 outline-none ring-offset-1 focus-visible:ring-2 focus-visible:ring-[#53bdeb]"
+                                    onClick={(e) =>
+                                      seekVoiceMessage(message.id, e, totalSec > 0 ? totalSec : undefined)
+                                    }
+                                    onKeyDown={(e) => {
+                                      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+                                      const audio = voiceAudioRef.current;
+                                      if (!audio || voiceMessageIdRef.current !== message.id) return;
+                                      e.preventDefault();
+                                      const step = (audio.duration || totalSec || 1) * 0.05;
+                                      audio.currentTime = Math.max(
+                                        0,
+                                        Math.min(
+                                          audio.duration || Infinity,
+                                          audio.currentTime + (e.key === 'ArrowRight' ? step : -step),
+                                        ),
+                                      );
+                                    }}
+                                  >
+                                    <div
+                                      className="pointer-events-none h-full rounded-full bg-[#53bdeb] transition-[width] duration-100 ease-linear"
+                                      style={{ width: `${progressPct.toFixed(2)}%` }}
+                                    />
+                                  </div>
+                                  <div className="flex flex-shrink-0 items-baseline gap-1 tabular-nums">
+                                    {showCurrentTime ? (
+                                      <>
+                                        <span className="text-xs font-medium text-[#111b21]">
+                                          {formatVoiceDuration(currentSec)}
+                                        </span>
+                                        <span className="text-xs text-[#8696a0]">/</span>
+                                      </>
+                                    ) : null}
+                                    <span className="text-xs text-[#667781]">
+                                      {formatVoiceDuration(totalSec)}
+                                    </span>
                                   </div>
                                 </div>
-                                <span className="flex-shrink-0 text-xs text-[#667781]">
-                                  {formatVoiceDuration(message.attachment.durationSeconds ?? 0)}
-                                </span>
-                              </div>
-                            )}
+                              );
+                            })()}
                           </div>
                         )}
                         {message.sendFailed && (
@@ -4259,6 +4364,72 @@ export function ChatWindow({
                       <span className="text-text-muted">Read by assigned agent · </span>
                       {st.read ? 'Yes' : '—'}
                     </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        if (isDmPage && isInternalChat && targetMessage) {
+          const peerName = (title && title.trim()) || 'Recipient';
+          const outgoingDmInfo = targetMessage.senderName === 'You';
+          const sentDm = targetMessage.sentAt ? new Date(targetMessage.sentAt) : null;
+          const sentOkDm = sentDm && !Number.isNaN(sentDm.getTime());
+          const deliveredDm = targetMessage.peerDeliveredAt
+            ? new Date(targetMessage.peerDeliveredAt)
+            : null;
+          const readDm = targetMessage.peerReadAt ? new Date(targetMessage.peerReadAt) : null;
+          const deliveredOk = deliveredDm && !Number.isNaN(deliveredDm.getTime());
+          const readOk = readDm && !Number.isNaN(readDm.getTime());
+          return (
+            <div
+              className="fixed inset-0 z-30 flex items-start justify-center bg-black/20 pt-20"
+              onClick={() => setMessageInfoId(null)}
+            >
+              <div
+                className="w-full max-w-sm overflow-hidden rounded-xl border border-border bg-white shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                  <span className="font-semibold text-text-primary">Message info</span>
+                  <button
+                    type="button"
+                    onClick={() => setMessageInfoId(null)}
+                    className="rounded-full p-1.5 text-text-muted hover:bg-panel"
+                    aria-label="Close"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div className="max-h-80 space-y-3 overflow-y-auto px-4 py-4 text-sm text-text-primary">
+                  <p>
+                    <span className="text-text-muted">Sender · </span>
+                    {targetMessage.senderName}
+                  </p>
+                  {sentOkDm && (
+                    <p>
+                      <span className="text-text-muted">Sent · </span>
+                      {formatReadAt(sentDm!)}
+                    </p>
+                  )}
+                  {targetMessage.editedAt && (
+                    <p>
+                      <span className="text-text-muted">Edited · </span>
+                      {formatReadAt(new Date(targetMessage.editedAt))}
+                    </p>
+                  )}
+                  {outgoingDmInfo && (
+                    <>
+                      <p>
+                        <span className="text-text-muted">Delivered to {peerName} · </span>
+                        {deliveredOk ? formatReadAt(deliveredDm!) : 'Pending'}
+                      </p>
+                      <p>
+                        <span className="text-text-muted">Read by {peerName} · </span>
+                        {readOk ? formatReadAt(readDm!) : '—'}
+                      </p>
+                    </>
                   )}
                 </div>
               </div>
