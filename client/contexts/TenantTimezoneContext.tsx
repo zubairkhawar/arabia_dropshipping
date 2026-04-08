@@ -15,6 +15,8 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   'https://arabia-dropshipping.onrender.com';
+const TZ_CACHE_KEY = 'tenant-display-timezone-v1';
+const DEFAULT_TENANT_ID = 1;
 
 type TenantTimezoneContextValue = {
   timeZone: string;
@@ -27,7 +29,15 @@ type TenantTimezoneContextValue = {
 const TenantTimezoneContext = createContext<TenantTimezoneContextValue | undefined>(undefined);
 
 export function TenantTimezoneProvider({ children }: { children: ReactNode }) {
-  const [timeZone, setTimeZoneState] = useState(DEFAULT_TENANT_TIMEZONE);
+  const [timeZone, setTimeZoneState] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_TENANT_TIMEZONE;
+    try {
+      const cached = localStorage.getItem(TZ_CACHE_KEY);
+      return normalizeIanaTimeZone(cached ?? DEFAULT_TENANT_TIMEZONE);
+    } catch {
+      return DEFAULT_TENANT_TIMEZONE;
+    }
+  });
   const [tenantId, setTenantIdState] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
@@ -54,21 +64,26 @@ export function TenantTimezoneProvider({ children }: { children: ReactNode }) {
       setTenantIdState(tid);
 
       let tzSource: string | undefined = me.tenant_display_timezone;
-      if (tid != null) {
-        const tzRes = await fetch(`${API_BASE}/api/tenants/${tid}/display-timezone`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (tzRes.ok) {
-          const body = (await tzRes.json()) as { display_timezone?: string };
-          if (typeof body.display_timezone === 'string' && body.display_timezone.trim()) {
-            tzSource = body.display_timezone.trim();
-          }
+      const tenantIdForTimezone = tid ?? DEFAULT_TENANT_ID;
+      const tzRes = await fetch(`${API_BASE}/api/tenants/${tenantIdForTimezone}/display-timezone`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (tzRes.ok) {
+        const body = (await tzRes.json()) as { display_timezone?: string };
+        if (typeof body.display_timezone === 'string' && body.display_timezone.trim()) {
+          tzSource = body.display_timezone.trim();
         }
       }
 
-      setTimeZoneState(normalizeIanaTimeZone(tzSource));
+      const normalized = normalizeIanaTimeZone(tzSource);
+      setTimeZoneState(normalized);
+      try {
+        localStorage.setItem(TZ_CACHE_KEY, normalized);
+      } catch {
+        // ignore cache write failure
+      }
     } catch {
-      // keep previous
+      // keep previous/cached value
     }
   }, []);
 
@@ -91,7 +106,15 @@ export function TenantTimezoneProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const setTimeZone = useCallback((tz: string) => {
-    setTimeZoneState(normalizeIanaTimeZone(tz));
+    const normalized = normalizeIanaTimeZone(tz);
+    setTimeZoneState(normalized);
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(TZ_CACHE_KEY, normalized);
+      }
+    } catch {
+      // ignore cache write failure
+    }
   }, []);
 
   const value = useMemo(
