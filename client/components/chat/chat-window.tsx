@@ -266,6 +266,7 @@ export function ChatWindow({
     getConversationBySlug,
     reportDmUnread,
     clearDmUnread,
+    getDmUnreadCount,
   } = useDmChats();
   const API_BASE =
     process.env.NEXT_PUBLIC_API_URL ||
@@ -293,23 +294,53 @@ export function ChatWindow({
   };
 
   const DM_MSG_PREFIX = '__DM_MSG_JSON__';
-  const encodeDmMessagePayload = (payload: { text: string; attachment?: MessageAttachment }) =>
-    `${DM_MSG_PREFIX}${JSON.stringify({ v: 1, text: payload.text, attachment: payload.attachment })}`;
-  const decodeDmMessageContent = (raw: string): { text: string; attachment?: MessageAttachment } => {
+  const encodeDmMessagePayload = (payload: {
+    text: string;
+    attachment?: MessageAttachment;
+    reactions?: MessageReaction[];
+  }) => {
+    const body: Record<string, unknown> = { v: 1, text: payload.text };
+    if (payload.attachment) body.attachment = payload.attachment;
+    if (payload.reactions && payload.reactions.length > 0) body.reactions = payload.reactions;
+    return `${DM_MSG_PREFIX}${JSON.stringify(body)}`;
+  };
+  const decodeDmMessageContent = (
+    raw: string,
+  ): { text: string; attachment?: MessageAttachment; reactions?: MessageReaction[] } => {
     if (!raw.startsWith(DM_MSG_PREFIX)) return { text: raw };
     try {
       const o = JSON.parse(raw.slice(DM_MSG_PREFIX.length)) as {
         v?: number;
         text?: string;
         attachment?: MessageAttachment;
+        reactions?: MessageReaction[];
       };
       if (o && typeof o.text === 'string') {
-        return { text: o.text, attachment: o.attachment };
+        const reactions = Array.isArray(o.reactions)
+          ? o.reactions.filter(
+              (r) => r && typeof r.emoji === 'string' && typeof (r as MessageReaction).userId === 'string',
+            )
+          : undefined;
+        return {
+          text: o.text,
+          attachment: o.attachment,
+          reactions: reactions && reactions.length > 0 ? (reactions as MessageReaction[]) : undefined,
+        };
       }
     } catch {
       // ignore
     }
     return { text: raw };
+  };
+  const encodeDmContentForPersist = (m: Message): string => {
+    const hasAttachment = Boolean(m.attachment);
+    const hasReactions = Boolean(m.reactions && m.reactions.length > 0);
+    if (!hasAttachment && !hasReactions) return m.content ?? '';
+    return encodeDmMessagePayload({
+      text: m.content ?? '',
+      attachment: m.attachment,
+      reactions: m.reactions,
+    });
   };
 
   async function blobUrlToDataUrl(blobUrl: string): Promise<string> {
@@ -491,6 +522,7 @@ export function ChatWindow({
               read: Boolean(m.peerReadAt),
             }
           : undefined,
+        reactions: parsed.reactions,
       };
     });
     setMessages(mapped);
@@ -573,8 +605,12 @@ export function ChatWindow({
   const teamUnreadDividerRef = useRef<HTMLDivElement | null>(null);
   const teamUnreadMarkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const teamUnreadMarkedIdRef = useRef(0);
+  const dmUnreadDividerRef = useRef<HTMLDivElement | null>(null);
+  const dmUnreadMarkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dmUnreadMarkedIdRef = useRef(0);
   const [teamNewBelowOpen, setTeamNewBelowOpen] = useState(false);
   const [dmNewBelowOpen, setDmNewBelowOpen] = useState(false);
+  const [dmLastReadMessageId, setDmLastReadMessageId] = useState(0);
   const [inboxNewBelowOpen, setInboxNewBelowOpen] = useState(false);
   const [copyToastVisible, setCopyToastVisible] = useState(false);
   const copyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -727,7 +763,11 @@ export function ChatWindow({
     broadcastMode && isTeamChannel ? 'admin-broadcast' : viewerAgentId ? `agent-${viewerAgentId}` : 'me';
   const reactionActorName =
     broadcastMode && isTeamChannel ? 'Admin' : agentFullName || getCurrentAgent()?.name || 'You';
-  const getReactionCacheKey = () => (teamId ? `${TEAM_REACTION_CACHE_PREFIX}${teamId}` : null);
+  const getReactionCacheKey = () => {
+    if (isTeamChannel && teamId) return `${TEAM_REACTION_CACHE_PREFIX}${teamId}`;
+    if (isDmPage && dmSlug) return `dm-reactions:v1:${dmSlug}`;
+    return null;
+  };
   const readReactionCache = (): Record<string, MessageReaction[]> => {
     if (typeof window === 'undefined') return {};
     const key = getReactionCacheKey();
@@ -1001,6 +1041,8 @@ export function ChatWindow({
 
   const teamReadFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const teamPendingReadMaxRef = useRef(0);
+  const dmReadFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dmPendingReadMaxRef = useRef(0);
 
   useEffect(() => {
     if (!isInternalChat || !isTeamChannel || !teamId) return;
@@ -1144,6 +1186,73 @@ export function ChatWindow({
   dmSendDeliveryAckRef.current = dmSendDeliveryAck;
 
   useEffect(() => {
+    if (!isDmPage || dmConversationId == null || dmConversationId < 1 || viewerAgentId < 1) {
+      setDmLastReadMessageId(0);
+      return;
+    }
+    let cancelled = false;
+    const url = new URL(`${API_BASE}/api/internal-dm/conversations/${dmConversationId}/read-state`);
+    url.searchParams.set('tenant_id', String(TENANT_ID));
+    void fetch(url.toString(), { headers: teamChannelJsonHeaders() })
+      .then((r) => (r.ok ? r.json() : Promise.resolve({ last_read_message_id: 0 })))
+      .then((j: { last_read_message_id?: number }) => {
+        if (cancelled) return;
+        const v =
+          typeof j.last_read_message_id === 'number' && j.last_read_message_id >= 0
+            ? j.last_read_message_id
+            : 0;
+        setDmLastReadMessageId(v);
+        dmUnreadMarkedIdRef.current = v;
+      })
+      .catch(() => {
+        if (!cancelled) setDmLastReadMessageId(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDmPage, dmConversationId, viewerAgentId, API_BASE, TENANT_ID]);
+
+  useEffect(() => {
+    if (
+      !isInternalChat ||
+      !isDmPage ||
+      !dmSlug ||
+      dmConversationId == null ||
+      dmConversationId < 1 ||
+      viewerAgentId < 1
+    )
+      return;
+    const ids = messages.map((m) => m.id);
+    if (ids.length === 0) return;
+    const maxId = Math.max(...ids);
+    dmPendingReadMaxRef.current = Math.max(dmPendingReadMaxRef.current, maxId);
+    if (dmReadFlushTimerRef.current) clearTimeout(dmReadFlushTimerRef.current);
+    dmReadFlushTimerRef.current = setTimeout(() => {
+      dmReadFlushTimerRef.current = null;
+      if (!dmNearBottomRef.current) return;
+      const v = dmPendingReadMaxRef.current;
+      if (v < 1) return;
+      void fetch(`${API_BASE}/api/internal-dm/conversations/${dmConversationId}/read-state`, {
+        method: 'POST',
+        headers: teamChannelJsonHeaders(),
+        body: JSON.stringify({
+          tenant_id: TENANT_ID,
+          agent_id: viewerAgentId,
+          last_read_message_id: v,
+        }),
+      })
+        .then(() => {
+          setDmLastReadMessageId((prev) => Math.max(prev, v));
+          dmUnreadMarkedIdRef.current = Math.max(dmUnreadMarkedIdRef.current, v);
+        })
+        .catch(() => undefined);
+    }, 700);
+    return () => {
+      if (dmReadFlushTimerRef.current) clearTimeout(dmReadFlushTimerRef.current);
+    };
+  }, [isInternalChat, isDmPage, dmSlug, dmConversationId, viewerAgentId, messages, API_BASE, TENANT_ID]);
+
+  useEffect(() => {
     if (!isDmPage) return;
     initialScrollThreadKeyDoneRef.current = '';
     setDmNewBelowOpen(false);
@@ -1195,6 +1304,27 @@ export function ChatWindow({
     }
   };
 
+  const persistDmMessagePayload = async (message: Message) => {
+    if (!isInternalChat || !isDmPage || !dmSlug) return;
+    const conv = getConversationBySlug(dmSlug);
+    if (!conv) return;
+    const content = encodeDmContentForPersist(message);
+    if (!content) return;
+    try {
+      await fetch(`${API_BASE}/api/internal-dm/messages/${message.id}`, {
+        method: 'PATCH',
+        headers: teamChannelJsonHeaders(),
+        body: JSON.stringify({
+          tenant_id: TENANT_ID,
+          conversation_id: Number(conv.id),
+          content,
+        }),
+      });
+    } catch {
+      // Keep optimistic UI even if persistence fails.
+    }
+  };
+
   const getMessageStyle = (message: Message, outgoing: boolean) => {
     if (outgoing) {
       return 'bg-[#d9fdd3] text-[#111b21] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]';
@@ -1225,6 +1355,13 @@ export function ChatWindow({
   const unreadTeamCount = teamUnreadMessages.length;
   const unreadTeamFirstMessageId = unreadTeamCount > 0 ? teamUnreadMessages[0].id : null;
 
+  const dmUnreadMessages =
+    isDmPage && viewerAgentId > 0
+      ? messages.filter((m) => m.id > dmLastReadMessageId && !isOutgoingMessage(m))
+      : [];
+  const unreadDmCount = dmUnreadMessages.length;
+  const unreadDmFirstMessageId = unreadDmCount > 0 ? dmUnreadMessages[0].id : null;
+
   const markTeamUnreadAsReadNow = useCallback(() => {
     if (!isTeamChannel || !teamId || readOnly || viewerAgentId < 1 || unreadTeamCount < 1) return;
     const maxId = Math.max(0, ...messages.map((m) => m.id));
@@ -1236,6 +1373,25 @@ export function ChatWindow({
       body: JSON.stringify({ tenant_id: TENANT_ID, last_read_message_id: maxId }),
     }).catch(() => undefined);
   }, [isTeamChannel, teamId, readOnly, viewerAgentId, unreadTeamCount, messages, API_BASE, TENANT_ID]);
+
+  const markDmUnreadAsReadNow = useCallback(() => {
+    if (!isDmPage || !dmSlug || readOnly || viewerAgentId < 1 || unreadDmCount < 1) return;
+    const conv = getConversationBySlug(dmSlug);
+    if (!conv) return;
+    const maxId = Math.max(0, ...messages.map((m) => m.id));
+    if (maxId < 1) return;
+    dmUnreadMarkedIdRef.current = Math.max(dmUnreadMarkedIdRef.current, maxId);
+    setDmLastReadMessageId(maxId);
+    void fetch(`${API_BASE}/api/internal-dm/conversations/${conv.id}/read-state`, {
+      method: 'POST',
+      headers: teamChannelJsonHeaders(),
+      body: JSON.stringify({
+        tenant_id: TENANT_ID,
+        agent_id: viewerAgentId,
+        last_read_message_id: maxId,
+      }),
+    }).catch(() => undefined);
+  }, [isDmPage, dmSlug, readOnly, viewerAgentId, unreadDmCount, messages, API_BASE, TENANT_ID, getConversationBySlug]);
 
   const addSystemNote = (content: string) => {
     const now = new Date();
@@ -1290,6 +1446,7 @@ export function ChatWindow({
     setMessages((prev) => prev.map((m) => (m.id === id ? updated : m)));
     writeReactionCache(id, updated.reactions);
     void persistTeamMessagePayload(updated);
+    void persistDmMessagePayload(updated);
     setActiveReactionPickerId(null);
     setActiveMessageMenuId(null);
   };
@@ -1556,6 +1713,43 @@ export function ChatWindow({
         teamUnreadMarkTimerRef.current = null;
       }
     }
+    if (
+      isDmPage &&
+      !readOnly &&
+      viewerAgentId > 0 &&
+      unreadDmCount > 0 &&
+      unreadDmFirstMessageId != null &&
+      dmUnreadDividerRef.current &&
+      dmConversationId != null
+    ) {
+      const dividerRect = dmUnreadDividerRef.current.getBoundingClientRect();
+      const containerRect = el.getBoundingClientRect();
+      const crossed = dividerRect.top <= containerRect.top + 84;
+      if (crossed) {
+        if (!dmUnreadMarkTimerRef.current) {
+          dmUnreadMarkTimerRef.current = setTimeout(() => {
+            dmUnreadMarkTimerRef.current = null;
+            if (dmConversationId == null) return;
+            const maxId = Math.max(0, ...messages.map((m) => m.id));
+            if (maxId < 1 || maxId <= dmUnreadMarkedIdRef.current) return;
+            dmUnreadMarkedIdRef.current = maxId;
+            setDmLastReadMessageId(maxId);
+            void fetch(`${API_BASE}/api/internal-dm/conversations/${dmConversationId}/read-state`, {
+              method: 'POST',
+              headers: teamChannelJsonHeaders(),
+              body: JSON.stringify({
+                tenant_id: TENANT_ID,
+                agent_id: viewerAgentId,
+                last_read_message_id: maxId,
+              }),
+            }).catch(() => undefined);
+          }, 1200);
+        }
+      } else if (dmUnreadMarkTimerRef.current) {
+        clearTimeout(dmUnreadMarkTimerRef.current);
+        dmUnreadMarkTimerRef.current = null;
+      }
+    }
     if (isDmPage && dmSlug && dmHasMoreOlder(dmSlug) && !loadingOlderDmSlug && scrollTop < 100) {
       void loadOlderDmMessages(dmSlug);
     }
@@ -1598,11 +1792,16 @@ export function ChatWindow({
     loadingOlderDmSlug,
     loadOlderDmMessages,
     clearDmUnread,
+    unreadDmCount,
+    unreadDmFirstMessageId,
+    dmConversationId,
   ]);
 
   useEffect(() => {
     return () => {
       if (teamUnreadMarkTimerRef.current) clearTimeout(teamUnreadMarkTimerRef.current);
+      if (dmUnreadMarkTimerRef.current) clearTimeout(dmUnreadMarkTimerRef.current);
+      if (dmReadFlushTimerRef.current) clearTimeout(dmReadFlushTimerRef.current);
     };
   }, []);
 
@@ -1866,6 +2065,8 @@ export function ChatWindow({
       const conv = getConversationBySlug(dmSlug);
       if (!conv) return;
       const { id } = threadMessageEdit;
+      const targetDm = messages.find((m) => m.id === id);
+      const contentOut = targetDm ? encodeDmContentForPersist({ ...targetDm, content: trimmed }) : trimmed;
       try {
         const res = await fetch(`${API_BASE}/api/internal-dm/messages/${id}`, {
           method: 'PATCH',
@@ -1873,7 +2074,7 @@ export function ChatWindow({
           body: JSON.stringify({
             tenant_id: TENANT_ID,
             conversation_id: Number(conv.id),
-            content: trimmed,
+            content: contentOut,
           }),
         });
         if (!res.ok) {
@@ -2513,8 +2714,13 @@ export function ChatWindow({
           <h3 className="font-medium text-text-primary">
             {headerTitle}
           </h3>
-          <p className="text-xs text-text-secondary">
-            {headerSubtitle}
+          <p className="text-xs text-text-secondary flex items-center gap-2 flex-wrap">
+            <span>{headerSubtitle}</span>
+            {isDmPage && dmSlug && getDmUnreadCount(dmSlug) > 0 ? (
+              <span className="inline-flex min-h-[1.25rem] min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                {getDmUnreadCount(dmSlug) > 99 ? '99+' : getDmUnreadCount(dmSlug)}
+              </span>
+            ) : null}
           </p>
         </div>
         <div className="relative flex items-center gap-2">
@@ -2943,6 +3149,20 @@ export function ChatWindow({
                           className="rounded-full border border-dashed border-[#c7ced6] bg-white/90 px-3 py-1 text-xs text-[#667781] shadow-sm hover:bg-white"
                         >
                           {unreadTeamCount} unread message{unreadTeamCount === 1 ? '' : 's'}
+                        </button>
+                      </div>
+                    )}
+                  {isDmPage &&
+                    unreadDmFirstMessageId != null &&
+                    unreadDmCount > 0 &&
+                    message.id === unreadDmFirstMessageId && (
+                      <div ref={dmUnreadDividerRef} className="flex justify-center py-2">
+                        <button
+                          type="button"
+                          onClick={markDmUnreadAsReadNow}
+                          className="rounded-full border border-dashed border-[#c7ced6] bg-white/90 px-3 py-1 text-xs text-[#667781] shadow-sm hover:bg-white"
+                        >
+                          {unreadDmCount} unread message{unreadDmCount === 1 ? '' : 's'}
                         </button>
                       </div>
                     )}
@@ -3583,6 +3803,23 @@ export function ChatWindow({
                 dmNearBottomRef.current = true;
                 inboxNearBottomRef.current = true;
                 if (isDmPage && dmSlug) clearDmUnread(dmSlug);
+                if (isDmPage && dmConversationId != null && viewerAgentId > 0) {
+                  const ids = messages.map((m) => m.id);
+                  if (ids.length > 0) {
+                    const v = Math.max(...ids);
+                    dmUnreadMarkedIdRef.current = Math.max(dmUnreadMarkedIdRef.current, v);
+                    setDmLastReadMessageId(v);
+                    void fetch(`${API_BASE}/api/internal-dm/conversations/${dmConversationId}/read-state`, {
+                      method: 'POST',
+                      headers: teamChannelJsonHeaders(),
+                      body: JSON.stringify({
+                        tenant_id: TENANT_ID,
+                        agent_id: viewerAgentId,
+                        last_read_message_id: v,
+                      }),
+                    }).catch(() => undefined);
+                  }
+                }
                 if (isTeamChannel && teamId && !readOnly && viewerAgentId) {
                   const ids = messages.map((m) => m.id);
                   if (ids.length > 0) {

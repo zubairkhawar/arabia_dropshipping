@@ -31,6 +31,35 @@ from services.media_storage.r2 import delete_object, enrich_metadata_for_api
 
 router = APIRouter()
 
+DM_MSG_PREFIX = "__DM_MSG_JSON__"
+
+
+def _decode_dm_msg_payload(raw: str) -> Dict[str, Any]:
+    if isinstance(raw, str) and raw.startswith(DM_MSG_PREFIX):
+        try:
+            obj = json.loads(raw[len(DM_MSG_PREFIX) :])
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    if isinstance(raw, str):
+        return {"text": raw}
+    return {"text": str(raw)}
+
+
+def _dm_base_identity(raw: str) -> str:
+    """Stable comparison of DM message body excluding reactions (and wrapper version)."""
+    o = dict(_decode_dm_msg_payload(raw))
+    o.pop("reactions", None)
+    o.pop("v", None)
+    text = o.get("text", "")
+    if not isinstance(text, str):
+        text = str(text)
+    base: Dict[str, Any] = {"text": text}
+    if "attachment" in o:
+        base["attachment"] = o["attachment"]
+    return json.dumps(base, sort_keys=True, default=str)
+
 
 class DmPeerOut(BaseModel):
     agent_id: int
@@ -454,13 +483,16 @@ async def patch_dm_message(
         raise HTTPException(status_code=404, detail="Message not found")
     if row.deleted_for_everyone_at:
         raise HTTPException(status_code=400, detail="Message was deleted")
-    if row.sender_agent_id != ag.id:
-        raise HTTPException(status_code=403, detail="Cannot edit this message")
-    new_text = (payload.content or "").strip()
-    if not new_text:
+    new_content = (payload.content or "").strip()
+    if not new_content:
         raise HTTPException(status_code=400, detail="Message content is required")
-    row.content = new_text
-    row.edited_at = datetime.utcnow()
+    is_sender = row.sender_agent_id == ag.id
+    if not is_sender:
+        if _dm_base_identity(row.content or "") != _dm_base_identity(new_content):
+            raise HTTPException(status_code=403, detail="Cannot edit this message")
+    row.content = new_content
+    if is_sender:
+        row.edited_at = datetime.utcnow()
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -471,6 +503,43 @@ async def patch_dm_message(
         {"type": "DM_MESSAGE_UPDATED", "message": out.model_dump(mode="json")},
     )
     return out
+
+
+@router.get("/conversations/{conversation_id}/read-state")
+async def get_dm_read_state(
+    conversation_id: int,
+    tenant_id: int = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+    ag = (
+        db.query(Agent)
+        .filter(Agent.user_id == current_user.id, Agent.tenant_id == tenant_id)
+        .first()
+    )
+    if not ag:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    conversation = (
+        db.query(InternalDmConversation)
+        .filter(InternalDmConversation.id == conversation_id, InternalDmConversation.tenant_id == tenant_id)
+        .first()
+    )
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if ag.id not in (conversation.agent_one_id, conversation.agent_two_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    row = (
+        db.query(InternalDmMemberReadState)
+        .filter(
+            InternalDmMemberReadState.tenant_id == tenant_id,
+            InternalDmMemberReadState.conversation_id == conversation_id,
+            InternalDmMemberReadState.agent_id == ag.id,
+        )
+        .first()
+    )
+    return {"last_read_message_id": int(row.last_read_message_id) if row else 0}
 
 
 @router.delete("/messages/{message_id}/for-me", status_code=status.HTTP_204_NO_CONTENT)
