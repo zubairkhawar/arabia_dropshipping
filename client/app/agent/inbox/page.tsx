@@ -3,6 +3,7 @@
 import { ChatList } from '@/components/chat/chat-list';
 import { ChatWindow } from '@/components/chat/chat-window';
 import { ContextPanel } from '@/components/chat/context-panel';
+import { InboxAgentPresenceStack } from '@/components/inbox/inbox-agent-presence';
 import { InboxPanelsProvider, useInboxPanels } from '@/contexts/InboxPanelsContext';
 import { InboxConversationsProvider } from '@/contexts/InboxConversationsContext';
 import { PanelRightOpen, SquareChevronRight, Search } from 'lucide-react';
@@ -12,28 +13,37 @@ function AgentInboxContent() {
 
   return (
     <div className="flex h-full">
-      {/* Left panel: conversation list or collapsed strip */}
+      {/* Left: one panel — agent avatars + chat list OR collapsed controls (single border) */}
       {chatListCollapsed ? (
-        <div className="hidden md:flex w-14 shrink-0 flex-col items-center gap-1 border-r border-border bg-panel py-4">
+        <div className="relative isolate hidden md:flex w-9 shrink-0 flex-col items-center gap-2 overflow-visible bg-panel px-0.5 py-3 after:pointer-events-none after:absolute after:inset-y-0 after:right-[16px] after:z-20 after:w-px after:bg-border">
+          <div className="flex flex-col items-center gap-1.5">
+            <InboxAgentPresenceStack />
+          </div>
+          <div className="h-px w-7 shrink-0 bg-border/60" aria-hidden />
           <button
             type="button"
             onClick={() => setChatListCollapsed(false)}
-            className="rounded p-2.5 text-text-secondary hover:bg-white hover:text-primary transition-colors"
+            className="rounded p-2 text-text-secondary hover:bg-white hover:text-primary transition-colors"
             title="Expand conversations"
           >
             <SquareChevronRight className="h-5 w-5" />
           </button>
           <button
             type="button"
-            className="rounded p-2.5 text-text-secondary hover:bg-white hover:text-primary transition-colors"
+            className="rounded p-2 text-text-secondary hover:bg-white hover:text-primary transition-colors"
             title="Search"
           >
             <Search className="h-5 w-5" />
           </button>
         </div>
       ) : (
-        <div className="hidden md:block w-chatlist-tablet lg:w-chatlist-laptop xl:w-chatlist-desktop 2xl:w-chatlist-ultrawide border-r border-border bg-panel shrink-0">
-          <ChatList />
+        <div className="hidden md:flex min-w-0 shrink-0 border-r border-border bg-panel">
+          <div className="flex w-[12px] shrink-0 flex-col items-center gap-1.5 overflow-x-visible py-3 px-0">
+            <InboxAgentPresenceStack />
+          </div>
+          <div className="min-w-0 w-chatlist-tablet lg:w-chatlist-laptop xl:w-chatlist-desktop 2xl:w-chatlist-ultrawide">
+            <ChatList />
+          </div>
         </div>
       )}
 
