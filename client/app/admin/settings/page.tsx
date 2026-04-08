@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Clock, Download, Globe, Volume2, Users } from 'lucide-react';
+import { Clock, Download, Volume2, Users } from 'lucide-react';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
-import { TIMEZONE_GROUPS } from '@/lib/timezone-options';
 import { useToast } from '@/contexts/ToastContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { getDayAttendance } from '@/components/agents/activity-bar';
@@ -47,7 +46,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "https://arabia-dropshipping
 
 export default function AdminSettings() {
   const { schedule, setSchedule } = useOnlineSchedule();
-  const { timeZone, setTimeZone, refresh: refreshTenantTimezone, tenantId } = useTenantTimezone();
+  const { timeZone, tenantId } = useTenantTimezone();
   const { enabled: soundAlertsEnabled, setEnabled: setSoundAlertsEnabled } = useSoundAlerts();
   const { toast } = useToast();
   const { agents, refreshAgents } = useAgents();
@@ -74,7 +73,6 @@ export default function AdminSettings() {
   const [deliveryNotifyAgents, setDeliveryNotifyAgents] = useState(true);
   const [deliveryNotifyCustomersWhatsapp, setDeliveryNotifyCustomersWhatsapp] = useState(false);
   const [scheduleDraft, setScheduleDraft] = useState<OnlineSchedule>(schedule);
-  const [displayTimezoneDraft, setDisplayTimezoneDraft] = useState(timeZone);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [maxConcurrentDraft, setMaxConcurrentDraft] = useState(5);
   const [agentMgmtLoading, setAgentMgmtLoading] = useState(false);
@@ -85,10 +83,6 @@ export default function AdminSettings() {
   useEffect(() => {
     setScheduleDraft(schedule);
   }, [schedule]);
-
-  useEffect(() => {
-    setDisplayTimezoneDraft(timeZone);
-  }, [timeZone]);
 
   useEffect(() => {
     let cancelled = false;
@@ -395,25 +389,6 @@ export default function AdminSettings() {
     }
     setSettingsSaving(true);
     try {
-      const tzRes = await fetch(`${API_BASE}/api/tenants/${effectiveTenantId}/display-timezone`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ display_timezone: displayTimezoneDraft }),
-      });
-      if (!tzRes.ok) {
-        const err = await tzRes.json().catch(() => ({}));
-        const msg =
-          typeof err.detail === 'string'
-            ? err.detail
-            : Array.isArray(err.detail)
-              ? err.detail[0]?.msg
-              : 'Failed to save timezone';
-        throw new Error(msg || 'Failed to save timezone');
-      }
-
       const schedRes = await fetch(`${API_BASE}/api/tenants/${effectiveTenantId}/schedule`, {
         method: 'PUT',
         headers: {
@@ -452,8 +427,6 @@ export default function AdminSettings() {
         setMaxConcurrentDraft(amData.max_concurrent_chats_per_agent);
       }
 
-      setTimeZone(displayTimezoneDraft);
-      await refreshTenantTimezone();
       setSchedule(scheduleDraft);
       await refreshAgents();
       toast('Changes saved successfully');
@@ -560,40 +533,6 @@ export default function AdminSettings() {
                   onChange={(e) => setMaxConcurrentDraft(parseInt(e.target.value, 10) || 1)}
                   className="w-32 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                 />
-              </div>
-            </div>
-          </div>
-
-          <div className="border-t border-border pt-6">
-            <h3 className="font-semibold text-text-primary mb-2 flex items-center gap-2">
-              <Globe className="w-4 h-4" />
-              Display timezone
-            </h3>
-            <p className="text-xs text-text-secondary mb-4">
-              All agents and admins see message times, conversation lists, notifications, and attendance labels in
-              this timezone. Data stays stored in UTC; only display changes when you update this.
-            </p>
-            <div className="space-y-3 max-w-xl">
-              <div>
-                <label htmlFor="tenant-timezone" className="block text-xs font-medium text-text-primary mb-1">
-                  Timezone
-                </label>
-                <select
-                  id="tenant-timezone"
-                  value={displayTimezoneDraft}
-                  onChange={(e) => setDisplayTimezoneDraft(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  {TIMEZONE_GROUPS.map((g) => (
-                    <optgroup key={g.region} label={g.region}>
-                      {g.zones.map((z) => (
-                        <option key={z.id} value={z.id}>
-                          {z.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
               </div>
             </div>
           </div>

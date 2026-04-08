@@ -1,6 +1,6 @@
 /** Tenant wall-clock formatting: DB timestamps are UTC; interpret with IANA `timeZone`. */
 
-export const DEFAULT_TENANT_TIMEZONE = 'UTC';
+export const DEFAULT_TENANT_TIMEZONE = 'Asia/Karachi';
 
 export function normalizeIanaTimeZone(tz: string | null | undefined): string {
   const raw = (tz ?? DEFAULT_TENANT_TIMEZONE).trim() || DEFAULT_TENANT_TIMEZONE;
