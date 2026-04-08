@@ -444,18 +444,17 @@ async def add_member(
         created_at=datetime.utcnow(),
     )
     db.add(membership)
-    db.add(
-        Notification(
-            tenant_id=payload.tenant_id,
-            agent_id=payload.agent_id,
-            type="team_assigned",
-            message=f"You have been assigned to team {team.name}",
-            description="You can now receive conversations routed to this team.",
-            from_agent_id=None,
-            conversation_id=None,
-            read=False,
-        )
+    team_notif = Notification(
+        tenant_id=payload.tenant_id,
+        agent_id=payload.agent_id,
+        type="team_assigned",
+        message=f"You have been assigned to team {team.name}",
+        description="You can now receive conversations routed to this team.",
+        from_agent_id=None,
+        conversation_id=None,
+        read=False,
     )
+    db.add(team_notif)
     db.add(
         TeamEvent(
             tenant_id=payload.tenant_id,
@@ -467,6 +466,22 @@ async def add_member(
         )
     )
     db.commit()
+    db.refresh(team_notif)
+    from services.agent_portal_service.broadcast import push_notification_event
+    from services.agent_portal_service.unread_compute import build_unread_summary_dict
+
+    notif_dict = {
+        "id": team_notif.id,
+        "type": team_notif.type,
+        "message": team_notif.message,
+        "description": team_notif.description,
+        "from_agent_id": team_notif.from_agent_id,
+        "conversation_id": team_notif.conversation_id,
+        "created_at": team_notif.created_at,
+        "read": team_notif.read,
+    }
+    summary = build_unread_summary_dict(db, payload.tenant_id, payload.agent_id)
+    await push_notification_event(payload.tenant_id, payload.agent_id, notif_dict, summary)
     return
 
 
@@ -499,22 +514,21 @@ async def remove_member(
     )
 
     db.delete(membership)
-    db.add(
-        Notification(
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            type="team_removed",
-            message=(
-                f"You have been removed from team {team.name}"
-                if team
-                else "You have been removed from your team"
-            ),
-            description="Team-based routing for this team is no longer applied to your account.",
-            from_agent_id=None,
-            conversation_id=None,
-            read=False,
-        )
+    rem_notif = Notification(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        type="team_removed",
+        message=(
+            f"You have been removed from team {team.name}"
+            if team
+            else "You have been removed from your team"
+        ),
+        description="Team-based routing for this team is no longer applied to your account.",
+        from_agent_id=None,
+        conversation_id=None,
+        read=False,
     )
+    db.add(rem_notif)
     db.add(
         TeamEvent(
             tenant_id=tenant_id,
@@ -526,6 +540,22 @@ async def remove_member(
         )
     )
     db.commit()
+    db.refresh(rem_notif)
+    from services.agent_portal_service.broadcast import push_notification_event
+    from services.agent_portal_service.unread_compute import build_unread_summary_dict
+
+    notif_dict = {
+        "id": rem_notif.id,
+        "type": rem_notif.type,
+        "message": rem_notif.message,
+        "description": rem_notif.description,
+        "from_agent_id": rem_notif.from_agent_id,
+        "conversation_id": rem_notif.conversation_id,
+        "created_at": rem_notif.created_at,
+        "read": rem_notif.read,
+    }
+    summary = build_unread_summary_dict(db, tenant_id, agent_id)
+    await push_notification_event(tenant_id, agent_id, notif_dict, summary)
     return
 
 
@@ -565,22 +595,26 @@ async def transfer_member(payload: TeamTransfer, db: Session = Depends(get_db)):
         created_at=datetime.utcnow(),
     )
     db.add(membership)
-    db.add(
-        Notification(
-            tenant_id=payload.tenant_id,
-            agent_id=payload.agent_id,
-            type="team_changed",
-            message=(
-                f"Your team assignment changed from {from_team_name} to {to_team_name}"
-                if from_team_name
-                else f"Your team assignment changed to {to_team_name}"
-            ),
-            description="Future team-routed conversations will follow your new team.",
-            from_agent_id=None,
-            conversation_id=None,
-            read=False,
-        )
+    xfer_desc = (
+        f"You were previously on team {from_team_name}."
+        if from_team_name
+        else "You can now receive conversations routed to this team."
     )
+    xfer_notif = Notification(
+        tenant_id=payload.tenant_id,
+        agent_id=payload.agent_id,
+        type="team_changed",
+        message=(
+            f"You have been transferred to team {to_team_name}"
+            if from_team_name
+            else f"You have been assigned to team {to_team_name}"
+        ),
+        description=xfer_desc,
+        from_agent_id=None,
+        conversation_id=None,
+        read=False,
+    )
+    db.add(xfer_notif)
     db.add(
         TeamEvent(
             tenant_id=payload.tenant_id,
@@ -592,6 +626,22 @@ async def transfer_member(payload: TeamTransfer, db: Session = Depends(get_db)):
         )
     )
     db.commit()
+    db.refresh(xfer_notif)
+    from services.agent_portal_service.broadcast import push_notification_event
+    from services.agent_portal_service.unread_compute import build_unread_summary_dict
+
+    notif_dict = {
+        "id": xfer_notif.id,
+        "type": xfer_notif.type,
+        "message": xfer_notif.message,
+        "description": xfer_notif.description,
+        "from_agent_id": xfer_notif.from_agent_id,
+        "conversation_id": xfer_notif.conversation_id,
+        "created_at": xfer_notif.created_at,
+        "read": xfer_notif.read,
+    }
+    summary = build_unread_summary_dict(db, payload.tenant_id, payload.agent_id)
+    await push_notification_event(payload.tenant_id, payload.agent_id, notif_dict, summary)
     return {"status": "ok"}
 
 

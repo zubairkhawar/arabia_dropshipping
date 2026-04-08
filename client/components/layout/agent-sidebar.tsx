@@ -35,7 +35,7 @@ const sections: SidebarSection[] = [
 ];
 
 const footerItems: SidebarLink[] = [
-  { icon: Bell, label: 'Notifications', path: '/agent/settings' },
+  { icon: Bell, label: 'Notifications', path: '/agent/notifications' },
 ];
 
 function portalUnreadForPath(path: string, unread: { inbox: number; team_channel: number; dm: number }): number {

@@ -17,6 +17,7 @@ from services.customer_bot_flow import (
     process_customer_bot_message,
     public_templates_payload,
 )
+from services.agent_portal_service.broadcast import notify_bot_handoff_assigned
 from services.agent_routing_service.api import assign_from_bot_flow
 
 router = APIRouter()
@@ -188,7 +189,7 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
 
     if conversation and flow.assign_team:
         kind = (flow.merge_metadata.get("bot_flow") or {}).get("customer_kind")
-        assign_from_bot_flow(
+        assign_result = assign_from_bot_flow(
             db,
             tenant_id=message.tenant_id,
             conversation_id=conversation.id,
@@ -198,6 +199,15 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             is_existing_customer=(kind == "existing"),
         )
         db.refresh(conversation)
+        if assign_result.agent_id is not None and assign_result.reason != "conversation_already_assigned":
+            await notify_bot_handoff_assigned(
+                db,
+                message.tenant_id,
+                assign_result.agent_id,
+                conversation.id,
+                conversation.customer_id,
+                conversation.store_id,
+            )
 
     if conversation:
         db.add(

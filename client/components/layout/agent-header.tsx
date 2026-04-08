@@ -9,6 +9,7 @@ import { useAgents } from '@/contexts/AgentsContext';
 import { useAgentPresence, getSlugByName } from '@/contexts/AgentPresenceContext';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useNotifications } from '@/contexts/NotificationsContext';
+import type { AgentNotification } from '@/contexts/NotificationsContext';
 import { useToast } from '@/contexts/ToastContext';
 import { usePathname, useRouter } from 'next/navigation';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
@@ -23,6 +24,43 @@ const statusConfig: Record<AgentStatus, { label: string; dotClass: string }> = {
 
 interface AgentHeaderProps {
   userName?: string;
+}
+
+export function NotificationDescriptionLine({
+  n,
+}: {
+  n: Pick<AgentNotification, 'type' | 'description' | 'fromAgentName'>;
+}) {
+  if (!n.description) return null;
+  if (n.type === 'mention') {
+    const parts = n.description.split(/(@[\w.-]+)/g);
+    return (
+      <p className="text-xs text-text-muted mt-0.5">
+        {parts.map((part, i) =>
+          part.startsWith('@') ? (
+            <span key={i} className="font-semibold text-primary bg-primary/10 px-0.5 rounded">
+              {part}
+            </span>
+          ) : (
+            <span key={i}>{part}</span>
+          ),
+        )}
+      </p>
+    );
+  }
+  if (n.type === 'chat_transfer' && n.fromAgentName) {
+    return (
+      <p className="text-xs text-text-muted mt-0.5">
+        <span className="font-medium text-text-primary">Note from {n.fromAgentName}:</span> {n.description}
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-text-muted mt-0.5">
+      {n.type === 'chat_transfer' && <span className="font-medium text-text-primary">Note: </span>}
+      {n.description}
+    </p>
+  );
 }
 
 export function AgentHeader({ userName }: AgentHeaderProps) {
@@ -301,14 +339,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                         className={`p-4 border-b border-border hover:bg-panel cursor-pointer ${!n.read ? 'bg-primary/5' : ''}`}
                       >
                         <p className="text-sm text-text-primary">{n.message}</p>
-                        {n.type === 'chat_transfer' && n.description && n.fromAgentName ? (
-                          <p className="text-xs text-text-muted mt-0.5">
-                            <span className="font-medium text-text-primary">Note from {n.fromAgentName}:</span>{' '}
-                            {n.description}
-                          </p>
-                        ) : (
-                          n.description && <p className="text-xs text-text-muted mt-0.5">{n.description}</p>
-                        )}
+                        <NotificationDescriptionLine n={n} />
                         <p className="text-xs text-text-muted mt-1">{formatNotifTime(n.createdAt)}</p>
                       </div>
                     ))
@@ -316,7 +347,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                 </div>
                 <div className="p-2 border-t border-border shrink-0">
                   <Link
-                    href="/agent/settings"
+                    href="/agent/notifications"
                     onClick={() => setShowNotifications(false)}
                     className="block w-full text-center py-2 text-sm font-medium text-primary hover:underline rounded-lg hover:bg-panel"
                   >

@@ -2,7 +2,6 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
-import { useNotifications } from '@/contexts/NotificationsContext';
 import { readAuthAgentId, readLastDmPrefs, writeLastDmPrefs } from '@/lib/agent-session-storage';
 
 const API_BASE =
@@ -134,7 +133,6 @@ const DmChatsContext = createContext<DmChatsContextType | undefined>(undefined);
 
 export function DmChatsProvider({ children }: { children: ReactNode }) {
   const { getCurrentAgent } = useAgents();
-  const notifications = useNotifications();
   const currentAgentId = getCurrentAgent()?.id ?? readAuthAgentId();
   const [conversations, setConversations] = useState<DmConversation[]>([]);
   const [messagesBySlug, setMessagesBySlug] = useState<Record<string, DmMessage[]>>({});
@@ -524,22 +522,11 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
             .map((c) => (c.slug === slug ? { ...c, lastMessageAt: row.created_at } : c))
             .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()),
         );
-        const meName = getCurrentAgent()?.name || 'Agent';
-        const peer = conversations.find((c) => c.slug === slug);
-        if (peer?.peerAgentId) {
-          notifications.addNotification({
-            type: 'personal_message',
-            message: `${meName} sent you a direct message`,
-            description: row.content,
-            fromAgentId: currentAgentId,
-            toAgentId: peer.peerAgentId,
-          });
-        }
       } catch {
         // ignore
       }
     },
-    [conversations, currentAgentId, getCurrentAgent, notifications],
+    [conversations, currentAgentId, getCurrentAgent],
   );
 
   const patchDmMessage = useCallback((slug: string, messageId: number, patch: Partial<DmMessage>) => {

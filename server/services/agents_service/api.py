@@ -204,20 +204,36 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
             f"You are currently assigned to {default_team_name}. "
             "You can switch your availability from Offline to Active when your shift starts."
         )
-    db.add(
-        Notification(
-            tenant_id=payload.tenant_id,
-            agent_id=agent.id,
-            type="system_welcome",
-            message="Welcome to Arabia Dropship Agent Panel",
-            description=welcome_description,
-            from_agent_id=None,
-            conversation_id=None,
-            read=False,
-        )
+    welcome_notif = Notification(
+        tenant_id=payload.tenant_id,
+        agent_id=agent.id,
+        type="system_welcome",
+        message="Welcome to Arabia Dropship Agent Panel",
+        description=welcome_description,
+        from_agent_id=None,
+        conversation_id=None,
+        read=False,
     )
+    db.add(welcome_notif)
     db.commit()
     db.refresh(agent)
+    db.refresh(welcome_notif)
+
+    from services.agent_portal_service.broadcast import push_notification_event
+    from services.agent_portal_service.unread_compute import build_unread_summary_dict
+
+    notif_dict = {
+        "id": welcome_notif.id,
+        "type": welcome_notif.type,
+        "message": welcome_notif.message,
+        "description": welcome_notif.description,
+        "from_agent_id": welcome_notif.from_agent_id,
+        "conversation_id": welcome_notif.conversation_id,
+        "created_at": welcome_notif.created_at,
+        "read": welcome_notif.read,
+    }
+    summary = build_unread_summary_dict(db, payload.tenant_id, agent.id)
+    await push_notification_event(payload.tenant_id, agent.id, notif_dict, summary)
 
     return AgentOut(
         id=agent.id,

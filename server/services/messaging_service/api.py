@@ -27,6 +27,7 @@ from services.customer_bot_flow import format_kb_reply, process_customer_bot_mes
 from services.agent_routing_service.api import assign_from_bot_flow
 from services.agent_portal_service.unread_compute import _inbox_unread_for_conversation
 from services.agent_portal_service.broadcast import (
+    notify_bot_handoff_assigned,
     push_inbox_message,
     push_inbox_sync_event,
     push_unread_summary,
@@ -1088,7 +1089,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
 
     if flow.assign_team:
         kind = (flow.merge_metadata.get("bot_flow") or {}).get("customer_kind")
-        assign_from_bot_flow(
+        assign_result = assign_from_bot_flow(
             db,
             tenant_id=tenant_id,
             conversation_id=conversation.id,
@@ -1098,6 +1099,15 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             is_existing_customer=(kind == "existing"),
         )
         db.refresh(conversation)
+        if assign_result.agent_id is not None and assign_result.reason != "conversation_already_assigned":
+            await notify_bot_handoff_assigned(
+                db,
+                tenant_id,
+                assign_result.agent_id,
+                conversation.id,
+                customer.id,
+                store.id,
+            )
 
     customer_msg = Message(
         conversation_id=conversation.id,

@@ -90,7 +90,7 @@ export default function AdminSettings() {
   const [endsAt, setEndsAt] = useState('');
   const [message, setMessage] = useState('');
   const [targetAi, setTargetAi] = useState(true);
-  const [deliveryNotifyAgents, setDeliveryNotifyAgents] = useState(false);
+  const [deliveryNotifyAgents, setDeliveryNotifyAgents] = useState(true);
   const [deliveryNotifyCustomersWhatsapp, setDeliveryNotifyCustomersWhatsapp] = useState(false);
   const [scheduleDraft, setScheduleDraft] = useState<OnlineSchedule>(schedule);
   const [scheduleSaving, setScheduleSaving] = useState(false);

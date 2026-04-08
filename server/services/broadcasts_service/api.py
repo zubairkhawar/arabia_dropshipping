@@ -128,20 +128,38 @@ async def create_broadcast(
         desc = (payload.message or "").strip()
         if len(desc) > 4000:
             desc = desc[:3997] + "..."
+        pending_notifs: List[Notification] = []
         for ag in agents:
-            db.add(
-                Notification(
-                    tenant_id=payload.tenant_id,
-                    agent_id=ag.id,
-                    type="system",
-                    message=f"Broadcast: {msg_line}"[:500],
-                    description=desc or None,
-                    from_agent_id=None,
-                    conversation_id=None,
-                    read=False,
-                )
+            n = Notification(
+                tenant_id=payload.tenant_id,
+                agent_id=ag.id,
+                type="broadcast",
+                message=f"Broadcast: {msg_line}"[:500],
+                description=desc or None,
+                from_agent_id=None,
+                conversation_id=None,
+                read=False,
             )
+            db.add(n)
+            pending_notifs.append(n)
         db.commit()
+        from services.agent_portal_service.broadcast import push_notification_event
+        from services.agent_portal_service.unread_compute import build_unread_summary_dict
+
+        for n in pending_notifs:
+            db.refresh(n)
+            notif_dict = {
+                "id": n.id,
+                "type": n.type,
+                "message": n.message,
+                "description": n.description,
+                "from_agent_id": n.from_agent_id,
+                "conversation_id": n.conversation_id,
+                "created_at": n.created_at,
+                "read": n.read,
+            }
+            summary = build_unread_summary_dict(db, payload.tenant_id, n.agent_id)
+            await push_notification_event(payload.tenant_id, n.agent_id, notif_dict, summary)
 
     if payload.delivery_notify_customers_whatsapp:
         rows = (

@@ -20,7 +20,13 @@ export type NotificationType =
   | 'new_message'
   | 'assignment'
   | 'mention'
-  | 'system';
+  | 'system'
+  | 'team_assigned'
+  | 'team_removed'
+  | 'team_changed'
+  | 'system_welcome'
+  | 'bot_new_chat'
+  | 'broadcast';
 
 export interface AgentNotification {
   id: string;
@@ -80,6 +86,12 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       'assignment',
       'mention',
       'system',
+      'team_assigned',
+      'team_removed',
+      'team_changed',
+      'system_welcome',
+      'bot_new_chat',
+      'broadcast',
     ].includes(rawType)
       ? rawType
       : 'system';

@@ -3243,7 +3243,7 @@ export function ChatWindow({
                       inboxConv.transferConversation(convId, transferTargetId, transferTargetName);
                       notifications.addNotification({
                         type: 'chat_transfer',
-                        message: `Chat transferred to you by ${agentFullName}`,
+                        message: `You were transferred a chat by ${agentFullName}`,
                         description: transferDescription.trim() || undefined,
                         fromAgentId: getCurrentAgent()?.id,
                         fromAgentName: agentFullName,

@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from models import TeamMembership
+from models import Customer, Notification, Store, TeamMembership
 from services.agent_portal_service.hub import hub
 from services.agent_portal_service.unread_compute import build_unread_summary_dict
 
@@ -42,6 +42,60 @@ async def push_inbox_message(
             **summary,
         },
     )
+
+
+async def notify_bot_handoff_assigned(
+    db: Session,
+    tenant_id: int,
+    agent_id: int,
+    conversation_id: int,
+    customer_id: int,
+    store_id: int,
+) -> None:
+    """
+    Persist and push when a conversation is first assigned to an agent after bot handoff.
+    """
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id, Customer.tenant_id == tenant_id)
+        .first()
+    )
+    store = db.query(Store).filter(Store.id == store_id, Store.tenant_id == tenant_id).first()
+    base = (store.name or "").strip() if store else ""
+    if base.lower().endswith("bot"):
+        bot_display = base
+    elif base:
+        bot_display = f"{base} bot"
+    else:
+        bot_display = "Arabia Bot"
+    cust_label = "Customer"
+    if customer:
+        cust_label = (customer.name or customer.phone or "").strip() or "Customer"
+    n = Notification(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        type="bot_new_chat",
+        message=f"You have a new chat from {bot_display}",
+        description=f"Customer: {cust_label}",
+        from_agent_id=None,
+        conversation_id=conversation_id,
+        read=False,
+    )
+    db.add(n)
+    db.commit()
+    db.refresh(n)
+    notif_dict = {
+        "id": n.id,
+        "type": n.type,
+        "message": n.message,
+        "description": n.description,
+        "from_agent_id": n.from_agent_id,
+        "conversation_id": n.conversation_id,
+        "created_at": n.created_at,
+        "read": n.read,
+    }
+    summary = build_unread_summary_dict(db, tenant_id, agent_id)
+    await push_notification_event(tenant_id, agent_id, notif_dict, summary)
 
 
 async def push_notification_event(
