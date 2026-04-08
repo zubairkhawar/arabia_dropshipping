@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
 import { readAuthAgentId, readLastDmPrefs, writeLastDmPrefs } from '@/lib/agent-session-storage';
 
@@ -9,6 +9,7 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   'https://arabia-dropshipping.onrender.com';
 const TENANT_ID = 1;
+const DM_CONVERSATIONS_REFRESH_MS = 10_000;
 
 function dmAuthHeaders(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -141,6 +142,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
   const [isDmListLoading, setIsDmListLoading] = useState(true);
   const [loadingDmSlug, setLoadingDmSlug] = useState<string | null>(null);
   const [loadingOlderDmSlug, setLoadingOlderDmSlug] = useState<string | null>(null);
+  const lastSeenConversationTsRef = useRef<Record<string, string>>({});
 
   const mapRowsToMessages = useCallback(
     (slug: string, rows: DmApiMessageRow[]): DmMessage[] => {
@@ -168,6 +170,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
       setConversations([]);
       setMessagesBySlug({});
       setDmMetaBySlug({});
+      lastSeenConversationTsRef.current = {};
       setIsDmListLoading(false);
       return;
     }
@@ -217,6 +220,50 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         };
       });
       setConversations(mapped);
+      const prevSeen = lastSeenConversationTsRef.current;
+      const nextSeen: Record<string, string> = { ...prevSeen };
+      const changed = mapped.filter((c) => {
+        const prevTs = prevSeen[c.slug];
+        if (!prevTs) return false;
+        return new Date(c.lastMessageAt).getTime() > new Date(prevTs).getTime();
+      });
+      for (const c of mapped) nextSeen[c.slug] = c.lastMessageAt;
+      lastSeenConversationTsRef.current = nextSeen;
+
+      if (changed.length > 0) {
+        const incrementsBySlug: Record<string, number> = {};
+        await Promise.all(
+          changed.map(async (c) => {
+            const prevTs = prevSeen[c.slug];
+            if (!prevTs) return;
+            try {
+              const url = new URL(`${API_BASE}/api/internal-dm/conversations/${c.id}/messages`);
+              url.searchParams.set('agent_id', String(Number(currentAgentId)));
+              url.searchParams.set('since', prevTs);
+              const res = await fetch(url.toString(), { headers: dmAuthHeaders() });
+              if (!res.ok) return;
+              const raw = await res.json();
+              const { rows: deltaRows } = parseDmMessagesPayload(raw);
+              const incomingCount = deltaRows.filter(
+                (m) => String(m.sender_agent_id) !== String(currentAgentId),
+              ).length;
+              if (incomingCount > 0) incrementsBySlug[c.slug] = incomingCount;
+            } catch {
+              // ignore
+            }
+          }),
+        );
+        if (Object.keys(incrementsBySlug).length > 0) {
+          setDmUnreadBySlug((prev) => {
+            const next = { ...prev };
+            for (const [slug, inc] of Object.entries(incrementsBySlug)) {
+              next[slug] = (next[slug] ?? 0) + inc;
+            }
+            writeDmUnreadMap(next);
+            return next;
+          });
+        }
+      }
 
       if (messagesRes.ok && last) {
         const slugFromList = mapped.find((c) => c.id === last.conversationId)?.slug ?? last.slug;
@@ -232,11 +279,19 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsDmListLoading(false);
     }
-  }, [currentAgentId]);
+  }, [currentAgentId, mapRowsToMessages]);
 
   useEffect(() => {
     void refreshConversations();
   }, [refreshConversations]);
+
+  useEffect(() => {
+    if (!currentAgentId) return;
+    const timer = window.setInterval(() => {
+      void refreshConversations();
+    }, DM_CONVERSATIONS_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [currentAgentId, refreshConversations]);
 
   const addOrUpdateConversation = useCallback(async (peerAgentId: string, slug: string, name: string) => {
     if (!currentAgentId) return;
@@ -275,6 +330,10 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         ].sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
         return updated;
       });
+      lastSeenConversationTsRef.current = {
+        ...lastSeenConversationTsRef.current,
+        [slug]: row.last_message_at || new Date().toISOString(),
+      };
     } catch {
       // ignore network errors
     }
@@ -298,6 +357,9 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
       writeDmUnreadMap(next);
       return next;
     });
+    const seen = { ...lastSeenConversationTsRef.current };
+    delete seen[slug];
+    lastSeenConversationTsRef.current = seen;
   }, []);
 
   const getConversationBySlug = useCallback(
@@ -436,6 +498,10 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
             .map((c) => (c.slug === slug ? { ...c, lastMessageAt: row.created_at } : c))
             .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()),
         );
+        lastSeenConversationTsRef.current = {
+          ...lastSeenConversationTsRef.current,
+          [slug]: row.created_at,
+        };
       }
     },
     [conversations, currentAgentId],
@@ -522,6 +588,10 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
             .map((c) => (c.slug === slug ? { ...c, lastMessageAt: row.created_at } : c))
             .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()),
         );
+        lastSeenConversationTsRef.current = {
+          ...lastSeenConversationTsRef.current,
+          [slug]: row.created_at,
+        };
       } catch {
         // ignore
       }
