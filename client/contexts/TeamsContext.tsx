@@ -16,6 +16,8 @@ export interface TeamEvent {
 export interface TeamMember {
   agentId: string;
   name: string;
+  /** From linked user profile when available. */
+  avatarUrl?: string | null;
 }
 
 export interface Team {
@@ -56,6 +58,7 @@ interface AgentApiModel {
   id: number;
   email: string;
   full_name: string | null;
+  avatar_url?: string | null;
 }
 
 interface TeamsContextType {
@@ -85,23 +88,28 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<TeamsData>({ teams: [], events: [] });
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchAgentNameMap = useCallback(async () => {
+  const fetchAgentDetailsMap = useCallback(async () => {
     const res = await fetch(`${API_BASE_URL}/api/agents?tenant_id=${DEFAULT_TENANT_ID}`, {
       method: 'GET',
     });
-    if (!res.ok) return new Map<string, string>();
+    if (!res.ok) return new Map<string, { name: string; avatarUrl: string | null }>();
     const agents = (await res.json()) as AgentApiModel[];
-    const map = new Map<string, string>();
+    const map = new Map<string, { name: string; avatarUrl: string | null }>();
     for (const agent of agents) {
-      map.set(String(agent.id), agent.full_name || agent.email.split('@')[0] || `Agent ${agent.id}`);
+      const name = agent.full_name || agent.email.split('@')[0] || `Agent ${agent.id}`;
+      const avatarUrl =
+        agent.avatar_url != null && String(agent.avatar_url).trim() !== ''
+          ? String(agent.avatar_url).trim()
+          : null;
+      map.set(String(agent.id), { name, avatarUrl });
     }
     return map;
   }, []);
 
   const refreshTeams = useCallback(async () => {
     try {
-      const [nameMap, teamsRes] = await Promise.all([
-        fetchAgentNameMap(),
+      const [agentMap, teamsRes] = await Promise.all([
+        fetchAgentDetailsMap(),
         fetch(`${API_BASE_URL}/api/teams?tenant_id=${DEFAULT_TENANT_ID}`, {
           method: 'GET',
         }),
@@ -115,10 +123,14 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
           id: String(t.id),
           name: t.name,
           description: t.description ?? '',
-          members: (t.members || []).map((m) => ({
-            agentId: String(m.agent_id),
-            name: nameMap.get(String(m.agent_id)) || `Agent ${m.agent_id}`,
-          })),
+          members: (t.members || []).map((m) => {
+            const info = agentMap.get(String(m.agent_id));
+            return {
+              agentId: String(m.agent_id),
+              name: info?.name || `Agent ${m.agent_id}`,
+              avatarUrl: info?.avatarUrl ?? null,
+            };
+          }),
         };
         teamsById.set(mapped.id, mapped);
         return mapped;
@@ -149,7 +161,9 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
             id: String(row.id),
             teamId: team.id,
             type: row.event_type,
-            memberName: row.target_agent_id ? nameMap.get(String(row.target_agent_id)) || `Agent ${row.target_agent_id}` : 'Agent',
+            memberName: row.target_agent_id
+              ? agentMap.get(String(row.target_agent_id))?.name || `Agent ${row.target_agent_id}`
+              : 'Agent',
             targetTeamName,
             sentAt: row.created_at,
           });
@@ -163,7 +177,7 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [fetchAgentNameMap]);
+  }, [fetchAgentDetailsMap]);
 
   useEffect(() => {
     void refreshTeams();

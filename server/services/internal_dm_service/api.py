@@ -64,6 +64,7 @@ def _dm_base_identity(raw: str) -> str:
 class DmPeerOut(BaseModel):
     agent_id: int
     name: str
+    avatar_url: Optional[str] = None
 
 
 class DmConversationOut(BaseModel):
@@ -213,6 +214,25 @@ def _agent_display_name(db: Session, agent_id: int) -> str:
     return f"Agent {agent_id}"
 
 
+def _peer_avatar_url(db: Session, agent_id: int) -> Optional[str]:
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        return None
+    user = db.query(User).filter(User.id == agent.user_id).first()
+    if user and getattr(user, "avatar_url", None):
+        u = (user.avatar_url or "").strip()
+        return u or None
+    return None
+
+
+def _dm_peer_out(db: Session, peer_id: int) -> DmPeerOut:
+    return DmPeerOut(
+        agent_id=peer_id,
+        name=_agent_display_name(db, peer_id),
+        avatar_url=_peer_avatar_url(db, peer_id),
+    )
+
+
 @router.post("/conversations/find-or-create", response_model=DmConversationOut)
 async def find_or_create_conversation(payload: FindOrCreateConversationIn, db: Session = Depends(get_db)):
     if payload.agent_id == payload.peer_agent_id:
@@ -250,7 +270,7 @@ async def find_or_create_conversation(payload: FindOrCreateConversationIn, db: S
     return DmConversationOut(
         id=conversation.id,
         tenant_id=conversation.tenant_id,
-        peer=DmPeerOut(agent_id=peer_id, name=_agent_display_name(db, peer_id)),
+        peer=_dm_peer_out(db, peer_id),
         last_message_at=last_msg.created_at if last_msg else conversation.updated_at,
     )
 
@@ -287,7 +307,7 @@ async def list_conversations(
             DmConversationOut(
                 id=c.id,
                 tenant_id=c.tenant_id,
-                peer=DmPeerOut(agent_id=peer_id, name=_agent_display_name(db, peer_id)),
+                peer=_dm_peer_out(db, peer_id),
                 last_message_at=last_msg.created_at if last_msg else c.updated_at,
             )
         )

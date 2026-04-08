@@ -11,6 +11,7 @@ export interface PresenceMember {
   agentId: string;
   slug: string;
   name: string;
+  avatarUrl?: string | null;
 }
 
 export interface PresenceTeamGroup {
@@ -84,6 +85,7 @@ export function AgentPresenceProvider({ children }: { children: ReactNode }) {
           agentId: member.agentId,
           name: member.name,
           slug: getSlugByName(member.name) || member.agentId,
+          avatarUrl: member.avatarUrl ?? null,
         }))
         .filter((member) => Boolean(member.slug)),
     }))
@@ -98,6 +100,7 @@ export function AgentPresenceProvider({ children }: { children: ReactNode }) {
       agentId: agent.id,
       name: agent.name,
       slug: getSlugByName(agent.name) || agent.id,
+      avatarUrl: agent.avatarUrl ?? null,
     }))
     .filter((member) => Boolean(member.slug));
 

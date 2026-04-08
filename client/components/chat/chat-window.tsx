@@ -168,8 +168,8 @@ export interface ChatWindowProps {
   teamName?: string;
   /** For team channel: names shown in header subtitle, e.g. "Ali, Hamza, Sarah". */
   teamMemberNames?: string[];
-  /** For team channel: roster with agent ids (mentions + read receipts). */
-  teamMemberRoster?: Array<{ agentId: string; name: string }>;
+  /** For team channel: roster with agent ids (mentions + read receipts + avatars). */
+  teamMemberRoster?: Array<{ agentId: string; name: string; avatarUrl?: string | null }>;
   /** For team channel: soft system messages (member added/removed/transferred). */
   teamEvents?: TeamEvent[];
   /** When true, chat is read-only (monitor mode: no replies/reactions/menus). */
@@ -552,6 +552,11 @@ export function ChatWindow({
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const [showAgentProfile, setShowAgentProfile] = useState(false);
+  const [showTeamMemberProfile, setShowTeamMemberProfile] = useState<{
+    name: string;
+    avatarUrl: string | null;
+    agentId?: string;
+  } | null>(null);
   const [activeGroupTab, setActiveGroupTab] = useState<'info' | 'media' | 'starred' | 'members'>('info');
   const [teamAssets, setTeamAssets] = useState<Array<{
     id: number;
@@ -757,11 +762,15 @@ export function ChatWindow({
   const [teamTypers, setTeamTypers] = useState<Record<string, { name: string; until: number }>>({});
   const [readReceiptOpenId, setReadReceiptOpenId] = useState<number | null>(null);
 
-  type MentionRosterItem = { agentId: string; name: string };
+  type MentionRosterItem = { agentId: string; name: string; avatarUrl?: string | null };
   const mentionRoster: MentionRosterItem[] =
     teamMemberRoster.length > 0
-      ? teamMemberRoster
-      : teamMemberNames.map((name) => ({ agentId: '', name }));
+      ? teamMemberRoster.map((r) => ({
+          agentId: r.agentId,
+          name: r.name,
+          avatarUrl: r.avatarUrl ?? null,
+        }))
+      : teamMemberNames.map((name) => ({ agentId: '', name, avatarUrl: null as string | null }));
 
   const mentionComposerEnabled =
     isTeamChannel &&
@@ -1197,6 +1206,10 @@ export function ChatWindow({
   }, [isTeamChannel]);
 
   const dmConversation = isDmPage && dmSlug ? getConversationBySlug(dmSlug) : undefined;
+  const dmPeerAvatarUrl =
+    dmConversation?.peerAvatarUrl != null && String(dmConversation.peerAvatarUrl).trim() !== ''
+      ? String(dmConversation.peerAvatarUrl).trim()
+      : null;
   const dmConversationIdRaw = dmConversation ? Number(dmConversation.id) : NaN;
   const dmConversationId =
     dmConversation != null && Number.isFinite(dmConversationIdRaw) && dmConversationIdRaw > 0
@@ -3430,20 +3443,91 @@ export function ChatWindow({
                     id={`message-${message.id}`}
                     className={`group/message flex w-full items-end gap-1.5 ${outgoing ? 'justify-end' : 'justify-start'}`}
                   >
-                  {(isTeamChannel || (isInboxPage && !isInternalChat)) && !outgoing && (
-                    <div
-                      className={`mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06] ${
+                  {((isTeamChannel || isDmPage) || (isInboxPage && !isInternalChat)) &&
+                    !outgoing &&
+                    (() => {
+                      const rosterEntry =
+                        isTeamChannel && !message.postedByAdmin && message.senderName !== 'Admin'
+                          ? (message.senderAgentId != null
+                              ? mentionRoster.find((r) => r.agentId === String(message.senderAgentId))
+                              : undefined) ||
+                            mentionRoster.find(
+                              (r) => r.name.toLowerCase() === message.senderName.toLowerCase(),
+                            )
+                          : null;
+                      const teamPeerAvatar =
+                        rosterEntry?.avatarUrl != null &&
+                        String(rosterEntry.avatarUrl).trim() !== ''
+                          ? String(rosterEntry.avatarUrl).trim()
+                          : null;
+                      const avatarClass = `mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06] ${
                         groupWithPrev ? 'invisible pointer-events-none' : ''
-                      }`}
-                    >
-                      {isTeamChannel && message.senderName === 'You' && agentAvatarUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={agentAvatarUrl} alt="" className="h-full w-full object-cover" />
+                      }`;
+                      const face = isDmPage ? (
+                        dmPeerAvatarUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={dmPeerAvatarUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          message.senderName.charAt(0)
+                        )
+                      ) : isTeamChannel ? (
+                        message.postedByAdmin || message.senderName === 'Admin' ? (
+                          'A'
+                        ) : teamPeerAvatar ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={teamPeerAvatar} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          message.senderName.charAt(0)
+                        )
                       ) : (
                         message.senderName.charAt(0)
-                      )}
-                    </div>
-                  )}
+                      );
+                      const openDmProfile = () => setShowAgentProfile(true);
+                      const openTeamProfile = () => {
+                        if (!rosterEntry?.name) return;
+                        setShowTeamMemberProfile({
+                          name: rosterEntry.name,
+                          avatarUrl: teamPeerAvatar,
+                          agentId: rosterEntry.agentId || undefined,
+                        });
+                      };
+                      if (isDmPage) {
+                        return (
+                          <button
+                            type="button"
+                            className={`${avatarClass} cursor-pointer hover:ring-[#53bdeb]/40`}
+                            aria-label={`View ${message.senderName} profile`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openDmProfile();
+                            }}
+                          >
+                            {face}
+                          </button>
+                        );
+                      }
+                      if (
+                        isTeamChannel &&
+                        !message.postedByAdmin &&
+                        message.senderName !== 'Admin' &&
+                        rosterEntry
+                      ) {
+                        return (
+                          <button
+                            type="button"
+                            className={`${avatarClass} cursor-pointer hover:ring-[#53bdeb]/40`}
+                            aria-label={`View ${rosterEntry.name} profile`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openTeamProfile();
+                            }}
+                          >
+                            {face}
+                          </button>
+                        );
+                      }
+                      return <div className={avatarClass}>{face}</div>;
+                    })()}
                   <div
                     className={`relative flex min-w-0 flex-col ${
                       message.attachment?.type === 'voice'
@@ -4074,7 +4158,9 @@ export function ChatWindow({
                       </div>
                     )}
                   </div>
-                    {((isTeamChannel && outgoing) || (isInboxPage && !isInternalChat && outgoing)) && (
+                    {((isTeamChannel && outgoing) ||
+                      (isDmPage && outgoing) ||
+                      (isInboxPage && !isInternalChat && outgoing)) && (
                     <div
                       className={`mb-1 flex h-8 w-8 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-sm font-semibold text-[#54656f] shadow-sm ring-1 ring-black/[0.06] ${
                         isInboxPage && !isInternalChat && groupWithPrev ? 'invisible pointer-events-none' : ''
@@ -5089,7 +5175,7 @@ export function ChatWindow({
         </div>
       )}
 
-      {/* Agent Profile Modal */}
+      {/* Agent Profile Modal (DM peer) */}
       {isDmPage && showAgentProfile && (
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
@@ -5107,13 +5193,59 @@ export function ChatWindow({
             >
               <X className="w-5 h-5" />
             </button>
-            <div className="w-40 h-40 rounded-full bg-primary/10 flex items-center justify-center text-primary text-5xl font-semibold flex-shrink-0 mb-4">
-              {title ? title.charAt(0) : '?'}
+            <div className="mb-4 flex h-40 w-40 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-5xl font-semibold text-primary">
+              {dmPeerAvatarUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={dmPeerAvatarUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <span>{title ? title.charAt(0) : '?'}</span>
+              )}
             </div>
             <h2 className="text-xl font-semibold text-text-primary text-center">
               {title || 'Agent'}
             </h2>
             <p className="text-sm text-text-muted mt-1">Direct message</p>
+          </div>
+        </div>
+      )}
+
+      {/* Team member profile (click avatar in channel) */}
+      {isTeamChannel && showTeamMemberProfile && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+          onClick={() => setShowTeamMemberProfile(null)}
+        >
+          <div
+            className="relative mx-4 flex w-full max-w-sm flex-col items-center rounded-2xl bg-white p-8 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setShowTeamMemberProfile(null)}
+              className="absolute right-4 top-4 rounded-full p-1.5 text-text-secondary hover:bg-panel"
+              aria-label="Close profile"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="mb-4 flex h-40 w-40 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-5xl font-semibold text-primary">
+              {showTeamMemberProfile.avatarUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={showTeamMemberProfile.avatarUrl}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span>{showTeamMemberProfile.name.charAt(0)}</span>
+              )}
+            </div>
+            <h2 className="text-center text-xl font-semibold text-text-primary">
+              {showTeamMemberProfile.name}
+            </h2>
+            <p className="mt-1 text-sm text-text-muted">Team member</p>
+            {showTeamMemberProfile.agentId ? (
+              <p className="mt-2 font-mono text-xs text-text-muted">ID: {showTeamMemberProfile.agentId}</p>
+            ) : null}
           </div>
         </div>
       )}

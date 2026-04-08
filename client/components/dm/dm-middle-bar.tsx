@@ -125,8 +125,17 @@ export function DmMiddleBar() {
                                 }`}
                               >
                                 <div className="relative flex-shrink-0">
-                                  <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold">
-                                    {member.name.charAt(0)}
+                                  <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-sm font-semibold text-primary">
+                                    {member.avatarUrl ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={member.avatarUrl}
+                                        alt=""
+                                        className="h-full w-full object-cover"
+                                      />
+                                    ) : (
+                                      member.name.charAt(0)
+                                    )}
                                   </div>
                                   <span
                                     className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-card ${
@@ -216,8 +225,17 @@ export function DmMiddleBar() {
                                 }`}
                               >
                                 <div className="relative flex-shrink-0">
-                                  <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold">
-                                    {member.name.charAt(0)}
+                                  <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-sm font-semibold text-primary">
+                                    {member.avatarUrl ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={member.avatarUrl}
+                                        alt=""
+                                        className="h-full w-full object-cover"
+                                      />
+                                    ) : (
+                                      member.name.charAt(0)
+                                    )}
                                   </div>
                                   <span
                                     className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-card ${
@@ -285,8 +303,17 @@ export function DmMiddleBar() {
                           }`}
                         >
                           <div className="relative flex-shrink-0">
-                            <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold">
-                              {c.name.charAt(0)}
+                            <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-sm font-semibold text-primary">
+                              {c.peerAvatarUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={c.peerAvatarUrl}
+                                  alt=""
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                c.name.charAt(0)
+                              )}
                             </div>
                             <span
                               className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-panel ${

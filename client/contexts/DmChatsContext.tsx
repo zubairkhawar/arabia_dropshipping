@@ -81,6 +81,8 @@ export interface DmConversation {
   slug: string;
   name: string;
   lastMessageAt: string;
+  /** Peer profile image from server (user avatar). */
+  peerAvatarUrl?: string | null;
 }
 
 export interface DmMessage {
@@ -193,7 +195,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
       if (!listRes.ok) return;
       const rows = (await listRes.json()) as Array<{
         id: number;
-        peer: { agent_id: number; name: string };
+        peer: { agent_id: number; name: string; avatar_url?: string | null };
         last_message_at: string | null;
       }>;
       const mapped: DmConversation[] = rows.map((row) => {
@@ -203,12 +205,17 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, '-')
             .replace(/^-+|-+$/g, '') || String(row.peer.agent_id);
+        const peerAvatarUrl =
+          row.peer.avatar_url != null && String(row.peer.avatar_url).trim() !== ''
+            ? String(row.peer.avatar_url).trim()
+            : null;
         return {
           id: String(row.id),
           peerAgentId: String(row.peer.agent_id),
           slug,
           name,
           lastMessageAt: row.last_message_at || new Date().toISOString(),
+          peerAvatarUrl,
         };
       });
       setConversations(mapped);
@@ -248,9 +255,13 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
       if (!res.ok) return;
       const row = (await res.json()) as {
         id: number;
-        peer: { agent_id: number; name: string };
+        peer: { agent_id: number; name: string; avatar_url?: string | null };
         last_message_at: string | null;
       };
+      const peerAvatarUrl =
+        row.peer.avatar_url != null && String(row.peer.avatar_url).trim() !== ''
+          ? String(row.peer.avatar_url).trim()
+          : null;
       setConversations((prev) => {
         const rest = prev.filter((c) => c.slug !== slug);
         const updated: DmConversation[] = [
@@ -260,6 +271,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
             slug,
             name: row.peer.name || name,
             lastMessageAt: row.last_message_at || new Date().toISOString(),
+            peerAvatarUrl,
           },
           ...rest,
         ].sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());

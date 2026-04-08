@@ -43,7 +43,13 @@ export default function AgentTeamChannel() {
           teamId={team?.id}
           teamName={team?.name ?? 'Team'}
           teamMemberNames={team?.members.map((m) => m.name) ?? []}
-          teamMemberRoster={team?.members.map((m) => ({ agentId: m.agentId, name: m.name })) ?? []}
+          teamMemberRoster={
+            team?.members.map((m) => ({
+              agentId: m.agentId,
+              name: m.name,
+              avatarUrl: m.avatarUrl ?? null,
+            })) ?? []
+          }
           teamEvents={teamEvents}
         />
       </div>
