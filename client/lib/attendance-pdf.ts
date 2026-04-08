@@ -7,6 +7,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { DayAttendance, DaySession } from '@/components/agents/activity-bar';
 import { formatTimeFromMinutes, formatDurationMinutes } from '@/components/agents/activity-bar';
+import { DEFAULT_TENANT_TIMEZONE } from '@/lib/tenant-time';
 
 const LOGO_URL = '/arabia_logo.png';
 const LOGO_MAX_WIDTH = 50;
@@ -61,8 +62,8 @@ function formatSession(s: DaySession): string {
   return `${formatTimeFromMinutes(s.startMinutes)} – ${formatTimeFromMinutes(s.endMinutes)} (${formatDurationMinutes(s.endMinutes - s.startMinutes)})`;
 }
 
-function formatDayShort(d: Date): string {
-  return d.toLocaleDateString(undefined, { weekday: 'short' });
+function formatDayShort(d: Date, timeZone: string): string {
+  return d.toLocaleDateString('en-US', { timeZone, weekday: 'short' });
 }
 
 export interface AllAgentsReportOptions {
@@ -70,14 +71,17 @@ export interface AllAgentsReportOptions {
   getDayData: (agentId: string) => DayAttendance[];
   year: number;
   month: number;
+  /** IANA timezone for date labels in the PDF */
+  timeZone?: string;
 }
 
 export function buildAllAgentsPdf(options: AllAgentsReportOptions): Promise<void> {
-  const { agents, getDayData, year, month } = options;
-  const monthLabel = new Date(year, month).toLocaleDateString(undefined, {
+  const { agents, getDayData, year, month, timeZone = DEFAULT_TENANT_TIMEZONE } = options;
+  const monthLabel = new Intl.DateTimeFormat('en-US', {
+    timeZone,
     month: 'long',
     year: 'numeric',
-  });
+  }).format(new Date(Date.UTC(year, month, 15)));
   const daysInMonth = getDaysInMonth(year, month);
 
   return loadLogoDataUrl().then((logoDataUrl) => {
@@ -146,10 +150,11 @@ export interface SingleAgentReportOptions {
   agent: AgentForReport;
   dayData: DayAttendance[];
   periodLabel: string; // e.g. "October 2025" or "1 Oct – 15 Oct 2025"
+  timeZone?: string;
 }
 
 export function buildSingleAgentPdf(options: SingleAgentReportOptions): Promise<void> {
-  const { agent, dayData, periodLabel } = options;
+  const { agent, dayData, periodLabel, timeZone = DEFAULT_TENANT_TIMEZONE } = options;
 
   return loadLogoDataUrl().then((logoDataUrl) => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm' });
@@ -183,8 +188,13 @@ export function buildSingleAgentPdf(options: SingleAgentReportOptions): Promise<
           ? '—'
           : d.sessions.map(formatSession).join('; ');
       return [
-        d.date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }),
-        formatDayShort(d.date),
+        d.date.toLocaleDateString('en-US', {
+          timeZone,
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+        }),
+        formatDayShort(d.date, timeZone),
         totalM > 0 ? (Math.round((totalM / 60) * 100) / 100) + 'h' : '—',
         activity,
       ];

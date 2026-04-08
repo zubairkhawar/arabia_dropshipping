@@ -1,9 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException
+from zoneinfo import ZoneInfo
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Tenant, TenantSchedule
+from services.auth_service.api import get_current_user
+from services.auth_service.models import User
 
 
 router = APIRouter()
@@ -47,6 +51,56 @@ class SchedulePayload(BaseModel):
     working_days: list[int]
     start_time: str
     end_time: str
+
+
+class TenantDisplayTimezonePayload(BaseModel):
+    display_timezone: str
+
+
+def _validate_iana_timezone(tz: str) -> str:
+    cleaned = (tz or "").strip()
+    if not cleaned:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="display_timezone is required",
+        )
+    try:
+        ZoneInfo(cleaned)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid IANA timezone: {cleaned}",
+        ) from exc
+    return cleaned
+
+
+@router.patch("/{tenant_id}/display-timezone")
+async def patch_tenant_display_timezone(
+    tenant_id: int,
+    payload: TenantDisplayTimezonePayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Admin only: set tenant-wide display timezone (messages, attendance labels, etc.).
+    """
+    if (current_user.role or "").lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tenant admin can change display timezone",
+        )
+    if current_user.tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant mismatch",
+        )
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    tenant.display_timezone = _validate_iana_timezone(payload.display_timezone)
+    db.commit()
+    db.refresh(tenant)
+    return {"display_timezone": tenant.display_timezone}
 
 
 @router.get("/{tenant_id}/schedule", response_model=SchedulePayload)

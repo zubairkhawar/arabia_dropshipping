@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { NotificationDescriptionLine } from '@/components/layout/agent-header';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
+import { formatConversationListTime } from '@/lib/tenant-time';
 
 function NotificationIcon({ type }: { type: AgentNotification['type'] }) {
   switch (type) {
@@ -49,19 +51,18 @@ function NotificationIcon({ type }: { type: AgentNotification['type'] }) {
   }
 }
 
-function formatTime(iso: string) {
-  const d = new Date(iso);
-  const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return 'Just now';
-  if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
-  if (diff < 86400) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  if (diff < 604800) return d.toLocaleDateString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
 export default function AgentNotificationsPage() {
+  const { timeZone } = useTenantTimezone();
   const { getNotificationsForCurrentAgent, markAsRead, markAllAsRead } = useNotifications();
   const list = getNotificationsForCurrentAgent();
+
+  const formatTime = (iso: string) => {
+    const d = new Date(iso);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+    return formatConversationListTime(iso, timeZone);
+  };
 
   return (
     <div className="flex flex-col h-full bg-white border border-border rounded-lg overflow-hidden">

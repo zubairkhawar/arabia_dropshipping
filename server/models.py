@@ -15,6 +15,10 @@ class Tenant(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     domain = Column(String, unique=True, index=True, nullable=True)
+    # IANA zone id (e.g. America/New_York). All UI times for the tenant use this; DB stays UTC.
+    display_timezone = Column(String, nullable=False, default="UTC")
+    # OpenAI key for this tenant (admin Settings); loaded at startup into runtime override.
+    openai_api_key = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

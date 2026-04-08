@@ -14,6 +14,8 @@ import { useToast } from '@/contexts/ToastContext';
 import { usePathname, useRouter } from 'next/navigation';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
 import { useAgentSearch } from '@/contexts/AgentSearchContext';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
+import { formatCompactActivity } from '@/lib/tenant-time';
 
 type AgentStatus = 'active' | 'offline';
 const ACTIVE_SINCE_PREFIX = 'agent-active-since:';
@@ -80,6 +82,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const currentAgent = getCurrentAgent();
   const { setPresence } = useAgentPresence();
   const { isWithinSchedule, schedule } = useOnlineSchedule();
+  const { timeZone } = useTenantTimezone();
   const slug = getSlugByName(fullName);
   const rawStatus: AgentStatus =
     currentAgent?.status === 'online' || currentAgent?.status === 'busy' ? 'active' : 'offline';
@@ -189,14 +192,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
     return () => window.clearInterval(timer);
   }, [agentStatus, activeSinceMs]);
 
-  const formatNotifTime = (iso: string) => {
-    const d = new Date(iso);
-    const diff = (Date.now() - d.getTime()) / 1000;
-    if (diff < 60) return 'Just now';
-    if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
-    if (diff < 86400) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
+  const formatNotifTime = (iso: string) => formatCompactActivity(iso, timeZone);
 
   useEffect(() => {
     if (!showAvatarMenu) return;

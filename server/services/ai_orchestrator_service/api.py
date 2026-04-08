@@ -1,21 +1,22 @@
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from typing import Optional
-import httpx
-import time
 from sqlalchemy.orm import Session
 
 from config import get_openai_api_key, set_openai_api_key_override
+from services.auth_service.api import get_current_user, get_current_user_optional
+from services.auth_service.models import User
 from services.ai_orchestrator_service.services import _clear_llm_cache
 from services.ai_orchestrator_service.services import AIOrchestrator
 from database import get_db
 from langchain_bot import ArabiaLangChainBot
-from models import Conversation, Message
+from models import Conversation, Message, Tenant
 from services.customer_bot_flow import (
     format_kb_reply,
     process_customer_bot_message,
     public_templates_payload,
+    resolve_bot_template,
 )
 from services.agent_portal_service.broadcast import notify_bot_handoff_assigned
 from services.agent_routing_service.api import assign_from_bot_flow
@@ -208,6 +209,15 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
                 conversation.customer_id,
                 conversation.store_id,
             )
+        elif assign_result.agent_id is None and assign_result.reason == "no_available_agent":
+            lang = (
+                bf_lang
+                if isinstance(bf_lang, str) and bf_lang.strip()
+                else detected_language
+            )
+            extra = resolve_bot_template(lang, "handoff_unavailable")
+            if extra:
+                reply_text = f"{(reply_text or '').strip()}\n\n{extra}".strip()
 
     if conversation:
         db.add(
@@ -269,52 +279,57 @@ class OpenAIConfigUpdate(BaseModel):
     api_key: str
 
 
+def _mask_openai_api_key(key: str) -> str:
+    k = (key or "").strip()
+    if not k:
+        return ""
+    if len(k) <= 8:
+        return "••••••••"
+    return f"{k[:3]}…{k[-4:]}"
+
+
 @router.get("/openai-config")
-async def get_openai_config():
-    """Return whether an OpenAI API key is configured (never the key itself)."""
+async def get_openai_config(
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    """
+    Whether a key is configured. Admins (Bearer) also get a short masked preview (never the full key).
+    """
     key = get_openai_api_key()
-    return {"key_configured": bool(key and key.strip())}
+    configured = bool(key and key.strip())
+    out: dict = {"key_configured": configured}
+    if (
+        current_user is not None
+        and (current_user.role or "").lower() == "admin"
+        and configured
+    ):
+        out["key_preview"] = _mask_openai_api_key(key or "")
+    return out
 
 
 @router.post("/openai-config")
-async def update_openai_config(body: OpenAIConfigUpdate):
-    """Set or update the OpenAI API key used by the bot."""
+async def update_openai_config(
+    body: OpenAIConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Admin only: set OpenAI API key for this tenant; persisted and applied to the bot immediately."""
+    if (current_user.role or "").lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin can update the OpenAI API key",
+        )
     key = (body.api_key or "").strip()
+    tenant = db.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    tenant.openai_api_key = key if key else None
+    db.add(tenant)
+    db.commit()
+
     set_openai_api_key_override(key if key else None)
     _clear_llm_cache()
-    return {"key_configured": bool(key)}
-
-
-@router.get("/openai-usage")
-async def get_openai_usage(start_time: Optional[int] = None, end_time: Optional[int] = None):
-    """Fetch OpenAI usage (tokens/costs) for the configured API key. Uses OpenAI Usage API."""
-    key = get_openai_api_key()
-    if not key:
-        raise HTTPException(status_code=400, detail="No OpenAI API key configured. Add one in Settings.")
-    now = int(time.time())
-    start_time = start_time or (now - 30 * 24 * 3600)  # default last 30 days
-    end_time = end_time or now
-    url = "https://api.openai.com/v1/organization/usage/completions"
-    params = {"start_time": start_time, "end_time": end_time, "bucket_width": "1d", "limit": 31}
-    async with httpx.AsyncClient() as client:
-        try:
-            r = await client.get(
-                url,
-                params=params,
-                headers={"Authorization": f"Bearer {key}"},
-                timeout=15.0,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to reach OpenAI: {str(e)}")
-    if r.status_code == 401:
-        raise HTTPException(status_code=401, detail="Invalid API key or key cannot access usage.")
-    if r.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=f"OpenAI returned {r.status_code}. Usage API may require an admin key or different plan.",
-        )
-    try:
-        data = r.json()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Invalid response from OpenAI.")
-    return data
+    out: dict = {"key_configured": bool(key)}
+    if key:
+        out["key_preview"] = _mask_openai_api_key(key)
+    return out

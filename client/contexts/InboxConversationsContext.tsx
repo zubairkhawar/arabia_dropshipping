@@ -2,8 +2,10 @@
 
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { usePathname } from 'next/navigation';
 import { useAgentPortalRealtime } from '@/contexts/AgentPortalRealtimeContext';
+import { formatConversationListTime, formatTime12hInZone } from '@/lib/tenant-time';
 import {
   readAuthAgentId,
   readLastInboxConversationId,
@@ -142,7 +144,10 @@ export function inboxMetaToAttachment(meta: unknown): InboxMessage['attachment']
   return undefined;
 }
 
-function apiMessageToInbox(m: ConversationDetailsApi['messages'][number]): InboxMessage {
+function apiMessageToInbox(
+  m: ConversationDetailsApi['messages'][number],
+  timeZone: string,
+): InboxMessage {
   const st = m.sender_type;
   const senderName = st === 'agent' ? 'You' : st === 'customer' ? 'Customer' : 'AI';
   const rp = m.reply_preview;
@@ -160,7 +165,7 @@ function apiMessageToInbox(m: ConversationDetailsApi['messages'][number]): Inbox
     content,
     sender: st,
     senderName,
-    timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    timestamp: formatTime12hInZone(new Date(m.created_at), timeZone),
     sentAt: m.created_at,
     replyToMessageId: m.reply_to_message_id ?? undefined,
     editedAt: m.edited_at ?? undefined,
@@ -176,20 +181,6 @@ function apiMessageToInbox(m: ConversationDetailsApi['messages'][number]): Inbox
         }
       : undefined,
   };
-}
-
-function toRelativeTime(iso?: string | null): string {
-  if (!iso) return '—';
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return '—';
-  const diff = Math.max(0, Date.now() - t);
-  const min = Math.floor(diff / 60000);
-  if (min < 1) return 'Just now';
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  return `${day}d ago`;
 }
 
 function toConversationStatus(status: string): ConversationStatus {
@@ -213,6 +204,7 @@ function pickInboxSelection(
 
 export function InboxConversationsProvider({ children }: { children: ReactNode }) {
   const { agents, currentAgentId } = useAgents();
+  const { timeZone } = useTenantTimezone();
   const { subscribe } = useAgentPortalRealtime();
   const pathname = usePathname();
   const isAgentPortal = pathname?.startsWith('/agent/');
@@ -234,7 +226,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         customerName: c.customer_name || `Customer #${c.customer_id}`,
         customerId: `#${c.customer_id}`,
         lastMessage: c.last_message || '',
-        lastActivityAt: toRelativeTime(c.last_activity_at),
+        lastActivityAt: formatConversationListTime(c.last_activity_at, timeZone),
         unread: typeof c.unread_count === 'number' ? c.unread_count : 0,
         channel: c.channel,
         status: toConversationStatus(c.status),
@@ -244,7 +236,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         isNewLead: !handlerAgentId,
       };
     },
-    [agents],
+    [agents, timeZone],
   );
 
   const fetchConversationRowsFromApi = useCallback(async (): Promise<ConversationSummaryApi[]> => {
@@ -261,9 +253,12 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     return isAgentPortal ? rows : rows.filter((c) => c.agent_id != null);
   }, [currentAgentId, isAgentPortal]);
 
-  const mapDetailToMessages = useCallback((data: ConversationDetailsApi): InboxMessage[] => {
-    return data.messages.map((m) => apiMessageToInbox(m));
-  }, []);
+  const mapDetailToMessages = useCallback(
+    (data: ConversationDetailsApi): InboxMessage[] => {
+      return data.messages.map((m) => apiMessageToInbox(m, timeZone));
+    },
+    [timeZone],
+  );
 
   const refreshConversations = useCallback(async () => {
     setIsLoading(true);
@@ -385,7 +380,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         if (!raw || typeof raw !== 'object') return;
         const row = raw as ConversationDetailsApi['messages'][number];
         if (!row.id) return;
-        const im = apiMessageToInbox(row);
+        const im = apiMessageToInbox(row, timeZone);
         const id = im.id;
         const viewing = selectedIdRef.current === convId;
         if (viewing) {
@@ -415,7 +410,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         const raw = msg.message;
         if (!raw || typeof raw !== 'object') return;
         const row = raw as ConversationDetailsApi['messages'][number];
-        const im = apiMessageToInbox(row);
+        const im = apiMessageToInbox(row, timeZone);
         setMessagesByConvId((prev) => {
           const cur = prev[convId] || [];
           const idx = cur.findIndex((x) => x.id === im.id);
@@ -442,7 +437,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         });
       }
     });
-  }, [subscribe, syncInboxReadState]);
+  }, [subscribe, syncInboxReadState, timeZone]);
 
   useEffect(() => {
     let cancelled = false;
@@ -531,12 +526,15 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     );
   }, []);
 
-  const closeConversation = useCallback((convId: number) => {
+  const closeConversation = useCallback(
+    (convId: number) => {
     const now = new Date();
-    const closedAt =
-      now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) +
-      ', ' +
-      now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    const closedAt = `${formatTime12hInZone(now, timeZone)}, ${now.toLocaleDateString('en-US', {
+      timeZone,
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })}`;
     setConversations((prev) =>
       prev.map((c) => (c.id === convId ? { ...c, status: 'resolved', closedAt, unread: 0 } : c)),
     );
@@ -545,9 +543,12 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'closed' }),
     });
-  }, []);
+  },
+    [timeZone],
+  );
 
-  const reopenConversation = useCallback((convId: number) => {
+  const reopenConversation = useCallback(
+    (convId: number) => {
     const now = new Date();
     const reopenedAt = now.toISOString();
     setConversations((prev) =>
@@ -570,14 +571,16 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       content: 'Customer messaged again.',
       sender: 'ai',
       senderName: 'System',
-      timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      timestamp: formatTime12hInZone(now, timeZone),
       sentAt: now.toISOString(),
     };
     setMessagesByConvId((prev) => ({
       ...prev,
       [convId]: [...(prev[convId] ?? []), systemMsg],
     }));
-  }, []);
+  },
+    [timeZone],
+  );
 
   const transferConversation = useCallback((convId: number, toAgentId: string, toAgentName: string) => {
     setConversations((prev) =>

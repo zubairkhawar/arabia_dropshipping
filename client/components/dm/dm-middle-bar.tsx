@@ -9,6 +9,8 @@ import { useDmChats } from '@/contexts/DmChatsContext';
 import { useDmLayout } from '@/contexts/DmLayoutContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
+import { formatConversationListTime } from '@/lib/tenant-time';
 
 const DM_MIDDLE_BAR_WIDTH = 280;
 const DM_MIDDLE_BAR_COLLAPSED_WIDTH = 56;
@@ -27,6 +29,7 @@ type DmSearchRow = {
 };
 
 export function DmMiddleBar() {
+  const { timeZone } = useTenantTimezone();
   const pathname = usePathname();
   const router = useRouter();
   const { conversations, addOrUpdateConversation, removeConversation, isDmListLoading, getDmUnreadCount, getMessagesBySlug } =
@@ -436,12 +439,7 @@ export function DmMiddleBar() {
                         .replace(/^-+|-+$/g, '') || String(r.peer.agent_id);
                       const isActiveResult = idx === searchActiveIndex;
                       const when = r.last_message_at
-                        ? new Date(r.last_message_at).toLocaleString([], {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit',
-                          })
+                        ? formatConversationListTime(r.last_message_at, timeZone)
                         : '—';
                       return (
                         <li key={`s-${r.id}-${r.peer.agent_id}`}>

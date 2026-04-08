@@ -1,6 +1,10 @@
 'use client';
 
 import { useMemo, useState, useCallback, useEffect } from 'react';
+import {
+  DEFAULT_TENANT_TIMEZONE,
+  weekdayInTimeZone,
+} from '@/lib/tenant-time';
 
 const DAYS_PER_WEEK = 7;
 const CELL_BASE = 'rounded-sm';
@@ -36,8 +40,8 @@ function getDateForIndex(index: number, firstSunday: Date): Date {
   return d;
 }
 
-function formatDate(d: Date): string {
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+function formatDate(d: Date, timeZone: string): string {
+  return d.toLocaleDateString('en-US', { timeZone, month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export function formatTimeFromMinutes(m: number): string {
@@ -200,10 +204,12 @@ export function AgentActivityBar({
   agentId,
   workingDays = [1, 2, 3, 4, 5, 6],
   dayData,
+  timeZone = DEFAULT_TENANT_TIMEZONE,
 }: {
   agentId: string;
   workingDays?: number[];
   dayData: DayAttendance[];
+  timeZone?: string;
 }) {
   const [selectedDayIndex, setSelectedDayIndex] = useState<number | null>(null);
 
@@ -211,30 +217,41 @@ export function AgentActivityBar({
     const { firstSunday, totalDays, columns: cols } = getAttendanceWindow();
     const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const monthLabels: { col: number; label: string }[] = [];
-    let lastMonth = -1;
+    let lastMonthKey = '';
     for (let col = 0; col < cols; col++) {
       const date = getDateForIndex(col * DAYS_PER_WEEK, firstSunday);
-      const month = date.getMonth();
-      if (month !== lastMonth) {
-        monthLabels.push({ col, label: date.toLocaleDateString(undefined, { month: 'short' }) });
-        lastMonth = month;
+      const monthKey = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        month: 'numeric',
+        year: 'numeric',
+      }).format(date);
+      if (monthKey !== lastMonthKey) {
+        monthLabels.push({
+          col,
+          label: date.toLocaleDateString('en-US', { timeZone, month: 'short' }),
+        });
+        lastMonthKey = monthKey;
       }
     }
     const workingSet = new Set(workingDays);
-    const isOffDay = (index: number) => !workingSet.has(getDateForIndex(index, firstSunday).getDay());
+    const isOffDay = (index: number) =>
+      !workingSet.has(weekdayInTimeZone(getDateForIndex(index, firstSunday), timeZone));
     return { dayLabels, monthLabels, isOffDay, columns: cols };
-  }, [workingDays]);
+  }, [workingDays, timeZone]);
 
   const selectedDay = selectedDayIndex != null ? dayData[selectedDayIndex] : null;
 
-  const tooltipForDay = useCallback((d: DayAttendance, index: number) => {
-    if (isOffDay(index)) return `${formatDate(d.date)} · Off day (holiday)`;
-    if (d.sessions.length === 0) return `${formatDate(d.date)} · No time logged`;
-    const first = d.sessions[0];
-    const last = d.sessions[d.sessions.length - 1];
-    const totalM = d.sessions.reduce((s, x) => s + (x.endMinutes - x.startMinutes), 0);
-    return `${formatDate(d.date)} — Online for ${formatDurationMinutes(totalM)} (${formatTimeFromMinutes(first.startMinutes)} – ${formatTimeFromMinutes(last.endMinutes)})`;
-  }, [isOffDay]);
+  const tooltipForDay = useCallback(
+    (d: DayAttendance, index: number) => {
+      if (isOffDay(index)) return `${formatDate(d.date, timeZone)} · Off day (holiday)`;
+      if (d.sessions.length === 0) return `${formatDate(d.date, timeZone)} · No time logged`;
+      const first = d.sessions[0];
+      const last = d.sessions[d.sessions.length - 1];
+      const totalM = d.sessions.reduce((s, x) => s + (x.endMinutes - x.startMinutes), 0);
+      return `${formatDate(d.date, timeZone)} — Online for ${formatDurationMinutes(totalM)} (${formatTimeFromMinutes(first.startMinutes)} – ${formatTimeFromMinutes(last.endMinutes)})`;
+    },
+    [isOffDay, timeZone],
+  );
 
   return (
     <div className="flex flex-col flex-1 min-h-0 min-w-0 space-y-4">
@@ -291,7 +308,7 @@ export function AgentActivityBar({
       {selectedDay != null && (
         <div className="space-y-3 border-t border-border pt-4">
           <p className="text-xs font-medium text-text-primary">
-            Daily Activity — {formatDate(selectedDay.date)}
+            Daily Activity — {formatDate(selectedDay.date, timeZone)}
           </p>
           {/* 24h timeline */}
           <div className="space-y-1">

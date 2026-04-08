@@ -7,6 +7,8 @@ import { useInboxConversations } from '@/contexts/InboxConversationsContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { ChevronDown } from 'lucide-react';
 import { useAgentSearch } from '@/contexts/AgentSearchContext';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
+import { formatConversationListTime } from '@/lib/tenant-time';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
 
 type ConversationStatus = 'active' | 'resolved' | 'pending';
@@ -98,18 +100,18 @@ type InboxSearchResult = {
   unread_count: number;
 };
 
-function formatSearchTime(iso?: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return 'Just now';
-  if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
-  if (diff < 86400) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
-
 export function ChatList() {
+  const { timeZone } = useTenantTimezone();
+
+  const formatSearchTime = (iso?: string | null): string => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+    return formatConversationListTime(iso, timeZone);
+  };
   const inboxPanels = useInboxPanels();
   const pathname = usePathname();
   const inboxConv = useInboxConversations();

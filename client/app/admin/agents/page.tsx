@@ -5,6 +5,8 @@ import { useAgents } from '@/contexts/AgentsContext';
 import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X, Download } from 'lucide-react';
 import { AgentActivityBar, useAgentAttendanceData } from '@/components/agents/activity-bar';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
+import { weekdayInTimeZone } from '@/lib/tenant-time';
 import { useToast } from '@/contexts/ToastContext';
 import { buildSingleAgentPdf, filterByMonth } from '@/lib/attendance-pdf';
 
@@ -26,13 +28,19 @@ function formatAvgResponse(seconds: number): string {
 function getUptimeFromAttendance(
   dayData: { date: Date; hoursWorked: number }[],
   workingDays: number[],
+  timeZone: string,
 ): { uptimePercent: number } {
   const now = new Date();
   const from = new Date(now);
   from.setDate(from.getDate() - 29);
   from.setHours(0, 0, 0, 0);
   const workingSet = new Set(workingDays);
-  const recent = dayData.filter((d) => d.date >= from && d.date <= now && workingSet.has(d.date.getDay()));
+  const recent = dayData.filter(
+    (d) =>
+      d.date >= from &&
+      d.date <= now &&
+      workingSet.has(weekdayInTimeZone(d.date, timeZone)),
+  );
   const worked = recent.filter((d) => d.hoursWorked > 0);
   const uptimePercent = recent.length > 0 ? Math.round((worked.length / recent.length) * 100) : 0;
   return { uptimePercent };
@@ -41,6 +49,7 @@ function getUptimeFromAttendance(
 export default function AdminAgents() {
   const { agents, addAgent, removeAgent, updateAgent } = useAgents();
   const { schedule } = useOnlineSchedule();
+  const { timeZone } = useTenantTimezone();
   const { toast } = useToast();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listCollapsed, setListCollapsed] = useState(false);
@@ -155,9 +164,9 @@ export default function AdminAgents() {
   }, [attendanceDayData, selectedAgent]);
   const performanceMetrics = useMemo(() => {
     if (!selectedAgent) return { uptimePercent: 0, avgResponseTimeSeconds: 0 };
-    const { uptimePercent } = getUptimeFromAttendance(visibleAttendanceDayData, schedule.workingDays);
+    const { uptimePercent } = getUptimeFromAttendance(visibleAttendanceDayData, schedule.workingDays, timeZone);
     return { uptimePercent, avgResponseTimeSeconds };
-  }, [visibleAttendanceDayData, schedule.workingDays, selectedAgent, avgResponseTimeSeconds]);
+  }, [visibleAttendanceDayData, schedule.workingDays, selectedAgent, avgResponseTimeSeconds, timeZone]);
 
   const toTitle = (value: string) => {
     const v = value.trim().toLowerCase();
@@ -250,11 +259,16 @@ export default function AdminAgents() {
         toast('No attendance data for selected month.');
         return;
       }
-      const periodLabel = new Date(agentReportYear, agentReportMonth - 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+      const periodLabel = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        month: 'long',
+        year: 'numeric',
+      }).format(new Date(agentReportYear, agentReportMonth - 1, 15));
       await buildSingleAgentPdf({
         agent: { id: selectedAgent.id, name: selectedAgent.name, email: selectedAgent.email },
         dayData,
         periodLabel,
+        timeZone,
       });
       requestAnimationFrame(() => toast('Attendance report downloaded'));
     } catch (e) {
@@ -619,7 +633,12 @@ export default function AdminAgents() {
                   </div>
                 </div>
                 <div className="flex-1 min-h-0 min-w-0 flex flex-col">
-                  <AgentActivityBar agentId={selectedAgent.id} workingDays={schedule.workingDays} dayData={visibleAttendanceDayData} />
+                  <AgentActivityBar
+                    agentId={selectedAgent.id}
+                    workingDays={schedule.workingDays}
+                    dayData={visibleAttendanceDayData}
+                    timeZone={timeZone}
+                  />
                 </div>
               </div>
             )}

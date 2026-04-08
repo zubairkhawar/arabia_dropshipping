@@ -3,7 +3,11 @@ from services.customer_bot_flow.service import (
     format_kb_reply,
     process_customer_bot_message,
 )
-from services.customer_bot_flow.templates import BOT_FLOW_TEMPLATES, public_templates_payload
+from services.customer_bot_flow.templates import (
+    BOT_FLOW_TEMPLATES,
+    public_templates_payload,
+    resolve_bot_template,
+)
 
 __all__ = [
     "BOT_FLOW_TEMPLATES",
@@ -11,4 +15,5 @@ __all__ = [
     "format_kb_reply",
     "process_customer_bot_message",
     "public_templates_payload",
+    "resolve_bot_template",
 ]

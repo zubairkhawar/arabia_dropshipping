@@ -8,6 +8,12 @@ import React, {
   useEffect,
   ReactNode,
 } from 'react';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
+import {
+  clockMinutesInTimeZone,
+  DEFAULT_TENANT_TIMEZONE,
+  weekdayInTimeZone,
+} from '@/lib/tenant-time';
 
 const STORAGE_KEY = 'online-schedule';
 const DEFAULT_TENANT_ID = 1;
@@ -59,15 +65,17 @@ function parseTime(s: string): { hours: number; minutes: number } {
   return { hours: h ?? 0, minutes: m ?? 0 };
 }
 
-/** Returns true if the given date falls within working days and hours. */
-export function isWithinSchedule(schedule: OnlineSchedule, date: Date = new Date()): boolean {
-  const day = date.getDay();
+/** Returns true if the given instant falls within working days and wall-clock hours in `timeZone`. */
+export function isWithinSchedule(
+  schedule: OnlineSchedule,
+  date: Date = new Date(),
+  timeZone: string = DEFAULT_TENANT_TIMEZONE,
+): boolean {
+  const day = weekdayInTimeZone(date, timeZone);
   if (!schedule.workingDays.includes(day)) return false;
   const start = parseTime(schedule.startTime);
   const end = parseTime(schedule.endTime);
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  const currentMins = hours * 60 + minutes;
+  const currentMins = clockMinutesInTimeZone(date, timeZone);
   const startMins = start.hours * 60 + start.minutes;
   const endMins = end.hours * 60 + end.minutes;
   return currentMins >= startMins && currentMins < endMins;
@@ -88,6 +96,7 @@ interface OnlineScheduleContextType {
 const OnlineScheduleContext = createContext<OnlineScheduleContextType | undefined>(undefined);
 
 export function OnlineScheduleProvider({ children }: { children: ReactNode }) {
+  const { timeZone } = useTenantTimezone();
   const [schedule, setScheduleState] = useState<OnlineSchedule>(defaultSchedule);
 
   useEffect(() => {
@@ -133,8 +142,8 @@ export function OnlineScheduleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const isWithinScheduleNow = useCallback(
-    (date?: Date) => isWithinSchedule(schedule, date ?? new Date()),
-    [schedule],
+    (date?: Date) => isWithinSchedule(schedule, date ?? new Date(), timeZone),
+    [schedule, timeZone],
   );
 
   const isWorkingDayCheck = useCallback(

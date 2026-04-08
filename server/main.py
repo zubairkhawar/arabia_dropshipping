@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from config import settings
+from config import hydrate_openai_api_key_from_db, settings
 from database import (
     SessionLocal,
     engine,
@@ -12,6 +12,8 @@ from database import (
     ensure_team_channel_admin_sender_columns,
     ensure_team_channel_read_states_table,
     ensure_agent_read_state_tables,
+    ensure_tenant_display_timezone_column,
+    ensure_tenant_openai_api_key_column,
     ensure_user_avatar_url_column,
     ensure_message_enhancements,
     ensure_dm_team_message_metadata_json,
@@ -83,10 +85,13 @@ async def lifespan(app: FastAPI):
     ensure_team_channel_admin_sender_columns()
     ensure_team_channel_read_states_table()
     ensure_agent_read_state_tables()
+    ensure_tenant_display_timezone_column()
+    ensure_tenant_openai_api_key_column()
     ensure_user_avatar_url_column()
     ensure_message_enhancements()
     ensure_dm_team_message_metadata_json()
     ensure_admin_user()
+    hydrate_openai_api_key_from_db()
     yield
     # Shutdown
 

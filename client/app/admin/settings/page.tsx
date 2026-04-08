@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
-import { Radio, XCircle, Clock, Download, Key, BarChart3, Eye, EyeOff, Copy } from 'lucide-react';
+import { useState, useMemo, useEffect } from "react";
+import { Radio, XCircle, Clock, Download, Globe } from 'lucide-react';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
+import { TIMEZONE_GROUPS } from '@/lib/timezone-options';
 import { useToast } from '@/contexts/ToastContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { getDayAttendance } from '@/components/agents/activity-bar';
@@ -25,18 +27,6 @@ function parseBroadcastDate(s: string): number {
   if (!s) return NaN;
   const d = new Date(s);
   return d.getTime();
-}
-
-function formatBroadcastDateTime(s: string): string {
-  if (!s) return '—';
-  const d = new Date(s);
-  return d.toLocaleString(undefined, {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 function broadcastTargetSummary(b: Broadcast): string {
@@ -68,6 +58,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "https://arabia-dropshipping
 
 export default function AdminSettings() {
   const { schedule, setSchedule } = useOnlineSchedule();
+  const { timeZone, setTimeZone, refresh: refreshTenantTimezone } = useTenantTimezone();
   const { toast } = useToast();
   const { agents } = useAgents();
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
@@ -77,13 +68,6 @@ export default function AdminSettings() {
   const [reportMonth, setReportMonth] = useState(() => new Date().getMonth() + 1);
   const [reportYear, setReportYear] = useState(() => new Date().getFullYear());
   const [reportDownloading, setReportDownloading] = useState(false);
-  const [openaiKeyInput, setOpenaiKeyInput] = useState('');
-  const [showOpenaiKey, setShowOpenaiKey] = useState(false);
-  const [openaiKeyConfigured, setOpenaiKeyConfigured] = useState(false);
-  const [openaiKeySaving, setOpenaiKeySaving] = useState(false);
-  const [openaiUsage, setOpenaiUsage] = useState<Record<string, unknown> | null>(null);
-  const [openaiUsageLoading, setOpenaiUsageLoading] = useState(false);
-  const [openaiUsageError, setOpenaiUsageError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [occasion, setOccasion] = useState('');
   const [startsAt, setStartsAt] = useState('');
@@ -93,13 +77,33 @@ export default function AdminSettings() {
   const [deliveryNotifyAgents, setDeliveryNotifyAgents] = useState(true);
   const [deliveryNotifyCustomersWhatsapp, setDeliveryNotifyCustomersWhatsapp] = useState(false);
   const [scheduleDraft, setScheduleDraft] = useState<OnlineSchedule>(schedule);
-  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [displayTimezoneDraft, setDisplayTimezoneDraft] = useState(timeZone);
+  const [settingsSaving, setSettingsSaving] = useState(false);
 
   const TENANT_ID = 1;
+
+  const formatBroadcastDateTime = (s: string): string => {
+    if (!s) return '—';
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString('en-US', {
+      timeZone,
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  };
 
   useEffect(() => {
     setScheduleDraft(schedule);
   }, [schedule]);
+
+  useEffect(() => {
+    setDisplayTimezoneDraft(timeZone);
+  }, [timeZone]);
 
   useEffect(() => {
     async function loadBroadcasts() {
@@ -236,7 +240,8 @@ export default function AdminSettings() {
     }
   };
 
-  const saveScheduleChanges = async () => {
+  const saveAllSystemSettings = async () => {
+    if (typeof window === 'undefined') return;
     if (scheduleDraft.workingDays.length === 0) {
       toast('Select at least one working day');
       return;
@@ -249,9 +254,33 @@ export default function AdminSettings() {
       toast('End time must be later than start time');
       return;
     }
-    setScheduleSaving(true);
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      toast('Sign in to save settings');
+      return;
+    }
+    setSettingsSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/schedule`, {
+      const tzRes = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/display-timezone`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ display_timezone: displayTimezoneDraft }),
+      });
+      if (!tzRes.ok) {
+        const err = await tzRes.json().catch(() => ({}));
+        const msg =
+          typeof err.detail === 'string'
+            ? err.detail
+            : Array.isArray(err.detail)
+              ? err.detail[0]?.msg
+              : 'Failed to save timezone';
+        throw new Error(msg || 'Failed to save timezone');
+      }
+
+      const schedRes = await fetch(`${API_BASE}/api/tenants/${TENANT_ID}/schedule`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -260,13 +289,18 @@ export default function AdminSettings() {
           end_time: scheduleDraft.endTime,
         }),
       });
-      if (!res.ok) throw new Error('Failed to save');
+      if (!schedRes.ok) {
+        throw new Error('Failed to save agent schedule');
+      }
+
+      setTimeZone(displayTimezoneDraft);
+      await refreshTenantTimezone();
       setSchedule(scheduleDraft);
-      toast('Settings saved');
-    } catch {
-      toast('Failed to save schedule');
+      toast('Changes saved successfully');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to save settings');
     } finally {
-      setScheduleSaving(false);
+      setSettingsSaving(false);
     }
   };
 
@@ -282,74 +316,13 @@ export default function AdminSettings() {
         getDayData: (id) => getDayAttendance(id, schedule.workingDays),
         year: reportYear,
         month: reportMonth - 1,
+        timeZone,
       });
       toast("Report downloaded");
     } catch (e) {
       toast("Failed to generate report");
     } finally {
       setReportDownloading(false);
-    }
-  };
-
-  const fetchOpenAIConfig = useCallback(async () => {
-    try {
-      const r = await fetch(`${API_BASE}/api/ai/openai-config`);
-      const data = await r.json();
-      setOpenaiKeyConfigured(!!data.key_configured);
-    } catch {
-      setOpenaiKeyConfigured(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchOpenAIConfig();
-  }, [fetchOpenAIConfig]);
-
-  const saveOpenAIKey = async () => {
-    setOpenaiKeySaving(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/ai/openai-config`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: openaiKeyInput.trim() }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(
-          typeof err.detail === "string"
-            ? err.detail
-            : err.detail?.[0]?.msg || "Failed to save key",
-        );
-      }
-      const data = await res.json();
-      setOpenaiKeyConfigured(!!data.key_configured);
-      setOpenaiKeyInput('');
-      toast("API key saved successfully.");
-    } catch (e: unknown) {
-      toast(e instanceof Error ? e.message : "Failed to save key");
-    } finally {
-      setOpenaiKeySaving(false);
-    }
-  };
-
-  const fetchOpenAIUsage = async () => {
-    setOpenaiUsageLoading(true);
-    setOpenaiUsageError(null);
-    setOpenaiUsage(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/ai/openai-usage`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Error ${res.status}`);
-      }
-      const data = await res.json();
-      setOpenaiUsage(data);
-      toast('Usage fetched');
-    } catch (e: unknown) {
-      setOpenaiUsageError(e instanceof Error ? e.message : 'Failed to fetch usage');
-      toast('Failed to fetch usage');
-    } finally {
-      setOpenaiUsageLoading(false);
     }
   };
 
@@ -391,91 +364,43 @@ export default function AdminSettings() {
         <div className="bg-sidebar rounded-lg p-6 border border-border space-y-6">
           <div>
             <h3 className="font-semibold text-text-primary mb-4">System Configuration</h3>
-            <div className="space-y-4">
-              <div className="pt-0">
-                <h4 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-                  <Key className="w-4 h-4" />
-                  OpenAI (GPT) API
-                </h4>
-                <p className="text-xs text-text-secondary mb-3">
-                  The bot is built on OpenAI. Set your API key here; the bot will use it for chat. You can change the key anytime.
-                </p>
-                <div className="flex flex-wrap gap-2 items-end">
-                  <div className="flex-1 min-w-[200px] flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-panel">
-                    <input
-                      type={showOpenaiKey ? 'text' : 'password'}
-                      value={openaiKeyInput}
-                      onChange={(e) => setOpenaiKeyInput(e.target.value)}
-                      placeholder="sk-..."
-                      className="flex-1 min-w-0 bg-transparent border-0 p-0 text-sm focus:outline-none focus:ring-0 font-mono"
-                      aria-label="OpenAI API key"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowOpenaiKey((v) => !v)}
-                      className="p-1 rounded hover:bg-white/80 text-text-muted shrink-0"
-                      aria-label={showOpenaiKey ? 'Hide API key' : 'Show API key'}
-                    >
-                      {showOpenaiKey ? (
-                        <EyeOff className="w-3.5 h-3.5" />
-                      ) : (
-                        <Eye className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (openaiKeyInput && navigator.clipboard?.writeText) {
-                          navigator.clipboard.writeText(openaiKeyInput).catch(() => undefined);
-                          toast('Copied to clipboard');
-                        }
-                      }}
-                      className="p-1 rounded hover:bg-white/80 text-text-muted shrink-0"
-                      aria-label="Copy API key"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={saveOpenAIKey}
-                    disabled={openaiKeySaving || !openaiKeyInput.trim()}
-                    className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {openaiKeySaving ? 'Saving…' : 'Save key'}
-                  </button>
-                </div>
-                <p className="mt-1.5 text-[11px] text-text-muted">
-                  {openaiKeyConfigured ? 'Key configured. Bot will use this key.' : 'No API key set. Add a key so the bot can respond.'}
-                </p>
+            <p className="text-xs text-text-secondary mb-4">
+              The AI bot uses your OpenAI API key from the server environment variable{' '}
+              <span className="font-mono text-text-primary">OPENAI_API_KEY</span> (for example in the Render
+              dashboard). Updating it there changes what the backend uses; it is not editable from this page.
+            </p>
+          </div>
 
-                <div className="mt-4 pt-4 border-t border-border">
-                  <h5 className="text-xs font-semibold text-text-primary mb-2 flex items-center gap-1.5">
-                    <BarChart3 className="w-3.5 h-3.5" />
-                    Usage
-                  </h5>
-                  <p className="text-[11px] text-text-secondary mb-2">
-                    Fetch token and cost usage from OpenAI for the configured key (last 30 days).
-                  </p>
-                  <button
-                    type="button"
-                    onClick={fetchOpenAIUsage}
-                    disabled={openaiUsageLoading || !openaiKeyConfigured}
-                    className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-text-primary hover:bg-panel disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {openaiUsageLoading ? 'Loading…' : 'Fetch usage'}
-                  </button>
-                  {openaiUsageError && (
-                    <p className="mt-2 text-xs text-status-error">{openaiUsageError}</p>
-                  )}
-                  {openaiUsage != null && (
-                    <div className="mt-3 p-3 rounded-lg bg-panel border border-border text-xs overflow-x-auto max-h-48 overflow-y-auto">
-                      <pre className="whitespace-pre-wrap break-words text-text-primary">
-                        {JSON.stringify(openaiUsage, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                </div>
+          <div className="border-t border-border pt-6">
+            <h3 className="font-semibold text-text-primary mb-2 flex items-center gap-2">
+              <Globe className="w-4 h-4" />
+              Display timezone
+            </h3>
+            <p className="text-xs text-text-secondary mb-4">
+              All agents and admins see message times, conversation lists, notifications, and attendance labels in
+              this timezone. Data stays stored in UTC; only display changes when you update this.
+            </p>
+            <div className="space-y-3 max-w-xl">
+              <div>
+                <label htmlFor="tenant-timezone" className="block text-xs font-medium text-text-primary mb-1">
+                  Timezone
+                </label>
+                <select
+                  id="tenant-timezone"
+                  value={displayTimezoneDraft}
+                  onChange={(e) => setDisplayTimezoneDraft(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  {TIMEZONE_GROUPS.map((g) => (
+                    <optgroup key={g.region} label={g.region}>
+                      {g.zones.map((z) => (
+                        <option key={z.id} value={z.id}>
+                          {z.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
               </div>
             </div>
           </div>
@@ -543,12 +468,15 @@ export default function AdminSettings() {
           <div className="border-t border-border pt-6">
             <button
               type="button"
-              onClick={saveScheduleChanges}
-              disabled={scheduleSaving}
+              onClick={() => void saveAllSystemSettings()}
+              disabled={settingsSaving}
               className="bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary-dark transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {scheduleSaving ? 'Saving...' : 'Save Changes'}
+              {settingsSaving ? 'Saving…' : 'Save Changes'}
             </button>
+            <p className="mt-2 text-[11px] text-text-muted">
+              Saves display timezone and agent online schedule together.
+            </p>
           </div>
         </div>
 

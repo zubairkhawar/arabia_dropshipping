@@ -18,6 +18,7 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     created_at: datetime
+    tenant_display_timezone: str = "UTC"
 
     class Config:
         from_attributes = True

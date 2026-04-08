@@ -63,9 +63,40 @@ _openai_api_key_override: Optional[str] = None
 
 
 def get_openai_api_key() -> Optional[str]:
-    return _openai_api_key_override or settings.openai_api_key
+    # Environment key wins over a runtime/DB override so hosting dashboards (e.g. Render) stay canonical.
+    env_key = (settings.openai_api_key or "").strip()
+    if env_key:
+        return env_key
+    override = (_openai_api_key_override or "").strip()
+    return override or None
 
 
 def set_openai_api_key_override(key: Optional[str]) -> None:
     global _openai_api_key_override
     _openai_api_key_override = key
+
+
+def hydrate_openai_api_key_from_db() -> None:
+    """
+    If OPENAI_API_KEY is not set in the environment, load a tenant-stored key from the DB.
+    When the host (e.g. Render) provides OPENAI_API_KEY, that value is always used — the DB
+    is not applied on startup so dashboard env vars stay authoritative.
+    """
+    env_key = (settings.openai_api_key or "").strip()
+    if env_key:
+        return
+    try:
+        from database import SessionLocal
+        from models import Tenant
+
+        db = SessionLocal()
+        try:
+            for t in db.query(Tenant).order_by(Tenant.id.asc()).all():
+                raw = getattr(t, "openai_api_key", None)
+                if raw and str(raw).strip():
+                    set_openai_api_key_override(str(raw).strip())
+                    return
+        finally:
+            db.close()
+    except Exception:
+        pass

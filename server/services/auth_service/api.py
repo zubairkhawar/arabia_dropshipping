@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db
+from models import Tenant
 from services.auth_service.models import User
 from services.auth_service.schemas import (
     ForgotPasswordRequest,
@@ -39,7 +40,11 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
-def _create_user_response(user: User) -> UserResponse:
+def _create_user_response(user: User, db: Session) -> UserResponse:
+    tz = "UTC"
+    tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id).first()
+    if tenant is not None and getattr(tenant, "display_timezone", None):
+        tz = (tenant.display_timezone or "UTC").strip() or "UTC"
     return UserResponse(
         id=user.id,
         email=user.email,
@@ -47,6 +52,7 @@ def _create_user_response(user: User) -> UserResponse:
         role=user.role,
         is_active=user.is_active,
         created_at=user.created_at,
+        tenant_display_timezone=tz,
     )
 
 
@@ -136,7 +142,7 @@ async def register(payload: UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-    return _create_user_response(user)
+    return _create_user_response(user, db)
 
 
 @router.post("/login", response_model=Token)
@@ -178,11 +184,14 @@ async def login(
 
 
 @router.get("/me", response_model=UserResponse)
-async def read_current_user(current_user: User = Depends(get_current_user)):
+async def read_current_user(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     Return the current authenticated user from the JWT.
     """
-    return _create_user_response(current_user)
+    return _create_user_response(current_user, db)
 
 
 @router.put("/me/password")

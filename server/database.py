@@ -108,6 +108,44 @@ def ensure_agent_read_state_tables() -> None:
         pass
 
 
+def ensure_tenant_openai_api_key_column() -> None:
+    try:
+        insp = inspect(engine)
+        if "tenants" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("tenants")}
+    except Exception:
+        return
+    if "openai_api_key" in cols:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE tenants ADD COLUMN openai_api_key TEXT"))
+    except Exception:
+        pass
+
+
+def ensure_tenant_display_timezone_column() -> None:
+    try:
+        insp = inspect(engine)
+        if "tenants" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("tenants")}
+    except Exception:
+        return
+    if "display_timezone" in cols:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE tenants ADD COLUMN display_timezone VARCHAR NOT NULL DEFAULT 'UTC'"
+                )
+            )
+    except Exception:
+        pass
+
+
 def ensure_user_avatar_url_column() -> None:
     try:
         insp = inspect(engine)

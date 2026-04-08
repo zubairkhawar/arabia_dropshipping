@@ -340,7 +340,12 @@ async def process_customer_bot_message(
             team = TEAM_NEW_CUSTOMER
         else:
             team = exp_team or TEAM_BEGINNER
-        f = {**flow, "step": "awaiting_agent", "intro_shown": True}
+        f = {
+            **flow,
+            "step": "awaiting_agent",
+            "intro_shown": True,
+            "pending_handoff_team": team,
+        }
         return save(
             f,
             _t(flow_lang, MSGS["connecting"]),
@@ -449,16 +454,18 @@ async def process_customer_bot_message(
             "expert": TEAM_EXPERT,
         }
         if c2 in team_map:
+            routed = team_map[c2]
             f = {
                 **flow,
-                "experience_team": team_map[c2],
+                "experience_team": routed,
                 "step": "awaiting_agent",
                 "lang": flow_lang,
+                "pending_handoff_team": routed,
             }
             return save(
                 f,
                 _t(flow_lang, MSGS["connecting"]),
-                team=team_map[c2],
+                team=routed,
                 esc=True,
             )
         return save(
@@ -480,7 +487,12 @@ async def process_customer_bot_message(
                 skip_api=True,
             )
         if choice == "support":
-            f = {**flow, "step": "awaiting_agent", "lang": flow_lang}
+            f = {
+                **flow,
+                "step": "awaiting_agent",
+                "lang": flow_lang,
+                "pending_handoff_team": TEAM_NEW_CUSTOMER,
+            }
             return save(
                 f,
                 _t(flow_lang, MSGS["connecting"]),
@@ -502,10 +514,42 @@ async def process_customer_bot_message(
 
     if step == "awaiting_agent":
         if flow.get("customer_kind") == "existing" and flow.get("verified"):
-            nf = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
-            return save(nf, _t(flow_lang, MSGS["verified_menu"]), skip_api=False)
-        nf = {**flow, "customer_kind": "new", "step": "new_main_menu", "lang": flow_lang}
-        return save(nf, _t(flow_lang, MSGS["new_welcome"]), skip_api=True)
+            team = (
+                flow.get("pending_handoff_team")
+                or flow.get("experience_team")
+                or TEAM_BEGINNER
+            )
+            f = {
+                **flow,
+                "step": "awaiting_agent",
+                "lang": flow_lang,
+                "pending_handoff_team": team,
+            }
+            return save(
+                f,
+                _t(flow_lang, MSGS["handoff_retry"]),
+                team=team,
+                esc=True,
+                skip_api=False,
+            )
+        if flow.get("customer_kind") == "new":
+            team = flow.get("pending_handoff_team") or TEAM_NEW_CUSTOMER
+            f = {
+                **flow,
+                "customer_kind": "new",
+                "step": "awaiting_agent",
+                "lang": flow_lang,
+                "pending_handoff_team": team,
+            }
+            return save(
+                f,
+                _t(flow_lang, MSGS["handoff_retry"]),
+                team=team,
+                esc=True,
+                skip_api=True,
+            )
+        nf = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
+        return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=False)
 
     # Unknown step — reset
     f = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}

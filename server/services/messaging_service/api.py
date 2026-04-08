@@ -23,7 +23,11 @@ from config import settings
 from services.ai_orchestrator_service.services import AIOrchestrator
 from langchain_bot import ArabiaLangChainBot
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
-from services.customer_bot_flow import format_kb_reply, process_customer_bot_message
+from services.customer_bot_flow import (
+    format_kb_reply,
+    process_customer_bot_message,
+    resolve_bot_template,
+)
 from services.agent_routing_service.api import assign_from_bot_flow
 from services.agent_portal_service.unread_compute import _inbox_unread_for_conversation
 from services.agent_portal_service.broadcast import (
@@ -1188,6 +1192,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 customer.id,
                 store.id,
             )
+        elif assign_result.agent_id is None and assign_result.reason == "no_available_agent":
+            extra = resolve_bot_template(
+                bf_lang or detected_language, "handoff_unavailable"
+            )
+            if extra:
+                reply_text = f"{(reply_text or '').strip()}\n\n{extra}".strip()
 
     customer_msg = Message(
         conversation_id=conversation.id,

@@ -49,6 +49,14 @@ import { useTeams } from '@/contexts/TeamsContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { useDmChats } from '@/contexts/DmChatsContext';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
+import {
+  addDaysToCalendarKey,
+  dateKeyInTimeZone,
+  formatCompactActivity,
+  formatTime12hInZone,
+  formatWeekdayShortMonthDayInZone,
+} from '@/lib/tenant-time';
 import { uploadAttachmentToR2 } from '@/lib/media-upload';
 
 interface MessageAttachment {
@@ -220,7 +228,7 @@ const defaultInternalMessages: Message[] = [
     content: 'Hey team, customer on order #12345 is asking about delivery ETA.',
     sender: 'agent',
     senderName: 'You',
-    timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    timestamp: formatTime12hInZone(new Date(), 'UTC'),
     sentAt: new Date().toISOString(),
   },
   {
@@ -228,7 +236,7 @@ const defaultInternalMessages: Message[] = [
     content: "I'll keep an eye on logistics updates for this one.",
     sender: 'agent',
     senderName: 'Hamza',
-    timestamp: new Date(Date.now() - 60000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    timestamp: formatTime12hInZone(new Date(Date.now() - 60000), 'UTC'),
     sentAt: new Date(Date.now() - 60000).toISOString(),
     reactions: [
       { emoji: '👍', userId: 'hamza', userName: 'Hamza', reactedAt: new Date(Date.now() - 120000).toISOString() },
@@ -241,7 +249,7 @@ const defaultInternalMessages: Message[] = [
     content: 'If it escalates, feel free to transfer to me.',
     sender: 'agent',
     senderName: 'Sarah',
-    timestamp: new Date(Date.now() - 120000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    timestamp: formatTime12hInZone(new Date(Date.now() - 120000), 'UTC'),
     sentAt: new Date(Date.now() - 120000).toISOString(),
   },
 ];
@@ -266,6 +274,7 @@ export function ChatWindow({
   broadcastMode = false,
 }: ChatWindowProps) {
   const pathname = usePathname();
+  const { timeZone } = useTenantTimezone();
   const { avatarUrl: agentAvatarUrl, fullName: agentFullName } = useAgentProfile();
   const inboxConv = useInboxConversations();
   const { teams } = useTeams();
@@ -517,7 +526,7 @@ export function ChatWindow({
         sender: 'agent' as const,
         senderName: m.senderName,
         senderAgentId: Number.parseInt(m.senderAgentId, 10) || undefined,
-        timestamp: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        timestamp: formatTime12hInZone(new Date(m.createdAt), timeZone),
         sentAt: m.createdAt,
         replyToMessageId: m.replyToMessageId,
         replyTo:
@@ -546,7 +555,7 @@ export function ChatWindow({
       };
     });
     setMessages(mapped);
-  }, [isInternalChat, isDmPage, dmSlug, getMessagesBySlug]);
+  }, [isInternalChat, isDmPage, dmSlug, getMessagesBySlug, timeZone]);
 
   const [inputValue, setInputValue] = useState('');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -940,7 +949,7 @@ export function ChatWindow({
         senderAgentId: m.sender_agent_id ?? undefined,
         postedByAdmin: postedByAdmin || undefined,
         channelTeamId: m.team_id,
-        timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        timestamp: formatTime12hInZone(new Date(m.created_at), timeZone),
         sentAt: m.created_at,
         attachment,
         replyTo: deletedForEveryone ? undefined : payload.replyTo,
@@ -959,7 +968,7 @@ export function ChatWindow({
           : undefined,
       };
     },
-    [broadcastMode, viewerAgentId, teamId],
+    [broadcastMode, viewerAgentId, teamId, timeZone],
   );
 
   const fetchTeamMessagesSince = useCallback(
@@ -1494,7 +1503,7 @@ export function ChatWindow({
         content,
         sender: 'ai' as const,
         senderName: 'System',
-        timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        timestamp: formatTime12hInZone(now, timeZone),
         sentAt: now.toISOString(),
       },
     ]);
@@ -1548,24 +1557,22 @@ export function ChatWindow({
     const diff = (Date.now() - d.getTime()) / 1000;
     if (diff < 60) return 'Just now';
     if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
-    if (diff < 86400) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    return formatCompactActivity(iso, timeZone);
   };
 
   const formatMessageTime = (sentAt?: string, fallbackTimestamp?: string) => {
-    if (sentAt) return new Date(sentAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (sentAt) return formatTime12hInZone(new Date(sentAt), timeZone);
     return fallbackTimestamp ?? '';
   };
 
   /** Message info modal: muted date label + time (today / yesterday / calendar date). */
   const formatSoftMessageInfoTime = (d: Date): ReactNode => {
     if (Number.isNaN(d.getTime())) return '—';
-    const dayStart = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-    const d0 = dayStart(d);
-    const t0 = dayStart(new Date());
-    const diffDays = Math.round((t0 - d0) / 86400000);
-    const timePart = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    if (diffDays === 0) {
+    const msgKey = dateKeyInTimeZone(d, timeZone);
+    const todayKey = dateKeyInTimeZone(new Date(), timeZone);
+    const yKey = addDaysToCalendarKey(todayKey, -1);
+    const timePart = formatTime12hInZone(d, timeZone);
+    if (msgKey === todayKey) {
       return (
         <>
           <span className="text-text-muted">Today </span>
@@ -1573,7 +1580,7 @@ export function ChatWindow({
         </>
       );
     }
-    if (diffDays === 1) {
+    if (msgKey === yKey) {
       return (
         <>
           <span className="text-text-muted">Yesterday </span>
@@ -1581,7 +1588,12 @@ export function ChatWindow({
         </>
       );
     }
-    const datePart = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+    const datePart = d.toLocaleDateString('en-US', {
+      timeZone,
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+    });
     return (
       <>
         <span className="text-text-muted">{datePart} </span>
@@ -1592,12 +1604,12 @@ export function ChatWindow({
 
   const formatDateLabel = (iso: string) => {
     const d = new Date(iso);
-    return d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+    return formatWeekdayShortMonthDayInZone(d, timeZone);
   };
 
   const getMessageDateKey = (m: Message) => {
-    if (m.sentAt) return m.sentAt.slice(0, 10);
-    return new Date().toISOString().slice(0, 10);
+    if (m.sentAt) return dateKeyInTimeZone(new Date(m.sentAt), timeZone);
+    return dateKeyInTimeZone(new Date(), timeZone);
   };
 
   const isEmojiOnly = (text: string) => {
@@ -2293,7 +2305,7 @@ export function ChatWindow({
       content: m.content,
       sender: 'agent',
       senderName: 'You',
-      timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      timestamp: formatTime12hInZone(now, timeZone),
       sentAt: now.toISOString(),
       replyTo: m.replyTo,
       replyToMessageId: m.replyToMessageId,
@@ -2415,7 +2427,7 @@ export function ChatWindow({
       content: text || (pendingAttachment?.type === 'voice' ? 'Voice message' : pendingAttachment?.name || 'Attachment'),
       sender: 'agent' as const,
       senderName: showBroadcastInput ? 'Admin' : 'You',
-      timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      timestamp: formatTime12hInZone(now, timeZone),
       sentAt: now.toISOString(),
       replyTo: replyingTo ?? undefined,
       attachment: pendingAttachment ?? undefined,
@@ -3079,7 +3091,7 @@ export function ChatWindow({
                             content,
                             sender: 'ai',
                             senderName: 'System',
-                            timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                            timestamp: formatTime12hInZone(now, timeZone),
                             sentAt: now.toISOString(),
                           };
                           inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
@@ -3121,7 +3133,7 @@ export function ChatWindow({
                             content: 'Conversation closed by agent.',
                             sender: 'ai',
                             senderName: 'System',
-                            timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                            timestamp: formatTime12hInZone(now, timeZone),
                             sentAt: now.toISOString(),
                           };
                           inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
@@ -3289,7 +3301,7 @@ export function ChatWindow({
                         content: noteText,
                         sender: 'ai',
                         senderName: 'System',
-                        timestamp: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                        timestamp: formatTime12hInZone(now, timeZone),
                         sentAt: now.toISOString(),
                       };
                       inboxConv.appendMessage(convId, systemMsg as InboxMessage);

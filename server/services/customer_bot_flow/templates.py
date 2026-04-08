@@ -172,6 +172,34 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Thora intezar karein…"
         ),
     },
+    "handoff_retry": {
+        "english": (
+            "Still looking for an available agent 👨‍💼\n"
+            "Please wait — we'll connect you as soon as someone is free."
+        ),
+        "arabic": (
+            "ما زلنا نبحث عن موظف متاح 👨‍💼\n"
+            "يرجى الانتظار — سنوصلك فور توفر أحد."
+        ),
+        "roman_urdu": (
+            "Abhi bhi available agent dhoondh rahe hain 👨‍💼\n"
+            "Thora intezar karein — jaisay hi koi free ho ga connect kar dein ge."
+        ),
+    },
+    "handoff_unavailable": {
+        "english": (
+            "⚠️ No agents are online right now.\n"
+            "Please try again in a few minutes, or leave your message here and we'll reply when we're back."
+        ),
+        "arabic": (
+            "⚠️ لا يوجد موظفون متصلون حاليًا.\n"
+            "يرجى المحاولة بعد قليل، أو اترك رسالتك هنا وسنرد عند العودة."
+        ),
+        "roman_urdu": (
+            "⚠️ Abhi koi agent online nahi hai.\n"
+            "Kuch dair baad dobara try karein, ya yahin message chhor dein — wapas aate hi jawab dein ge."
+        ),
+    },
     "experience": {
         "english": (
             "How much experience do you have in dropshipping?\n\n"
@@ -217,6 +245,14 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         ),
     },
 }
+
+
+def resolve_bot_template(lang: str, template_id: str) -> str:
+    """Resolve fixed bot copy for a language (used when the messaging layer augments replies)."""
+    table = BOT_FLOW_TEMPLATES.get(template_id) or {}
+    if not table:
+        return ""
+    return table.get(lang) or table.get("english") or next(iter(table.values()))
 
 
 def public_templates_payload() -> Dict[str, Any]:
