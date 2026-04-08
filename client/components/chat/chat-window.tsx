@@ -530,7 +530,7 @@ export function ChatWindow({
         messageStatus: outgoingDm
           ? {
               sent: true,
-              delivered: Boolean(m.peerDeliveredAt),
+              delivered: true,
               read: Boolean(m.peerReadAt),
             }
           : undefined,
@@ -628,8 +628,6 @@ export function ChatWindow({
   const [dmNewBelowOpen, setDmNewBelowOpen] = useState(false);
   const [dmLastReadMessageId, setDmLastReadMessageId] = useState(0);
   const [inboxNewBelowOpen, setInboxNewBelowOpen] = useState(false);
-  const [copyToastVisible, setCopyToastVisible] = useState(false);
-  const copyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [threadSearchOpen, setThreadSearchOpen] = useState(false);
   const [threadSearchQuery, setThreadSearchQuery] = useState('');
   const [threadMessageEdit, setThreadMessageEdit] = useState<ThreadMessageEdit | null>(null);
@@ -1481,6 +1479,39 @@ export function ChatWindow({
     return fallbackTimestamp ?? '';
   };
 
+  /** Message info modal: muted date label + time (today / yesterday / calendar date). */
+  const formatSoftMessageInfoTime = (d: Date): ReactNode => {
+    if (Number.isNaN(d.getTime())) return '—';
+    const dayStart = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const d0 = dayStart(d);
+    const t0 = dayStart(new Date());
+    const diffDays = Math.round((t0 - d0) / 86400000);
+    const timePart = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (diffDays === 0) {
+      return (
+        <>
+          <span className="text-text-muted">Today </span>
+          {timePart}
+        </>
+      );
+    }
+    if (diffDays === 1) {
+      return (
+        <>
+          <span className="text-text-muted">Yesterday </span>
+          {timePart}
+        </>
+      );
+    }
+    const datePart = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+    return (
+      <>
+        <span className="text-text-muted">{datePart} </span>
+        {timePart}
+      </>
+    );
+  };
+
   const formatDateLabel = (iso: string) => {
     const d = new Date(iso);
     return d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
@@ -1928,15 +1959,6 @@ export function ChatWindow({
       el.scrollTop = el.scrollHeight;
     });
   }, [filteredMessages.length, initialScrollKey]);
-
-  const flashCopyToast = useCallback(() => {
-    if (copyToastTimerRef.current) clearTimeout(copyToastTimerRef.current);
-    setCopyToastVisible(true);
-    copyToastTimerRef.current = setTimeout(() => {
-      setCopyToastVisible(false);
-      copyToastTimerRef.current = null;
-    }, 2000);
-  }, []);
 
   const deleteMessage = async (id: number) => {
     if (isInboxPage && !isInternalChat) {
@@ -3481,9 +3503,11 @@ export function ChatWindow({
                             <span className="inline-flex items-center" aria-hidden>
                               <Check
                                 className={`h-3.5 w-3.5 stroke-[2.5] ${
-                                  message.messageStatus.delivered || message.messageStatus.read
-                                    ? 'text-[#8696a0]'
-                                    : 'text-[#8696a0]/70'
+                                  message.messageStatus.read
+                                    ? 'text-[#53bdeb]'
+                                    : message.messageStatus.delivered || message.messageStatus.read
+                                      ? 'text-[#8696a0]'
+                                      : 'text-[#8696a0]/70'
                                 }`}
                               />
                               {(message.messageStatus.delivered || message.messageStatus.read) && (
@@ -3734,10 +3758,7 @@ export function ChatWindow({
                           className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                           onClick={() => {
                             if (navigator.clipboard?.writeText) {
-                              void navigator.clipboard
-                                .writeText(message.content)
-                                .then(() => flashCopyToast())
-                                .catch(() => undefined);
+                              void navigator.clipboard.writeText(message.content).catch(() => undefined);
                             }
                             setActiveMessageMenuId(null);
                           }}
@@ -4280,15 +4301,6 @@ export function ChatWindow({
         />
       )}
 
-      {copyToastVisible && (
-        <div
-          className="pointer-events-none fixed bottom-24 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-[#111b21] px-4 py-2 text-sm font-medium text-white shadow-lg"
-          role="status"
-        >
-          Copied!
-        </div>
-      )}
-
       {threadMessageEdit && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -4400,7 +4412,6 @@ export function ChatWindow({
         }
 
         if (isDmPage && isInternalChat && targetMessage) {
-          const peerName = (title && title.trim()) || 'Recipient';
           const outgoingDmInfo = targetMessage.senderName === 'You';
           const sentDm = targetMessage.sentAt ? new Date(targetMessage.sentAt) : null;
           const sentOkDm = sentDm && !Number.isNaN(sentDm.getTime());
@@ -4410,6 +4421,12 @@ export function ChatWindow({
           const readDm = targetMessage.peerReadAt ? new Date(targetMessage.peerReadAt) : null;
           const deliveredOk = deliveredDm && !Number.isNaN(deliveredDm.getTime());
           const readOk = readDm && !Number.isNaN(readDm.getTime());
+          const deliveredAtForDisplay =
+            outgoingDmInfo && sentOkDm
+              ? deliveredOk
+                ? deliveredDm!
+                : sentDm!
+              : null;
           return (
             <div
               className="fixed inset-0 z-30 flex items-start justify-center bg-black/20 pt-20"
@@ -4438,26 +4455,32 @@ export function ChatWindow({
                   {sentOkDm && (
                     <p>
                       <span className="text-text-muted">Sent · </span>
-                      {formatReadAt(sentDm!)}
+                      {formatSoftMessageInfoTime(sentDm!)}
                     </p>
                   )}
                   {targetMessage.editedAt && (
                     <p>
                       <span className="text-text-muted">Edited · </span>
-                      {formatReadAt(new Date(targetMessage.editedAt))}
+                      {formatSoftMessageInfoTime(new Date(targetMessage.editedAt))}
                     </p>
                   )}
-                  {outgoingDmInfo && deliveredOk && (
-                    <p>
-                      <span className="text-text-muted">Delivered to {peerName} · </span>
-                      {formatReadAt(deliveredDm!)}
-                    </p>
-                  )}
-                  {outgoingDmInfo && readOk && (
-                    <p>
-                      <span className="text-text-muted">Read by {peerName} · </span>
-                      {formatReadAt(readDm!)}
-                    </p>
+                  {outgoingDmInfo && (
+                    <>
+                      <p>
+                        <span className="text-text-muted">Read · </span>
+                        {readOk ? (
+                          formatSoftMessageInfoTime(readDm!)
+                        ) : (
+                          <span className="text-text-muted tracking-[0.35em]">···</span>
+                        )}
+                      </p>
+                      {deliveredAtForDisplay && (
+                        <p>
+                          <span className="text-text-muted">Delivered · </span>
+                          {formatSoftMessageInfoTime(deliveredAtForDisplay)}
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
