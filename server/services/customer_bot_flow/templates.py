@@ -10,27 +10,52 @@ from typing import Any, Dict
 
 # Template id → language code → exact message ({placeholders} only where noted).
 BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
+    "welcome_back": {
+        "english": (
+            "Welcome back! Would you like to continue where we left off or start fresh?\n\n"
+            "1️⃣ Continue\n"
+            "2️⃣ Start fresh"
+        ),
+        "arabic": (
+            "مرحبًا بعودتك! هل تريد المتابعة من حيث توقفت أم البدء من جديد؟\n\n"
+            "1️⃣ متابعة\n"
+            "2️⃣ البدء من جديد"
+        ),
+        "roman_urdu": (
+            "Welcome back! Aap wahan se continue karna chahte hain jahan chhore the, ya naye siray se?\n\n"
+            "1️⃣ Continue\n"
+            "2️⃣ Start fresh"
+        ),
+    },
+    "resume_continued": {
+        "english": "Great — we'll pick up where you left off. 👍",
+        "arabic": "تمام — سنكمل من حيث توقفنا. 👍",
+        "roman_urdu": "Theek hai — jahan se chhore the wahan se continue karte hain. 👍",
+    },
     "entry": {
         "english": (
             "👋 Hi! Welcome to Arabia Dropshipping 🚀\n\n"
             "Are you:\n\n"
             "1️⃣ New customer\n"
             "2️⃣ Existing customer\n\n"
-            "Reply with 1 or 2 😊"
+            "Reply with 1 or 2 😊\n"
+            "Tip: type /reset anytime to restart this menu."
         ),
         "arabic": (
             "👋 السلام عليكم! مرحبًا بك في Arabia Dropshipping 🚀\n\n"
             "هل أنت:\n\n"
             "1️⃣ عميل جديد\n"
             "2️⃣ عميل حالي\n\n"
-            "يرجى الرد بـ 1 أو 2 😊"
+            "يرجى الرد بـ 1 أو 2 😊\n"
+            "لإعادة القائمة اكتب /reset"
         ),
         "roman_urdu": (
             "👋 Salam! Welcome to Arabia Dropshipping 🚀\n\n"
             "Aap new customer hain ya existing customer?\n\n"
             "1️⃣ New customer\n"
             "2️⃣ Existing customer\n\n"
-            "Reply mein 1 ya 2 likh dein 😊"
+            "Reply mein 1 ya 2 likh dein 😊\n"
+            "Menu dubara ke liye /reset likhein"
         ),
     },
     "new_welcome": {
@@ -221,9 +246,21 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         ),
     },
     "kb_wrap": {
-        "english": "💡 Here's what you need to know:\n\n{body}\n\nNeed more help? Type support 👨‍💼",
-        "arabic": "💡 إليك المعلومات:\n\n{body}\n\nلمزيد من المساعدة اكتب support 👨‍💼",
-        "roman_urdu": "💡 Yeh information aap ke liye:\n\n{body}\n\nMazeed madad ke liye support likhein 👨‍💼",
+        "english": (
+            "💡 Here's what you need to know:\n\n{body}\n\n"
+            "Need more help? Type support 👨‍💼\n"
+            "To see the main choices again, type main menu."
+        ),
+        "arabic": (
+            "💡 إليك المعلومات:\n\n{body}\n\n"
+            "لمزيد من المساعدة اكتب support 👨‍💼\n"
+            "لعرض الخيارات من جديد اكتب: القائمة الرئيسية"
+        ),
+        "roman_urdu": (
+            "💡 Yeh information aap ke liye:\n\n{body}\n\n"
+            "Mazeed madad ke liye support likhein 👨‍💼\n"
+            "Menu dubara dekhne ke liye likhein: main menu"
+        ),
     },
     "products_hint": {
         "english": "Browse products section is available. You can also type your question 💬",

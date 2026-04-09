@@ -250,7 +250,13 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     const res = await fetch(url.toString());
     if (!res.ok) return [];
     const rows = (await res.json()) as ConversationSummaryApi[];
-    return isAgentPortal ? rows : rows.filter((c) => c.agent_id != null);
+    if (isAgentPortal) return rows;
+    // Admin: show assigned chats plus active bot-queue (WhatsApp/web) so handoffs and stuck flows are visible
+    return rows.filter(
+      (c) =>
+        c.agent_id != null ||
+        ((c.channel === 'whatsapp' || c.channel === 'web') && c.status === 'active'),
+    );
   }, [currentAgentId, isAgentPortal]);
 
   const mapDetailToMessages = useCallback(
@@ -391,8 +397,15 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           });
           void syncInboxReadState(convId, id);
         } else {
-          setConversations((prev) =>
-            prev.map((c) =>
+          setConversations((prev) => {
+            const exists = prev.some((c) => c.id === convId);
+            if (!exists) {
+              queueMicrotask(() => {
+                void refreshConversations();
+              });
+              return prev;
+            }
+            return prev.map((c) =>
               c.id === convId
                 ? {
                     ...c,
@@ -401,8 +414,8 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
                     lastActivityAt: 'Just now',
                   }
                 : c,
-            ),
-          );
+            );
+          });
         }
         return;
       }
@@ -437,7 +450,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         });
       }
     });
-  }, [subscribe, syncInboxReadState, timeZone]);
+  }, [subscribe, syncInboxReadState, timeZone, refreshConversations]);
 
   useEffect(() => {
     let cancelled = false;

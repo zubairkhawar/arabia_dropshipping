@@ -95,6 +95,55 @@ def wants_human_agent(text: str) -> bool:
     return False
 
 
+def wants_bot_flow_reset(text: str) -> bool:
+    """
+    Customer wants to restart the scripted bot (clear stale session / see 1–2 entry again).
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    s = _nfkc(raw)
+    lowered = s.lower()
+
+    latin = (
+        "start over",
+        "start again",
+        "restart",
+        "main menu",
+        "go to menu",
+        "back to menu",
+        "new chat",
+        "reset chat",
+        "begin again",
+        "from the beginning",
+        "wapas menu",
+        "dobara menu",
+        "dubara se",
+        "pehle wala menu",
+        "naya chat",
+    )
+    if any(p in lowered for p in latin):
+        return True
+
+    if any(
+        ("\u0600" <= ch <= "\u06FF")
+        or ("\u0750" <= ch <= "\u077F")
+        or ("\u08A0" <= ch <= "\u08FF")
+        for ch in s
+    ):
+        arabic = (
+            "القائمة الرئيسية",
+            "من البداية",
+            "ابدأ من جديد",
+            "من جديد",
+            "القائمة",
+        )
+        if any(m in s for m in arabic):
+            return True
+
+    return False
+
+
 def solo_menu_digit(text: str, allowed: str) -> str | None:
     """
     If the message is essentially a single menu digit (incl. Arabic-Indic), return it.

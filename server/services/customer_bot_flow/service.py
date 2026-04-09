@@ -9,14 +9,21 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Tuple
 
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from models import Conversation, Order
+from config import settings
+from models import Conversation, Message, Order
 from services.ai_orchestrator_service.services import AIOrchestrator
 from services.store_integration_service.client import StoreIntegrationClient
-from services.human_handoff_intent import solo_menu_digit, wants_human_agent
+from services.human_handoff_intent import (
+    solo_menu_digit,
+    wants_bot_flow_reset,
+    wants_human_agent,
+)
 from services.customer_bot_flow.templates import BOT_FLOW_TEMPLATES
 
 BOT_FLOW_KEY = "bot_flow"
@@ -149,6 +156,62 @@ def _state_back_to_customer_pick(flow: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _naive_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
+def _last_customer_message_created_at(db: Session, conversation_id: int) -> Optional[datetime]:
+    row = (
+        db.query(Message)
+        .filter(
+            Message.conversation_id == conversation_id,
+            Message.sender_type == "customer",
+        )
+        .order_by(desc(Message.created_at))
+        .first()
+    )
+    return row.created_at if row else None
+
+
+def _apply_inactivity_bot_reset(
+    db: Session,
+    conversation: Conversation,
+    meta: Dict[str, Any],
+    flow: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Clear bot_flow if the last customer message was more than N days ago (0 = disabled)."""
+    if flow.get("step") == "awaiting_resume_choice":
+        return meta, flow
+    days = int(getattr(settings, "customer_bot_inactivity_reset_days", 7) or 0)
+    if days <= 0:
+        return meta, flow
+    last_at = _last_customer_message_created_at(db, conversation.id)
+    anchor: Optional[datetime] = last_at or conversation.created_at
+    if anchor is None:
+        return meta, flow
+    if datetime.utcnow() - _naive_utc(anchor) <= timedelta(days=days):
+        return meta, flow
+    return {**meta, BOT_FLOW_KEY: {}}, {}
+
+
+def _flow_is_tabula_rasa(flow: Dict[str, Any]) -> bool:
+    """True when user is still only on the new/existing entry (no path chosen yet)."""
+    if not flow:
+        return True
+    if flow.get("customer_kind"):
+        return False
+    step = flow.get("step") or "awaiting_customer_type"
+    if step == "awaiting_resume_choice":
+        return False
+    return step in ("awaiting_customer_type", "entry")
+
+
+def _is_slash_reset_command(text: str) -> bool:
+    return bool(re.match(r"^/reset\s*$", (text or "").strip(), re.IGNORECASE))
+
+
 def _parse_choice(text: str, mapping: Dict[str, str]) -> Optional[str]:
     raw = (text or "").strip().lower()
     raw = unicodedata.normalize("NFKC", raw)
@@ -267,6 +330,7 @@ async def process_customer_bot_message(
 
     meta = _normalize_meta(conversation)
     flow = _get_flow(meta)
+    meta, flow = _apply_inactivity_bot_reset(db, conversation, meta, flow)
 
     lang = await orchestrator.detect_language(user_message)
     if not (user_message or "").strip():
@@ -321,6 +385,44 @@ async def process_customer_bot_message(
 
     text = (user_message or "").strip()
 
+    if _is_slash_reset_command(text):
+        nf = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
+        return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=False)
+
+    if step == "awaiting_resume_choice":
+        snap = flow.get("resume_snapshot")
+        if not isinstance(snap, dict):
+            snap = {}
+        choice = _parse_choice(
+            text,
+            {
+                "1": "continue",
+                "2": "fresh",
+                "continue": "continue",
+                "c": "continue",
+                "resume": "continue",
+                "fresh": "fresh",
+                "new": "fresh",
+                "restart": "fresh",
+                "start fresh": "fresh",
+                "start over": "fresh",
+            },
+        )
+        if choice == "continue":
+            restored = {**snap}
+            restored.pop("resume_snapshot", None)
+            restored["lang"] = flow_lang
+            return save(restored, _t(flow_lang, MSGS["resume_continued"]))
+        if choice == "fresh":
+            nf = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
+            return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=False)
+        return save(flow, _t(flow_lang, MSGS["welcome_back"]))
+
+    # Clear stale WhatsApp/web bot state (e.g. old "verified" session) — before handoff
+    if wants_bot_flow_reset(text):
+        nf = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
+        return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=False)
+
     # Global handoff: any step (incl. verification) when user asks for a human agent
     if wants_human_agent(text):
         kind = flow.get("customer_kind")
@@ -341,6 +443,16 @@ async def process_customer_bot_message(
             team=team,
             esc=True,
         )
+
+    if not _flow_is_tabula_rasa(flow) and _looks_like_greeting(text):
+        snap = {k: v for k, v in flow.items() if k != "resume_snapshot"}
+        wb: Dict[str, Any] = {
+            "step": "awaiting_resume_choice",
+            "intro_shown": True,
+            "lang": flow_lang,
+            "resume_snapshot": snap,
+        }
+        return save(wb, _t(flow_lang, MSGS["welcome_back"]))
 
     # New / existing qualification (first turns)
     if not flow.get("customer_kind") and step in (
@@ -419,12 +531,7 @@ async def process_customer_bot_message(
             return save(f, _t(flow_lang, MSGS["ask_order"]))
         if _looks_like_greeting(text):
             f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
-            return ai_forward(
-                "[Verified customer; short warm reply. They may choose 1 track, 2 details, 3 support, or ask anything.] "
-                + text,
-                f,
-                skip_api=True,
-            )
+            return save(f, _t(flow_lang, MSGS["verified_menu"]))
         f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
         return ai_forward(
             "[Existing verified customer — answer from knowledge base, concise.] " + text,
