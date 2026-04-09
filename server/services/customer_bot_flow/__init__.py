@@ -3,6 +3,7 @@ from services.customer_bot_flow.service import (
     format_kb_reply,
     process_customer_bot_message,
 )
+from services.customer_bot_flow.session_reset import release_agent_and_clear_bot_flow
 from services.customer_bot_flow.templates import (
     BOT_FLOW_TEMPLATES,
     public_templates_payload,
@@ -15,5 +16,6 @@ __all__ = [
     "format_kb_reply",
     "process_customer_bot_message",
     "public_templates_payload",
+    "release_agent_and_clear_bot_flow",
     "resolve_bot_template",
 ]

@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from config import get_openai_api_key, set_openai_api_key_override
 from services.auth_service.api import get_current_user, get_current_user_optional
 from services.auth_service.models import User
-from services.ai_orchestrator_service.services import _clear_llm_cache
 from services.ai_orchestrator_service.services import AIOrchestrator
 from database import get_db
 from langchain_bot import ArabiaLangChainBot
@@ -18,6 +17,8 @@ from services.customer_bot_flow import (
     public_templates_payload,
     resolve_bot_template,
 )
+from services.customer_bot_flow.session_reset import release_agent_and_clear_bot_flow
+from services.human_handoff_intent import is_slash_reset_command
 from services.agent_portal_service.broadcast import notify_bot_handoff_assigned
 from services.agent_routing_service.api import assign_from_bot_flow
 
@@ -70,26 +71,43 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
         detected_language = message.language or await orchestrator.detect_language(
             message.message
         )
-        db.add(
-            Message(
-                conversation_id=conversation.id,
-                content=message.message,
-                sender_type="customer",
-                sender_id=None,
-                language=detected_language,
-                created_at=datetime.utcnow(),
+        if is_slash_reset_command(message.message):
+            release_agent_and_clear_bot_flow(conversation)
+            db.add(conversation)
+            db.commit()
+            db.refresh(conversation)
+        else:
+            reply_ack = resolve_bot_template(detected_language, "agent_relay_ack")
+            db.add(
+                Message(
+                    conversation_id=conversation.id,
+                    content=message.message,
+                    sender_type="customer",
+                    sender_id=None,
+                    language=detected_language,
+                    created_at=datetime.utcnow(),
+                )
             )
-        )
-        conversation.updated_at = datetime.utcnow()
-        db.add(conversation)
-        db.commit()
-        return {
-            "reply_text": "",
-            "language": detected_language,
-            "escalate": False,
-            "human_agent_active": True,
-            "context": {"customer": {}, "recent_orders": []},
-        }
+            db.add(
+                Message(
+                    conversation_id=conversation.id,
+                    content=reply_ack,
+                    sender_type="ai",
+                    sender_id=None,
+                    language=detected_language,
+                    created_at=datetime.utcnow(),
+                )
+            )
+            conversation.updated_at = datetime.utcnow()
+            db.add(conversation)
+            db.commit()
+            return {
+                "reply_text": reply_ack,
+                "language": detected_language,
+                "escalate": False,
+                "human_agent_active": True,
+                "context": {"customer": {}, "recent_orders": []},
+            }
 
     flow = await process_customer_bot_message(
         db=db,
@@ -122,6 +140,9 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             language=detected_language,
             customer_context=customer,
             recent_orders=recent_orders,
+            fetch_context=customer_context,
+            bot_flow=flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None,
+            conversation_id=conversation.id if conversation else None,
         )
         if message.conversation_id is not None and conversation:
             db.add(
@@ -173,6 +194,9 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             language=detected_language,
             customer_context=customer,
             recent_orders=recent_orders,
+            fetch_context=customer_context if not flow.skip_store_api else None,
+            bot_flow=flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None,
+            conversation_id=conversation.id if conversation else None,
         )
         if flow.skip_store_api:
             reply_text = format_kb_reply(bf_lang or detected_language, reply_text)
@@ -328,7 +352,6 @@ async def update_openai_config(
     db.commit()
 
     set_openai_api_key_override(key if key else None)
-    _clear_llm_cache()
     out: dict = {"key_configured": bool(key)}
     if key:
         out["key_preview"] = _mask_openai_api_key(key)

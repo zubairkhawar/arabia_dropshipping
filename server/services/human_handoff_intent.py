@@ -15,6 +15,11 @@ def _nfkc(s: str) -> str:
     return unicodedata.normalize("NFKC", s or "")
 
 
+def is_slash_reset_command(text: str) -> bool:
+    """Exact `/reset` (case-insensitive, optional surrounding whitespace)."""
+    return bool(re.match(r"^/reset\s*$", (text or "").strip(), re.IGNORECASE))
+
+
 def wants_human_agent(text: str) -> bool:
     """
     True if the message clearly asks to speak with a person / agent / support human.

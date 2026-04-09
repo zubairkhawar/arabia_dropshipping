@@ -32,6 +32,23 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "تمام — سنكمل من حيث توقفنا. 👍",
         "roman_urdu": "Theek hai — jahan se chhore the wahan se continue karte hain. 👍",
     },
+    "agent_relay_ack": {
+        "english": (
+            "✅ We received your message and shared it with our team.\n"
+            "An agent will reply here as soon as they can.\n\n"
+            "To leave this chat and talk to the bot again, send /reset"
+        ),
+        "arabic": (
+            "✅ استلمنا رسالتك وتم إيصالها للفريق.\n"
+            "سيرد عليك أحد الموظفين هنا في أقرب وقت.\n\n"
+            "للعودة إلى البوت، أرسل /reset"
+        ),
+        "roman_urdu": (
+            "✅ Aap ki message mil gayi aur team ko bhej di gayi.\n"
+            "Agent jald yahin jawab dein ge.\n\n"
+            "Bot se dubara baat karne ke liye /reset bhejein"
+        ),
+    },
     "entry": {
         "english": (
             "👋 Hi! Welcome to Arabia Dropshipping 🚀\n\n"

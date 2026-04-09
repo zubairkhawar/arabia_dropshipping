@@ -2,10 +2,15 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langchain_openai import ChatOpenAI
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from config import get_openai_api_key, settings
-from models import Broadcast, KnowledgeSource, TenantSchedule
+from models import Broadcast, KnowledgeSource, Message, TenantSchedule
+from langchain_bot.context_format import (
+    build_customer_identity_summary,
+    format_orders_summary_for_llm,
+)
 from langchain_bot.prompts import build_prompt, normalize_context_text, now_utc_iso
 
 
@@ -118,6 +123,43 @@ class ArabiaLangChainBot:
             )
         return "\n".join(items)
 
+    def _conversation_history_block(
+        self,
+        conversation_id: Optional[int],
+        *,
+        limit: int = 8,
+        exclude_message_id: Optional[int] = None,
+    ) -> str:
+        """
+        Load prior turns for the system prompt.
+
+        The **current** inbound user text is passed separately as ``user_message`` in the chat
+        template; it is **not** duplicated here under normal operation because WhatsApp and
+        ``/ai/chat`` persist the customer ``Message`` only **after** ``generate_reply`` returns.
+        Optionally pass ``exclude_message_id`` if a caller ever saves the customer row first.
+        """
+        if not conversation_id:
+            return "No conversation id — thread history not loaded."
+        q = self.db.query(Message).filter(Message.conversation_id == conversation_id)
+        if exclude_message_id is not None:
+            q = q.filter(Message.id != exclude_message_id)
+        rows = q.order_by(desc(Message.id)).limit(limit).all()
+        rows.reverse()
+        if not rows:
+            return "No prior messages in this thread."
+        lines: List[str] = []
+        for m in rows:
+            label = (
+                "Customer"
+                if m.sender_type == "customer"
+                else ("Agent" if m.sender_type == "agent" else "Bot")
+            )
+            body = (m.content or "").strip().replace("\n", " ")
+            if len(body) > 600:
+                body = body[:597] + "..."
+            lines.append(f"{label}: {body}")
+        return "\n".join(lines)
+
     async def generate_reply(
         self,
         *,
@@ -127,6 +169,10 @@ class ArabiaLangChainBot:
         language: str,
         customer_context: Optional[Dict[str, Any]] = None,
         recent_orders: Optional[List[Dict[str, Any]]] = None,
+        fetch_context: Optional[Dict[str, Any]] = None,
+        bot_flow: Optional[Dict[str, Any]] = None,
+        conversation_id: Optional[int] = None,
+        exclude_history_message_id: Optional[int] = None,
     ) -> str:
         key = get_openai_api_key()
         if not key:
@@ -138,11 +184,21 @@ class ArabiaLangChainBot:
             openai_api_key=key,
         )
 
-        customer_context_text = normalize_context_text(
-            str(customer_context or {}), fallback="No customer context."
-        )
-        orders_context_text = normalize_context_text(
-            str(recent_orders or []), fallback="No order context."
+        fc = fetch_context
+        if fc is None:
+            c = customer_context or {}
+            fc = {
+                "customer": c,
+                "recent_orders": recent_orders or [],
+                "is_store_customer": bool(c.get("id")),
+                "verification_method": "none",
+                "store_context_error": None,
+            }
+        identity_block = build_customer_identity_summary(fc, bot_flow)
+        orders_block = format_orders_summary_for_llm(fc.get("recent_orders") or recent_orders or [])
+        history_block = self._conversation_history_block(
+            conversation_id,
+            exclude_message_id=exclude_history_message_id,
         )
         schedule_context = self._build_schedule_context(tenant_id)
         broadcast_context = self._build_active_broadcast_context(tenant_id)
@@ -155,11 +211,12 @@ class ArabiaLangChainBot:
             current_time=now_utc_iso(),
             channel=normalize_context_text(channel, "unknown"),
             language=normalize_context_text(language, "english"),
-            customer_context=customer_context_text,
-            orders_context=orders_context_text,
+            customer_context=identity_block,
+            orders_context=orders_block,
             schedule_context=schedule_context,
             broadcast_context=broadcast_context,
             knowledge_context=knowledge_context,
+            conversation_history=history_block,
             user_message=user_message,
         )
         response = await llm.ainvoke(messages)

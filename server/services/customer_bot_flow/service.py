@@ -20,6 +20,7 @@ from models import Conversation, Message, Order
 from services.ai_orchestrator_service.services import AIOrchestrator
 from services.store_integration_service.client import StoreIntegrationClient
 from services.human_handoff_intent import (
+    is_slash_reset_command,
     solo_menu_digit,
     wants_bot_flow_reset,
     wants_human_agent,
@@ -208,10 +209,6 @@ def _flow_is_tabula_rasa(flow: Dict[str, Any]) -> bool:
     return step in ("awaiting_customer_type", "entry")
 
 
-def _is_slash_reset_command(text: str) -> bool:
-    return bool(re.match(r"^/reset\s*$", (text or "").strip(), re.IGNORECASE))
-
-
 def _parse_choice(text: str, mapping: Dict[str, str]) -> Optional[str]:
     raw = (text or "").strip().lower()
     raw = unicodedata.normalize("NFKC", raw)
@@ -385,7 +382,7 @@ async def process_customer_bot_message(
 
     text = (user_message or "").strip()
 
-    if _is_slash_reset_command(text):
+    if is_slash_reset_command(text):
         nf = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
         return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=False)
 

@@ -28,6 +28,8 @@ from services.customer_bot_flow import (
     process_customer_bot_message,
     resolve_bot_template,
 )
+from services.customer_bot_flow.session_reset import release_agent_and_clear_bot_flow
+from services.human_handoff_intent import is_slash_reset_command
 from services.agent_routing_service.api import assign_from_bot_flow
 from services.agent_portal_service.unread_compute import _inbox_unread_for_conversation
 from services.agent_portal_service.broadcast import (
@@ -1082,38 +1084,72 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
 
     if conversation.agent_id:
         detected_language = await orchestrator.detect_language(text)
-        customer_msg = Message(
-            conversation_id=conversation.id,
-            content=text,
-            sender_type="customer",
-            sender_id=None,
-            language=detected_language,
-            created_at=datetime.utcnow(),
-            message_metadata=msg_meta,
-        )
-        db.add(customer_msg)
-        conversation.updated_at = datetime.utcnow()
-        db.add(conversation)
-        db.commit()
-        db.refresh(customer_msg)
-        ensure_receipt_for_customer_message(db, customer_msg)
-        db.commit()
-        await push_inbox_message(
-            db,
-            tenant_id,
-            conversation.agent_id,
-            conversation.id,
-            _message_dict_for_ws(db, customer_msg),
-        )
-        return {
-            "status": "ok",
-            "conversation_id": conversation.id,
-            "skipped": "human_agent",
-            "reply_text": "",
-            "language": detected_language,
-            "escalate": False,
-            "meta_response": None,
-        }
+        if is_slash_reset_command(text):
+            release_agent_and_clear_bot_flow(conversation)
+            db.add(conversation)
+            db.commit()
+            db.refresh(conversation)
+        else:
+            customer_msg = Message(
+                conversation_id=conversation.id,
+                content=text,
+                sender_type="customer",
+                sender_id=None,
+                language=detected_language,
+                created_at=datetime.utcnow(),
+                message_metadata=msg_meta,
+            )
+            reply_ack = resolve_bot_template(detected_language, "agent_relay_ack")
+            ai_ack = Message(
+                conversation_id=conversation.id,
+                content=reply_ack,
+                sender_type="ai",
+                sender_id=None,
+                language=detected_language,
+                created_at=datetime.utcnow(),
+            )
+            db.add(customer_msg)
+            db.add(ai_ack)
+            conversation.updated_at = datetime.utcnow()
+            db.add(conversation)
+            db.commit()
+            db.refresh(customer_msg)
+            db.refresh(ai_ack)
+            ensure_receipt_for_customer_message(db, customer_msg)
+            db.commit()
+            await push_inbox_message(
+                db,
+                tenant_id,
+                conversation.agent_id,
+                conversation.id,
+                _message_dict_for_ws(db, customer_msg),
+            )
+            wa_response: Dict[str, Any] | None = None
+            client = MetaWhatsAppClient()
+            if reply_ack and client.is_configured():
+                try:
+                    wa_response = await client.send_text_message(to_phone=from_phone, text=reply_ack)
+                    ai_ack.wa_delivered_at = datetime.utcnow()
+                    db.add(ai_ack)
+                    db.commit()
+                    db.refresh(ai_ack)
+                except Exception:
+                    logger.exception(
+                        "WhatsApp send_text_message failed (human_agent ack conversation_id=%s)",
+                        conversation.id,
+                    )
+                    wa_response = {"error": "meta_send_failed"}
+            elif reply_ack and not client.is_configured():
+                wa_response = {"error": "meta_not_configured"}
+            return {
+                "status": "ok",
+                "conversation_id": conversation.id,
+                "skipped": "human_agent",
+                "reply_text": reply_ack,
+                "language": detected_language,
+                "escalate": False,
+                "meta_response": wa_response,
+            }
 
     flow = await process_customer_bot_message(
         db=db,
@@ -1146,6 +1182,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             language=detected_language,
             customer_context=customer_ctx,
             recent_orders=recent_orders,
+            fetch_context=customer_context,
+            bot_flow=flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None,
+            conversation_id=conversation.id,
         )
     elif flow.use_ai:
         if flow.skip_store_api:
@@ -1165,6 +1204,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             language=detected_language,
             customer_context=customer_ctx,
             recent_orders=recent_orders,
+            fetch_context=customer_context if not flow.skip_store_api else None,
+            bot_flow=flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None,
+            conversation_id=conversation.id,
         )
         if flow.skip_store_api:
             reply_text = format_kb_reply(bf_lang or detected_language, reply_text)
@@ -1198,6 +1240,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             )
             if extra:
                 reply_text = f"{(reply_text or '').strip()}\n\n{extra}".strip()
+
+    if not (reply_text or "").strip():
+        reply_text = resolve_bot_template(bf_lang or detected_language, "fallback")
 
     customer_msg = Message(
         conversation_id=conversation.id,
