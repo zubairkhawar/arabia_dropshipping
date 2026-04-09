@@ -43,7 +43,7 @@ function AgentInboxContent() {
         </div>
       ) : (
         <div className="hidden md:flex min-w-0 shrink-0 border-r border-border bg-panel">
-          <div className="flex w-[12px] shrink-0 flex-col items-center gap-1.5 overflow-x-visible py-3 px-0">
+          <div className="flex w-14 shrink-0 flex-col items-center gap-1.5 py-3 px-0">
             <InboxAgentPresenceStack />
           </div>
           {/* Explicit divider: avatar rail -> conversations list */}
