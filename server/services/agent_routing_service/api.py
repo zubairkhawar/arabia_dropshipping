@@ -2,6 +2,8 @@ from typing import List, Optional
 from enum import Enum
 import random
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from datetime import timezone as dt_timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -9,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
 from database import get_db
-from models import Agent, Conversation, Customer, Store, StoreAgentMapping, AgentAttendanceSession
+from models import Agent, Conversation, Customer, Store, StoreAgentMapping, AgentAttendanceSession, Tenant
 from services.auth_service.api import get_current_user
 from services.auth_service.models import User as AuthUser
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
@@ -190,9 +192,20 @@ async def get_agent_attendance(
         .all()
     )
 
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    tz_name = (
+        (tenant.display_timezone if tenant and getattr(tenant, "display_timezone", None) else None)
+        or "Asia/Karachi"
+    )
+    try:
+        tenant_tz = ZoneInfo(tz_name)
+    except Exception:
+        tenant_tz = ZoneInfo("Asia/Karachi")
+
     by_day: dict[str, AttendanceDayOut] = {}
     for s in sessions:
-        day = s.started_at.date().isoformat()
+        start_utc = s.started_at.replace(tzinfo=dt_timezone.utc)
+        day = start_utc.astimezone(tenant_tz).date().isoformat()
         if day not in by_day:
             by_day[day] = AttendanceDayOut(date=day, total_minutes=0, sessions=[])
         end_at = s.ended_at or datetime.utcnow()

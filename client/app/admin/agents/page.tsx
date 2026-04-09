@@ -149,7 +149,11 @@ export default function AdminAgents() {
     }
     void loadAvgResponseFromChats(selectedAgent.id);
   }, [selectedAgent?.id, loadAvgResponseFromChats]);
-  const { dayData: attendanceDayData } = useAgentAttendanceData(selectedAgent?.id, schedule.workingDays);
+  const { dayData: attendanceDayData } = useAgentAttendanceData(
+    selectedAgent?.id,
+    schedule.workingDays,
+    timeZone,
+  );
   const visibleAttendanceDayData = useMemo(() => {
     if (!selectedAgent) return [];
     const created = new Date(selectedAgent.createdAt);

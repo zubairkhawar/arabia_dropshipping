@@ -448,6 +448,7 @@ export function ChatWindow({
     Boolean(isInboxPage && !isInternalChat && selectedConv?.status === 'resolved');
   const inboxConversationTransferred =
     Boolean(isInboxPage && !isInternalChat && selectedConv?.status === 'transferred');
+  const inboxCustomerVoiceDisabled = Boolean(isInboxPage && !isInternalChat);
   const readOnlyMode = readOnly || inboxConversationClosed || inboxConversationTransferred;
   const headerTitle = isTeamChannel && teamName
     ? `# Team Channel • ${teamName}`
@@ -2496,6 +2497,10 @@ export function ChatWindow({
     const text = inputValue.trim();
     const hasContent = text.length > 0 || pendingAttachment;
     if (!hasContent) return;
+    if (inboxCustomerVoiceDisabled && pendingAttachment?.type === 'voice') {
+      addSystemNote('Voice notes from agent to customer are disabled.');
+      return;
+    }
     const nextId = Math.max(0, ...messages.map((m) => m.id)) + 1;
     const now = new Date();
     const newMsg: Message = {
@@ -4739,11 +4744,15 @@ export function ChatWindow({
                   type="button"
                   onClick={() => {
                     if (inboxNoConversationSelected) return;
+                    if (inboxCustomerVoiceDisabled) {
+                      addSystemNote('Voice notes from agent to customer are disabled.');
+                      return;
+                    }
                     setShowAttachmentMenu(false);
                     setShowEmojiPicker(false);
                     startVoiceRecording();
                   }}
-                  disabled={inboxNoConversationSelected}
+                  disabled={inboxNoConversationSelected || inboxCustomerVoiceDisabled}
                   className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors flex-shrink-0"
                   aria-label="Voice message"
                 >

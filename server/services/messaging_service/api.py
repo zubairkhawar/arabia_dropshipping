@@ -953,6 +953,11 @@ async def send_message(
         )
 
     mt = meta_to_store.get("type") if meta_to_store else None
+    if message.sender_type == "agent" and mt == "voice":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent-to-customer voice notes are disabled",
+        )
     if not content_stripped and has_media:
         if mt == "image":
             content_stripped = "Image"

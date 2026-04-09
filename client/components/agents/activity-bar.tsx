@@ -2,7 +2,9 @@
 
 import { useMemo, useState, useCallback, useEffect } from 'react';
 import {
+  dateKeyInTimeZone,
   DEFAULT_TENANT_TIMEZONE,
+  clockMinutesInTimeZone,
   weekdayInTimeZone,
 } from '@/lib/tenant-time';
 
@@ -60,51 +62,20 @@ export function formatDurationMinutes(totalMinutes: number): string {
   return `${h}h ${m}m`;
 }
 
-/** Stable mock: per-day hours worked and sessions from agentId. Replace with API. Exported for PDF reports. Uses March–today window. */
-export function getDayAttendance(agentId: string, workingDays: number[]): DayAttendance[] {
+/** Zero-filled attendance grid for the rolling attendance window. */
+export function getDayAttendance(
+  _agentId: string,
+  workingDays: number[],
+  _timeZone: string = DEFAULT_TENANT_TIMEZONE,
+): DayAttendance[] {
   const { firstSunday, totalDays } = getAttendanceWindow();
   const workingSet = new Set(workingDays);
   const out: DayAttendance[] = [];
-  let seed = agentId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  const WORK_START = 9 * 60; // 9:00
-  const WORK_END = 18 * 60;   // 18:00
 
   for (let i = 0; i < totalDays; i++) {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     const date = getDateForIndex(i, firstSunday);
     const isOff = !workingSet.has(date.getDay());
-    if (isOff) {
-      out.push({ date, hoursWorked: 0, sessions: [] });
-      continue;
-    }
-    const present = (seed % 10) >= 3;
-    if (!present) {
-      out.push({ date, hoursWorked: 0, sessions: [] });
-      continue;
-    }
-    // 2–8 hours for the day
-    const totalMinutes = 60 * (2 + (seed % 7));
-    const numSessions = (seed % 5) >= 3 ? 2 : 1;
-    const sessions: DaySession[] = [];
-    if (numSessions === 1) {
-      const start = WORK_START + (seed % 60);
-      const end = Math.min(WORK_END, start + totalMinutes);
-      sessions.push({ startMinutes: start, endMinutes: end });
-    } else {
-      const half = Math.floor(totalMinutes / 2);
-      const start1 = WORK_START + (seed % 45);
-      const end1 = start1 + half;
-      const start2 = end1 + 30 + (seed % 30);
-      const end2 = Math.min(WORK_END, start2 + totalMinutes - half);
-      sessions.push({ startMinutes: start1, endMinutes: end1 });
-      if (end2 > start2) sessions.push({ startMinutes: start2, endMinutes: end2 });
-    }
-    const actualMinutes = sessions.reduce((s, x) => s + (x.endMinutes - x.startMinutes), 0);
-    out.push({
-      date,
-      hoursWorked: Math.round(actualMinutes) / 60,
-      sessions,
-    });
+    out.push({ date, hoursWorked: 0, sessions: isOff ? [] : [] });
   }
   return out;
 }
@@ -112,7 +83,8 @@ export function getDayAttendance(agentId: string, workingDays: number[]): DayAtt
 /** Returns per-day attendance and average daily online hours (working days only). */
 export function useAgentAttendanceData(
   agentId: string | undefined,
-  workingDays: number[] = [1, 2, 3, 4, 5, 6]
+  workingDays: number[] = [1, 2, 3, 4, 5, 6],
+  timeZone: string = DEFAULT_TENANT_TIMEZONE,
 ): { dayData: DayAttendance[]; averageDailyHours: number } {
   const API_BASE =
     process.env.NEXT_PUBLIC_API_URL ||
@@ -143,21 +115,22 @@ export function useAgentAttendanceData(
         };
         const localBucket = new Map<string, { minutes: number; sessions: DaySession[] }>();
         for (const day of data.days || []) {
+          const key = String(day.date || '');
+          if (!key) continue;
+          const existing = localBucket.get(key) || { minutes: 0, sessions: [] };
           for (const s of day.sessions || []) {
             const st = new Date(s.start_at);
             const en = new Date(s.end_at || new Date().toISOString());
-            const key = `${st.getFullYear()}-${String(st.getMonth() + 1).padStart(2, '0')}-${String(st.getDate()).padStart(2, '0')}`;
-            const existing = localBucket.get(key) || { minutes: 0, sessions: [] };
-            const startMinutes = st.getHours() * 60 + st.getMinutes();
-            const endMinutes = en.getHours() * 60 + en.getMinutes();
+            const startMinutes = clockMinutesInTimeZone(st, timeZone);
+            const endMinutes = clockMinutesInTimeZone(en, timeZone);
             const delta = Math.max(0, Math.floor((en.getTime() - st.getTime()) / 60000));
             existing.minutes += delta;
             existing.sessions.push({ startMinutes, endMinutes });
-            localBucket.set(key, existing);
           }
+          localBucket.set(key, existing);
         }
-        const base = getDayAttendance(agentId, workingDays).map((d) => {
-          const key = d.date.toISOString().slice(0, 10);
+        const base = getDayAttendance(agentId, workingDays, timeZone).map((d) => {
+          const key = dateKeyInTimeZone(d.date, timeZone);
           const real = localBucket.get(key);
           if (!real) return { ...d, hoursWorked: 0, sessions: [] };
           return {
@@ -168,14 +141,14 @@ export function useAgentAttendanceData(
         });
         if (!cancelled) setDayData(base);
       } catch {
-        if (!cancelled) setDayData(getDayAttendance(agentId, workingDays));
+        if (!cancelled) setDayData(getDayAttendance(agentId, workingDays, timeZone));
       }
     };
     void run();
     return () => {
       cancelled = true;
     };
-  }, [agentId, workingDays]);
+  }, [agentId, workingDays, timeZone]);
 
   const averageDailyHours = useMemo(() => {
     if (!agentId) return 0;

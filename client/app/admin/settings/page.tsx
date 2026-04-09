@@ -6,11 +6,12 @@ import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useAgents } from '@/contexts/AgentsContext';
-import { getDayAttendance } from '@/components/agents/activity-bar';
+import { getDayAttendance, type DayAttendance } from '@/components/agents/activity-bar';
 import { buildAllAgentsPdf } from '@/lib/attendance-pdf';
 import type { OnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useSoundAlerts } from '@/contexts/SoundAlertsContext';
 import { AgentScheduleSettings } from '@/components/admin/agent-schedule-settings';
+import { dateKeyInTimeZone, clockMinutesInTimeZone } from '@/lib/tenant-time';
 import {
   BroadcastsPanel,
   BroadcastDeleteModal,
@@ -444,9 +445,63 @@ export default function AdminSettings() {
     }
     setReportDownloading(true);
     try {
+      const fetchAgentAttendance = async (agentId: string): Promise<DayAttendance[]> => {
+        const idNum = Number(agentId);
+        if (!Number.isFinite(idNum)) {
+          return getDayAttendance(agentId, schedule.workingDays, timeZone);
+        }
+        const url = new URL(`${API_BASE}/api/routing/agents/${idNum}/attendance`);
+        url.searchParams.set('tenant_id', String(effectiveTenantId));
+        url.searchParams.set('days', '240');
+        const res = await fetch(url.toString());
+        if (!res.ok) {
+          return getDayAttendance(agentId, schedule.workingDays, timeZone);
+        }
+        const data = (await res.json()) as {
+          days: Array<{
+            date: string;
+            sessions: Array<{ start_at: string; end_at: string | null }>;
+          }>;
+        };
+        const bucket = new Map<string, { minutes: number; sessions: Array<{ startMinutes: number; endMinutes: number }> }>();
+        for (const day of data.days || []) {
+          const key = String(day.date || '');
+          if (!key) continue;
+          const row = bucket.get(key) || { minutes: 0, sessions: [] };
+          for (const s of day.sessions || []) {
+            const st = new Date(s.start_at);
+            const en = new Date(s.end_at || new Date().toISOString());
+            const delta = Math.max(0, Math.floor((en.getTime() - st.getTime()) / 60000));
+            row.minutes += delta;
+            row.sessions.push({
+              startMinutes: clockMinutesInTimeZone(st, timeZone),
+              endMinutes: clockMinutesInTimeZone(en, timeZone),
+            });
+          }
+          bucket.set(key, row);
+        }
+        return getDayAttendance(agentId, schedule.workingDays, timeZone).map((d) => {
+          const key = dateKeyInTimeZone(d.date, timeZone);
+          const real = bucket.get(key);
+          if (!real) return { ...d, hoursWorked: 0, sessions: [] };
+          return {
+            ...d,
+            hoursWorked: Math.round((real.minutes / 60) * 100) / 100,
+            sessions: real.sessions,
+          };
+        });
+      };
+
+      const attendanceByAgent = new Map<string, DayAttendance[]>();
+      await Promise.all(
+        agents.map(async (a) => {
+          const data = await fetchAgentAttendance(a.id);
+          attendanceByAgent.set(a.id, data);
+        }),
+      );
       await buildAllAgentsPdf({
         agents: agents.map((a) => ({ id: a.id, name: a.name, email: a.email })),
-        getDayData: (id) => getDayAttendance(id, schedule.workingDays),
+        getDayData: (id) => attendanceByAgent.get(id) ?? getDayAttendance(id, schedule.workingDays, timeZone),
         year: reportYear,
         month: reportMonth - 1,
         timeZone,
