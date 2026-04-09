@@ -304,14 +304,6 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
     void refreshConversations();
   }, [refreshConversations]);
 
-  useEffect(() => {
-    if (!currentAgentId) return;
-    const timer = window.setInterval(() => {
-      void refreshConversations();
-    }, DM_CONVERSATIONS_REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [currentAgentId, refreshConversations]);
-
   const addOrUpdateConversation = useCallback(async (peerAgentId: string, slug: string, name: string) => {
     if (!currentAgentId) return;
     try {

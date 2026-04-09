@@ -10,8 +10,6 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   'https://arabia-dropshipping.onrender.com';
 const TENANT_ID = 1;
-/** How often to refetch notifications from the API while the agent session is active. */
-const NOTIFICATIONS_POLL_MS = 15_000;
 
 export type NotificationType =
   | 'chat_transfer'
@@ -163,14 +161,6 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     void refreshNotifications({ trackInitialLoad: true });
   }, [refreshNotifications]);
 
-  useEffect(() => {
-    if (!currentAgentId) return;
-    const timer = window.setInterval(() => {
-      void refreshNotifications();
-    }, NOTIFICATIONS_POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [currentAgentId, refreshNotifications]);
-
   const getNotificationsForCurrentAgent = useCallback(() => {
     return notifications
       .filter((n) => n.toAgentId == null || n.toAgentId === currentAgentId)
@@ -195,10 +185,10 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
           conversation_id: n.conversationId ?? null,
         }),
       }).then(() => {
-        void refreshNotifications();
+        // Notification list updates via agent portal websocket; no polling refresh.
       });
     },
-    [refreshNotifications]
+    []
   );
 
   const markAsRead = useCallback(
