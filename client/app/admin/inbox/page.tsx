@@ -18,9 +18,16 @@ function ContextPanel() {
   const transferEvents = selectedMessages
     .filter((m) => typeof m.content === 'string' && /conversation transferred to .* by /i.test(m.content))
     .map((m) => m.content.trim());
-  const closedEvents = selectedMessages
+  const closedEventsRaw = selectedMessages
     .filter((m) => typeof m.content === 'string' && /conversation closed by agent/i.test(m.content))
     .map((m) => m.content.trim());
+  const closedEvents = closedEventsRaw.map((event) => {
+    if (/conversation closed by agent\.?$/i.test(event)) {
+      const fallback = selected?.handlerName?.trim() || 'Agent';
+      return `Conversation closed by ${fallback}.`;
+    }
+    return event;
+  });
 
   return (
     <div className="hidden xl:block w-80 2xl:w-96 shrink-0 border-l border-border bg-panel p-4 transition-all duration-300 overflow-y-auto">

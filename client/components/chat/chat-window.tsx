@@ -3260,7 +3260,7 @@ export function ChatWindow({
                           const now = new Date();
                           const systemMsg: Message = {
                             id: Math.max(0, ...messages.map((m) => m.id)) + 1,
-                            content: 'Conversation closed by agent.',
+                            content: `Conversation closed by ${agentFullName || 'Agent'}.`,
                             sender: 'ai',
                             senderName: 'System',
                             timestamp: formatTime12hInZone(now, timeZone),
@@ -3269,7 +3269,7 @@ export function ChatWindow({
                           inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
                           inboxConv.closeConversation(inboxConv.selectedId);
                         } else {
-                          addSystemNote('Conversation closed by agent.');
+                          addSystemNote(`Conversation closed by ${agentFullName || 'Agent'}.`);
                         }
                         closeMenus();
                       }}

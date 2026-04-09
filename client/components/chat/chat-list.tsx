@@ -291,7 +291,7 @@ export function ChatList() {
                 ))}
               </div>
             ) : null}
-            {(isAgentInbox || isAdminAllPage) && !(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
+            {(isAgentInbox || (isAdminAllPage && hasAnyInboxConversation)) && !(isAgentInbox && inboxConv?.isLoading) && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -396,7 +396,7 @@ export function ChatList() {
               </div>
             )}
 
-            {(isAgentInbox || isAdminAllPage) && !(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
+            {(isAgentInbox || (isAdminAllPage && hasAnyInboxConversation)) && !(isAgentInbox && inboxConv?.isLoading) && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -475,7 +475,7 @@ export function ChatList() {
               </div>
             )}
 
-            {isAgentInbox && !(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
+            {isAgentInbox && !(isAgentInbox && inboxConv?.isLoading) && (
               <div className="space-y-1">
                 <button
                   type="button"
