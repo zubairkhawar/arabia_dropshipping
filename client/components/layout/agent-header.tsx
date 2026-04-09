@@ -38,7 +38,7 @@ export function NotificationDescriptionLine({
   if (n.type === 'mention') {
     const parts = n.description.split(/(@[\w.-]+)/g);
     return (
-      <p className="text-xs text-text-muted mt-0.5">
+      <p className="text-xs text-text-muted mt-0.5 break-words [overflow-wrap:anywhere]">
         {parts.map((part, i) =>
           part.startsWith('@') ? (
             <span key={i} className="font-semibold text-primary bg-primary/10 px-0.5 rounded">
@@ -53,13 +53,13 @@ export function NotificationDescriptionLine({
   }
   if (n.type === 'chat_transfer' && n.fromAgentName) {
     return (
-      <p className="text-xs text-text-muted mt-0.5">
+      <p className="text-xs text-text-muted mt-0.5 break-words [overflow-wrap:anywhere]">
         <span className="font-medium text-text-primary">Note from {n.fromAgentName}:</span> {n.description}
       </p>
     );
   }
   return (
-    <p className="text-xs text-text-muted mt-0.5">
+    <p className="text-xs text-text-muted mt-0.5 break-words [overflow-wrap:anywhere]">
       {n.type === 'chat_transfer' && <span className="font-medium text-text-primary">Note: </span>}
       {n.description}
     </p>
@@ -368,11 +368,11 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
           {showNotifications && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setShowNotifications(false)} />
-              <div className="absolute right-0 mt-2 w-80 bg-white border border-border rounded-lg shadow-xl z-20 flex flex-col max-h-[28rem]">
+              <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-1rem)] overflow-x-hidden bg-white border border-border rounded-lg shadow-xl z-20 flex flex-col max-h-[28rem]">
                 <div className="p-4 border-b border-border shrink-0">
                   <h3 className="font-semibold text-text-primary">Notifications</h3>
                 </div>
-                <div className="overflow-y-auto flex-1 min-h-0">
+                <div className="notification-scroll overflow-y-auto overflow-x-hidden flex-1 min-h-0">
                   {notificationList.length === 0 ? (
                     <div className="p-4 text-sm text-text-muted">No notifications yet.</div>
                   ) : (
@@ -382,7 +382,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                         onClick={() => markAsRead(n.id)}
                         className={`p-4 border-b border-border hover:bg-panel cursor-pointer ${!n.read ? 'bg-primary/5' : ''}`}
                       >
-                        <p className="text-sm text-text-primary">{n.message}</p>
+                        <p className="text-sm text-text-primary break-words [overflow-wrap:anywhere]">{n.message}</p>
                         <NotificationDescriptionLine n={n} />
                         <p className="text-xs text-text-muted mt-1">{formatNotifTime(n.createdAt)}</p>
                       </div>

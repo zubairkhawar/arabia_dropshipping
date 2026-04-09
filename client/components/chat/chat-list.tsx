@@ -125,6 +125,7 @@ export function ChatList() {
   const [liveOpen, setLiveOpen] = useState(true);
   const [closedOpen, setClosedOpen] = useState(true);
   const [transferredOpen, setTransferredOpen] = useState(true);
+  const [emptyStateOpen, setEmptyStateOpen] = useState(true);
   const { inboxQuery } = useAgentSearch();
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<InboxSearchResult[]>([]);
@@ -641,9 +642,27 @@ export function ChatList() {
               liveConversations.length === 0 &&
               closedConversations.length === 0 &&
               transferredConversations.length === 0 && (
-              <div className="px-2 py-4 text-[12px] text-text-muted">
-                No conversations match this view yet. Adjust the agent selection or try a different
-                inbox view.
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  className="w-full px-1 py-1 flex items-center justify-between mt-2 hover:bg-panel rounded"
+                  onClick={() => setEmptyStateOpen((open) => !open)}
+                >
+                  <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">
+                    Empty View
+                  </span>
+                  <ChevronDown
+                    className={`h-3 w-3 text-text-muted transition-transform ${
+                      emptyStateOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+                {emptyStateOpen && (
+                  <div className="px-2 py-4 text-[12px] text-text-muted">
+                    No conversations match this view yet. Adjust the agent selection or try a different
+                    inbox view.
+                  </div>
+                )}
               </div>
             )}
               </>

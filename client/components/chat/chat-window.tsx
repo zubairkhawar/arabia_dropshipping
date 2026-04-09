@@ -443,6 +443,7 @@ export function ChatWindow({
       ? inboxConv.getMessages(inboxConv.selectedId).length
       : 0;
   const hasSelectedConversation = !!selectedConv;
+  const inboxNoConversationSelected = Boolean(isInboxPage && !isInternalChat && !hasSelectedConversation);
   const inboxConversationClosed =
     Boolean(isInboxPage && !isInternalChat && selectedConv?.status === 'resolved');
   const inboxConversationTransferred =
@@ -2487,6 +2488,7 @@ export function ChatWindow({
   };
 
   const sendMessage = async () => {
+    if (inboxNoConversationSelected) return;
     if (inboxConversationClosed || inboxConversationTransferred) return;
     const text = inputValue.trim();
     const hasContent = text.length > 0 || pendingAttachment;
@@ -4551,7 +4553,12 @@ export function ChatWindow({
               <div className="relative flex-shrink-0">
                 <button
                   type="button"
-                  onClick={() => { setShowAttachmentMenu((v) => !v); setShowEmojiPicker(false); }}
+                  onClick={() => {
+                    if (inboxNoConversationSelected) return;
+                    setShowAttachmentMenu((v) => !v);
+                    setShowEmojiPicker(false);
+                  }}
+                  disabled={inboxNoConversationSelected}
                   className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors"
                   aria-label="Attach"
                 >
@@ -4616,6 +4623,7 @@ export function ChatWindow({
                 }
                 className="flex-1 min-w-0 px-4 py-2.5 focus:outline-none text-sm bg-transparent"
                 onKeyDown={handleInputKeyDown}
+                disabled={inboxNoConversationSelected}
               />
               
               {mentionComposerEnabled && showMentionDropdown && mentionCandidatesList.length > 0 && (
@@ -4645,7 +4653,12 @@ export function ChatWindow({
                 <>
                   <button
                     type="button"
-                    onClick={() => { setShowEmojiPicker((v) => !v); setShowAttachmentMenu(false); }}
+                    onClick={() => {
+                      if (inboxNoConversationSelected) return;
+                      setShowEmojiPicker((v) => !v);
+                      setShowAttachmentMenu(false);
+                    }}
+                    disabled={inboxNoConversationSelected}
                     className="p-2 text-text-muted hover:text-primary rounded-full transition-colors flex-shrink-0"
                     aria-label="Emoji"
                   >
@@ -4722,10 +4735,12 @@ export function ChatWindow({
                 <button
                   type="button"
                   onClick={() => {
+                    if (inboxNoConversationSelected) return;
                     setShowAttachmentMenu(false);
                     setShowEmojiPicker(false);
                     startVoiceRecording();
                   }}
+                  disabled={inboxNoConversationSelected}
                   className="text-text-secondary hover:text-primary p-2 rounded-full transition-colors flex-shrink-0"
                   aria-label="Voice message"
                 >
@@ -4737,6 +4752,7 @@ export function ChatWindow({
               type="button"
               className="bg-primary text-white px-5 py-2.5 rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium flex-shrink-0"
               onClick={sendMessage}
+              disabled={inboxNoConversationSelected}
             >
               Send
             </button>

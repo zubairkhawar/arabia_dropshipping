@@ -56,9 +56,9 @@ const config: Config = {
         'chatlist-desktop': '340px',
         'chatlist-ultrawide': '380px',
         'context-tablet': '260px',
-        'context-laptop': '300px',
-        'context-desktop': '340px',
-        'context-ultrawide': '380px',
+        'context-laptop': '296px',
+        'context-desktop': '336px',
+        'context-ultrawide': '376px',
       },
       height: {
         'chat-header': '64px',

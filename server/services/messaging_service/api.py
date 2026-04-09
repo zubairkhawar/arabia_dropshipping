@@ -129,6 +129,10 @@ class ConversationStatusUpdate(BaseModel):
     status: str  # active | closed | escalated
 
 
+class ConversationInternalNoteIn(BaseModel):
+    note: str = ""
+
+
 class WhatsAppWebhookPayload(BaseModel):
     """
     Minimal normalized payload for a WhatsApp-style webhook.
@@ -710,6 +714,11 @@ async def get_conversation(
                 "status": conversation.status,
                 "created_at": conversation.created_at,
                 "updated_at": conversation.updated_at,
+                "internal_note": (
+                    (conversation.conversation_metadata or {}).get("internal_note")
+                    if isinstance(conversation.conversation_metadata, dict)
+                    else None
+                ),
             },
             "messages": payload,
             "has_more_older": False,
@@ -757,6 +766,11 @@ async def get_conversation(
             "status": conversation.status,
             "created_at": conversation.created_at,
             "updated_at": conversation.updated_at,
+            "internal_note": (
+                (conversation.conversation_metadata or {}).get("internal_note")
+                if isinstance(conversation.conversation_metadata, dict)
+                else None
+            ),
         },
         "messages": payload,
         "has_more_older": has_more,
@@ -820,6 +834,55 @@ async def create_conversation(
     _ = conversation.messages
 
     return _build_conversation_summary(conversation)
+
+
+@router.get("/conversations/{conversation_id}/internal-note")
+async def get_conversation_internal_note(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    conversation: Conversation | None = (
+        db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    )
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
+        )
+    if current_user is not None and current_user.tenant_id != conversation.tenant_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant mismatch")
+    meta = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
+    note = meta.get("internal_note") if isinstance(meta.get("internal_note"), str) else ""
+    return {"conversation_id": conversation.id, "note": note}
+
+
+@router.patch("/conversations/{conversation_id}/internal-note")
+async def set_conversation_internal_note(
+    conversation_id: int,
+    payload: ConversationInternalNoteIn,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    conversation: Conversation | None = (
+        db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    )
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
+        )
+    if current_user is not None and current_user.tenant_id != conversation.tenant_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant mismatch")
+    meta = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
+    note = (payload.note or "").strip()
+    if note:
+        meta["internal_note"] = note
+    else:
+        meta.pop("internal_note", None)
+    conversation.conversation_metadata = meta
+    conversation.updated_at = datetime.utcnow()
+    db.add(conversation)
+    db.commit()
+    return {"conversation_id": conversation.id, "note": note}
 
 
 @router.post("/messages", response_model=MessageOut, status_code=status.HTTP_201_CREATED)

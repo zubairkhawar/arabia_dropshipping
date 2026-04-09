@@ -68,6 +68,35 @@ interface NotificationApi {
   read: boolean;
 }
 
+const DM_MSG_PREFIX = '__DM_MSG_JSON__';
+const TEAM_MSG_PREFIX = '__TEAM_MSG_JSON__';
+
+function summarizeStructuredMessage(raw: string | null | undefined): string | undefined {
+  const v = (raw ?? '').trim();
+  if (!v) return undefined;
+  const decode = (jsonText: string): string | undefined => {
+    try {
+      const obj = JSON.parse(jsonText) as {
+        text?: unknown;
+        attachment?: { type?: unknown };
+      };
+      const text = typeof obj.text === 'string' ? obj.text.trim() : '';
+      const attType = typeof obj.attachment?.type === 'string' ? obj.attachment.type : '';
+      if (text) return text;
+      if (attType === 'voice') return 'Voice message';
+      if (attType === 'photo' || attType === 'image') return 'Image';
+      if (attType === 'file') return 'Attachment';
+      return 'Attachment';
+    } catch {
+      return undefined;
+    }
+  };
+  if (v.startsWith(DM_MSG_PREFIX)) return decode(v.slice(DM_MSG_PREFIX.length));
+  if (v.startsWith(TEAM_MSG_PREFIX)) return decode(v.slice(TEAM_MSG_PREFIX.length));
+  if (v.startsWith('{') && v.includes('"attachment"')) return decode(v);
+  return v;
+}
+
 export function NotificationsProvider({ children }: { children: ReactNode }) {
   const { getCurrentAgent } = useAgents();
   const [notifications, setNotifications] = useState<AgentNotification[]>([]);
@@ -94,11 +123,21 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     ].includes(rawType)
       ? rawType
       : 'system';
+    const sanitizedDescription = summarizeStructuredMessage(n.description ?? undefined);
+    let sanitizedMessage = summarizeStructuredMessage(n.message) || n.message;
+    if (
+      type === 'personal_message' &&
+      sanitizedDescription &&
+      /direct message/i.test(sanitizedMessage) &&
+      ['Voice message', 'Image', 'Attachment'].includes(sanitizedDescription)
+    ) {
+      sanitizedMessage = sanitizedMessage.replace(/sent you a direct message/i, `sent you a ${sanitizedDescription.toLowerCase()}`);
+    }
     return {
       id: String(n.id),
       type,
-      message: n.message,
-      description: n.description ?? undefined,
+      message: sanitizedMessage,
+      description: sanitizedDescription,
       createdAt: n.created_at,
       read: n.read,
       fromAgentId: n.from_agent_id != null ? String(n.from_agent_id) : undefined,
