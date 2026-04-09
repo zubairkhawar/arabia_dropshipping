@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useCallback,
+  memo,
   Fragment,
   type ReactNode,
   type MouseEvent,
@@ -271,6 +272,29 @@ function teamMessageMentionsViewer(content: string, viewerDisplayName: string | 
   if (first && new RegExp(`@${esc(first)}\\b`, 'i').test(content)) return true;
   return new RegExp(`@${esc(name)}`, 'i').test(content);
 }
+
+function computeStickyDateKey(scrollRoot: HTMLElement | null): string | null {
+  if (!scrollRoot) return null;
+  const top = scrollRoot.getBoundingClientRect().top + 72;
+  const dateEls = scrollRoot.querySelectorAll('[data-date-key]');
+  let current: string | null = null;
+  dateEls.forEach((node) => {
+    const rect = (node as HTMLElement).getBoundingClientRect();
+    if (rect.top <= top) current = (node as HTMLElement).getAttribute('data-date-key');
+  });
+  return current;
+}
+
+const ChatStickyDateHeader = memo(function ChatStickyDateHeader({ label }: { label: string | null }) {
+  if (!label) return null;
+  return (
+    <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
+      <span className="rounded-full border border-black/[0.06] bg-white/90 px-3 py-1.5 text-xs font-medium text-[#54656f] shadow-sm backdrop-blur-sm">
+        {label}
+      </span>
+    </div>
+  );
+});
 
 export function ChatWindow({
   isInternalChat = false,
@@ -648,6 +672,7 @@ export function ChatWindow({
   const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceMessageIdRef = useRef<number | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const stickyDateRafRef = useRef<number | null>(null);
   const BOTTOM_THRESHOLD_PX = 80;
   const teamNearBottomRef = useRef(true);
   const dmNearBottomRef = useRef(true);
@@ -721,6 +746,14 @@ export function ChatWindow({
   }, [isTeamChannel, teamId]);
 
   const [stickyDate, setStickyDate] = useState<string | null>(null);
+  const scheduleStickyDateUpdate = useCallback(() => {
+    if (stickyDateRafRef.current != null) return;
+    stickyDateRafRef.current = requestAnimationFrame(() => {
+      stickyDateRafRef.current = null;
+      const next = computeStickyDateKey(scrollContainerRef.current);
+      setStickyDate((prev) => (prev === next ? prev : next));
+    });
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1929,21 +1962,8 @@ export function ChatWindow({
       url: m.attachment!.url,
     }));
 
-  const handleScrollStickyDate = () => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const top = el.getBoundingClientRect().top + 72;
-    const dateEls = el.querySelectorAll('[data-date-key]');
-    let current: string | null = null;
-    dateEls.forEach((node) => {
-      const rect = (node as HTMLElement).getBoundingClientRect();
-      if (rect.top <= top) current = (node as HTMLElement).getAttribute('data-date-key');
-    });
-    setStickyDate(current);
-  };
-
   const handleChatScroll = useCallback(() => {
-    handleScrollStickyDate();
+    scheduleStickyDateUpdate();
     const el = scrollContainerRef.current;
     if (!el) return;
     const { scrollTop, scrollHeight, clientHeight } = el;
@@ -2095,6 +2115,7 @@ export function ChatWindow({
     unreadDmCount,
     unreadDmFirstMessageId,
     dmConversationId,
+    scheduleStickyDateUpdate,
   ]);
 
   useEffect(() => {
@@ -2102,6 +2123,10 @@ export function ChatWindow({
       if (teamUnreadMarkTimerRef.current) clearTimeout(teamUnreadMarkTimerRef.current);
       if (dmUnreadMarkTimerRef.current) clearTimeout(dmUnreadMarkTimerRef.current);
       if (dmReadFlushTimerRef.current) clearTimeout(dmReadFlushTimerRef.current);
+      if (stickyDateRafRef.current != null) {
+        cancelAnimationFrame(stickyDateRafRef.current);
+        stickyDateRafRef.current = null;
+      }
     };
   }, []);
 
@@ -2109,9 +2134,9 @@ export function ChatWindow({
     const el = scrollContainerRef.current;
     if (!el) return;
     handleChatScroll();
-    el.addEventListener('scroll', handleChatScroll);
+    el.addEventListener('scroll', handleChatScroll, { passive: true });
     return () => el.removeEventListener('scroll', handleChatScroll);
-  }, [handleChatScroll, filteredMessages.length, teamEvents.length]);
+  }, [handleChatScroll]);
 
   const initialScrollKey =
     isTeamChannel && teamId
@@ -2135,6 +2160,17 @@ export function ChatWindow({
     if (initialScrollKey.startsWith('dm:') && dmSlug) clearDmUnread(dmSlug);
   }, [initialScrollKey, showChatThreadSkeleton, filteredMessages.length, dmSlug, clearDmUnread]);
 
+  useLayoutEffect(() => {
+    if (showChatThreadSkeleton) return;
+    const next = computeStickyDateKey(scrollContainerRef.current);
+    setStickyDate((prev) => (prev === next ? prev : next));
+  }, [
+    filteredMessages.length,
+    teamEvents.length,
+    showChatThreadSkeleton,
+    initialScrollKey,
+  ]);
+
   useEffect(() => {
     if (!initialScrollKey) return;
     if (
@@ -2153,8 +2189,9 @@ export function ChatWindow({
       )
         return;
       el.scrollTop = el.scrollHeight;
+      scheduleStickyDateUpdate();
     });
-  }, [filteredMessages.length, initialScrollKey]);
+  }, [filteredMessages.length, initialScrollKey, scheduleStickyDateUpdate]);
 
   const closeMessageInfo = useCallback(() => {
     setMessageInfoId(null);
@@ -3443,12 +3480,10 @@ export function ChatWindow({
             You closed this conversation on {selectedConv.closedAt}. The customer has messaged again.
           </div>
         )}
-        {!showChatThreadSkeleton && stickyDate && (
-          <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
-            <span className="rounded-full border border-black/[0.06] bg-white/90 px-3 py-1.5 text-xs font-medium text-[#54656f] shadow-sm backdrop-blur-sm">
-              {formatDateLabel(stickyDate + 'T12:00:00')}
-            </span>
-          </div>
+        {!showChatThreadSkeleton && (
+          <ChatStickyDateHeader
+            label={stickyDate ? formatDateLabel(stickyDate + 'T12:00:00') : null}
+          />
         )}
         {!showChatThreadSkeleton &&
           unifiedGroups.map((group) => (

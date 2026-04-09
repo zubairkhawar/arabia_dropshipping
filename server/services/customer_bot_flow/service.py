@@ -7,6 +7,7 @@ Team routing uses Agent.team values: new_customer, beginner, intermediate, exper
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 from models import Conversation, Order
 from services.ai_orchestrator_service.services import AIOrchestrator
 from services.store_integration_service.client import StoreIntegrationClient
+from services.human_handoff_intent import solo_menu_digit, wants_human_agent
 from services.customer_bot_flow.templates import BOT_FLOW_TEMPLATES
 
 BOT_FLOW_KEY = "bot_flow"
@@ -147,29 +149,10 @@ def _state_back_to_customer_pick(flow: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _is_escalation_trigger(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    phrases = (
-        "support",
-        "agent",
-        "help",
-        "baat karni hai",
-        "baat karna hai",
-        "talk to human",
-        "talk to someone",
-        "human",
-        "talk to",
-        "speak with",
-        "madad",
-        "representative",
-    )
-    return any(p in t for p in phrases)
-
-
 def _parse_choice(text: str, mapping: Dict[str, str]) -> Optional[str]:
     raw = (text or "").strip().lower()
+    raw = unicodedata.normalize("NFKC", raw)
+    raw = raw.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
     raw = re.sub(r"[^\w\u0600-\u06FF\s]", " ", raw)
     parts = raw.split()
     first = parts[0] if parts else ""
@@ -177,6 +160,12 @@ def _parse_choice(text: str, mapping: Dict[str, str]) -> Optional[str]:
         return mapping[first]
     if raw in mapping:
         return mapping[raw]
+    digit_keys = [k for k in mapping if len(k) == 1 and k.isdigit()]
+    if digit_keys:
+        allowed = "".join(sorted(set(digit_keys)))
+        d = solo_menu_digit(text, allowed)
+        if d and d in mapping:
+            return mapping[d]
     return None
 
 
@@ -332,8 +321,8 @@ async def process_customer_bot_message(
 
     text = (user_message or "").strip()
 
-    # Global escalation
-    if _is_escalation_trigger(text) and step != "existing_awaiting_verification":
+    # Global handoff: any step (incl. verification) when user asks for a human agent
+    if wants_human_agent(text):
         kind = flow.get("customer_kind")
         exp_team = flow.get("experience_team")
         if kind == "new" or not kind:
@@ -425,9 +414,22 @@ async def process_customer_bot_message(
         if choice == "support":
             f = {**flow, "step": "existing_awaiting_experience", "lang": flow_lang}
             return save(f, _t(flow_lang, MSGS["experience"]))
-        return save(
-            {**flow, "step": "existing_verified_menu", "lang": flow_lang},
-            _t(flow_lang, MSGS["verified_menu"]),
+        if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
+            f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
+            return save(f, _t(flow_lang, MSGS["ask_order"]))
+        if _looks_like_greeting(text):
+            f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
+            return ai_forward(
+                "[Verified customer; short warm reply. They may choose 1 track, 2 details, 3 support, or ask anything.] "
+                + text,
+                f,
+                skip_api=True,
+            )
+        f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
+        return ai_forward(
+            "[Existing verified customer — answer from knowledge base, concise.] " + text,
+            f,
+            skip_api=True,
         )
 
     if step == "existing_awaiting_order_id":

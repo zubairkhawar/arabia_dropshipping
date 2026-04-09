@@ -6,6 +6,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.schema import BaseMessage
 
 from config import get_openai_api_key
+from services.human_handoff_intent import wants_human_agent
 from services.store_integration_service.client import StoreIntegrationClient
 
 
@@ -323,19 +324,4 @@ templates. Only answer substantive support questions in free text.
 
     async def should_escalate(self, message: str) -> bool:
         """Determine if conversation should be escalated to agent."""
-        message_lower = (message or "").lower()
-        phrases = (
-            "agent",
-            "human",
-            "support",
-            "help",
-            "talk to",
-            "speak with",
-            "talk to human",
-            "talk to someone",
-            "baat karni hai",
-            "baat karna hai",
-            "madad",
-            "representative",
-        )
-        return any(p in message_lower for p in phrases)
+        return wants_human_agent(message)
