@@ -200,6 +200,20 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "لم يتم العثور على الطلب. يرجى التحقق مرة أخرى أو اكتب support.",
         "roman_urdu": "Order nahi mila. Dobara check karein ya support likhein.",
     },
+    "order_lookup_error": {
+        "english": (
+            "I'm having trouble reaching order data right now. Please try again in a moment, "
+            "or type **agent** / **support** if you need help."
+        ),
+        "arabic": (
+            "نواجه صعوبة في الوصول إلى بيانات الطلب حاليًا. يرجى المحاولة بعد قليل، "
+            "أو اكتب **agent** / **support** للمساعدة."
+        ),
+        "roman_urdu": (
+            "Abhi order data access mein masla aa raha hai. Thori dair baad dobara try karein, "
+            "ya **agent** / **support** likhein."
+        ),
+    },
     "connecting": {
         "english": (
             "Sure! Connecting you to a human agent 👨‍💼\n"

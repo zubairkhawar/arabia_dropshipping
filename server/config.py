@@ -44,7 +44,8 @@ class Settings(BaseSettings):
     client_api_key: Optional[str] = None
     client_api_bearer_token: Optional[str] = None
 
-    # Customer bot (WhatsApp / web): auto-clear scripted flow after N days with no customer message (0 = disabled)
+    # Customer bot: auto-clear scripted flow after N days with no customer message. Default 7;
+    # set CUSTOMER_BOT_INACTIVITY_RESET_DAYS=0 to disable.
     customer_bot_inactivity_reset_days: int = 7
 
     # Application

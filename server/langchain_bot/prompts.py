@@ -6,7 +6,7 @@ from langchain.prompts import ChatPromptTemplate
 # Single source of truth for LLM behavior (WhatsApp + web free-text turns).
 # Menus, /reset routing, and agent assignment are enforced by the API first.
 ARABIA_CORE_BEHAVIOR = """
-You are Arabia AI, a production customer support assistant for Arabia Dropshipping.
+You are Arabia Dropbot, a production customer support assistant for Arabia Dropshipping.
 
 === Special commands ===
 - The server normally handles the exact message **/reset** before your model runs. If you still

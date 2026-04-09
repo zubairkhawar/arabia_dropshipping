@@ -189,6 +189,10 @@ class AIOrchestrator:
         """
         Resolve customer and recent orders via the merchant API, plus a single order
         lookup when the user message mentions an order id (e.g. GET /v1/orders/{id}).
+
+        For personalized answers (is_store_customer, orders), the merchant must implement
+        e.g. GET /customers?phone=… and GET /customers/{id}/orders — see StoreIntegrationClient.
+        If those are missing, the bot still runs but store-linked context stays empty.
         """
         customer: Optional[Dict[str, Any]] = None
         orders: list = []

@@ -17,7 +17,10 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from models import Conversation, Message, Order
-from services.ai_orchestrator_service.services import AIOrchestrator
+from services.ai_orchestrator_service.services import (
+    AIOrchestrator,
+    _extract_order_id_from_message,
+)
 from services.store_integration_service.client import StoreIntegrationClient
 from services.human_handoff_intent import (
     is_slash_reset_command,
@@ -245,9 +248,14 @@ async def _lookup_order(
     order_ref: str,
     store_client: StoreIntegrationClient,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
+    """
+    Returns (order_dict_or_None, source).
+
+    source is one of: \"db\" | \"api\" | \"not_found\" | \"api_error\"
+    """
     ref = (order_ref or "").strip()
     if not ref:
-        return None, ""
+        return None, "not_found"
 
     row = (
         db.query(Order)
@@ -261,11 +269,16 @@ async def _lookup_order(
             "delivery": _delivery_status(row),
         }, "db"
 
-    detail = await store_client.get_order_by_id(ref)
+    detail: Optional[Dict[str, Any]] = None
+    try:
+        detail = await store_client.get_order_by_id(ref)
+        if not detail:
+            detail = await store_client.get_order_by_number(ref)
+    except Exception:
+        return None, "api_error"
+
     if not detail:
-        detail = await store_client.get_order_by_number(ref)
-    if not detail:
-        return None, ""
+        return None, "not_found"
 
     return {
         "order_number": str(detail.get("order_number") or detail.get("id") or ref),
@@ -441,6 +454,7 @@ async def process_customer_bot_message(
             esc=True,
         )
 
+    # Sets step awaiting_resume_choice; reply uses MSGS["welcome_back"] from templates.
     if not _flow_is_tabula_rasa(flow) and _looks_like_greeting(text):
         snap = {k: v for k, v in flow.items() if k != "resume_snapshot"}
         wb: Dict[str, Any] = {
@@ -501,7 +515,8 @@ async def process_customer_bot_message(
         )
 
     if step == "existing_awaiting_verification":
-        # Placeholder: any non-empty message completes verification
+        # MVP / intentional: any non-empty message completes "verification" (no OTP or store check).
+        # Replace with email/SMS code or store lookup when you need real identity proof.
         if len(text) >= 1:
             f = {
                 **flow,
@@ -524,20 +539,38 @@ async def process_customer_bot_message(
             f = {**flow, "step": "existing_awaiting_experience", "lang": flow_lang}
             return save(f, _t(flow_lang, MSGS["experience"]))
         if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
+            ref = ""
+            if _is_likely_order_id_only(text):
+                ref = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
+            else:
+                ref = (_extract_order_id_from_message(text, phone) or "").strip()
+            if ref:
+                order, src = await _lookup_order(db, tenant_id, ref, store_client)
+                if order:
+                    body = _t(flow_lang, MSGS["order_found"]).format(
+                        order_id=order["order_number"],
+                        status=order["status"],
+                        delivery=order["delivery"],
+                    )
+                    f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
+                    return save(f, body)
+                if src == "api_error":
+                    f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
+                    return save(f, _t(flow_lang, MSGS["order_lookup_error"]))
+                f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
+                return save(f, _t(flow_lang, MSGS["order_not_found"]))
             f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
             return save(f, _t(flow_lang, MSGS["ask_order"]))
         if _looks_like_greeting(text):
             f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
             return save(f, _t(flow_lang, MSGS["verified_menu"]))
         f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
-        return ai_forward(
-            "[Existing verified customer — answer from knowledge base, concise.] " + text,
-            f,
-            skip_api=True,
-        )
+        return ai_forward("[Customer question] " + text, f, skip_api=True)
 
     if step == "existing_awaiting_order_id":
-        order, _src = await _lookup_order(db, tenant_id, text, store_client)
+        raw = (text or "").strip()
+        ref = raw if _is_likely_order_id_only(raw) else (_extract_order_id_from_message(raw, phone) or raw)
+        order, src = await _lookup_order(db, tenant_id, ref, store_client)
         if order:
             body = _t(flow_lang, MSGS["order_found"]).format(
                 order_id=order["order_number"],
@@ -547,6 +580,8 @@ async def process_customer_bot_message(
             f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
             return save(f, body)
         f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
+        if src == "api_error":
+            return save(f, _t(flow_lang, MSGS["order_lookup_error"]))
         return save(f, _t(flow_lang, MSGS["order_not_found"]))
 
     if step == "existing_awaiting_experience":
