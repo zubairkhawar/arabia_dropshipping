@@ -42,10 +42,12 @@ function AgentInboxContent() {
           </button>
         </div>
       ) : (
-        <div className="relative isolate hidden md:flex min-w-0 shrink-0 border-r border-border bg-panel after:pointer-events-none after:absolute after:inset-y-0 after:right-[16px] after:z-20 after:w-px after:bg-border">
+        <div className="hidden md:flex min-w-0 shrink-0 border-r border-border bg-panel">
           <div className="flex w-[12px] shrink-0 flex-col items-center gap-1.5 overflow-x-visible py-3 px-0">
             <InboxAgentPresenceStack />
           </div>
+          {/* Explicit divider: avatar rail -> conversations list */}
+          <div className="w-px self-stretch bg-border" aria-hidden />
           <div className="min-w-0 w-chatlist-tablet lg:w-chatlist-laptop xl:w-chatlist-desktop 2xl:w-chatlist-ultrawide">
             <ChatList />
           </div>
