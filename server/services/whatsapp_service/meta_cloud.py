@@ -26,24 +26,30 @@ class MetaWhatsAppClient:
     def is_configured(self) -> bool:
         return bool(self.access_token and self.phone_number_id and self.graph_version)
 
+    def _messages_url(self) -> str:
+        return (
+            f"https://graph.facebook.com/{self.graph_version}/"
+            f"{self.phone_number_id}/messages"
+        )
+
+    def _headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+
     async def send_text_message(self, to_phone: str, text: str) -> Dict[str, Any]:
         if not self.is_configured():
             raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
 
-        url = (
-            f"https://graph.facebook.com/{self.graph_version}/"
-            f"{self.phone_number_id}/messages"
-        )
+        url = self._messages_url()
         payload = {
             "messaging_product": "whatsapp",
             "to": to_phone,
             "type": "text",
             "text": {"body": text},
         }
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json",
-        }
+        headers = self._headers()
         logger.info(
             "Sending WhatsApp message using:\nPHONE_NUMBER_ID = %s\nTO = %s\n(body length: %s chars)",
             self.phone_number_id,
@@ -55,6 +61,44 @@ class MetaWhatsAppClient:
             if resp.status_code >= 400:
                 logger.error(
                     "Meta WhatsApp messages API HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def send_image_message(
+        self,
+        to_phone: str,
+        image_url: str,
+        caption: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self.is_configured():
+            raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
+        if not image_url:
+            raise ValueError("image_url is required")
+
+        url = self._messages_url()
+        image: Dict[str, Any] = {"link": image_url}
+        if caption and caption.strip():
+            image["caption"] = caption.strip()[:1024]
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "image",
+            "image": image,
+        }
+        headers = self._headers()
+        logger.info(
+            "Sending WhatsApp image using PHONE_NUMBER_ID=%s TO=%s",
+            self.phone_number_id,
+            to_phone,
+        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta WhatsApp image API HTTP %s: %s",
                     resp.status_code,
                     (resp.text or "")[:800],
                 )

@@ -51,7 +51,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "entry": {
         "english": (
-            "👋 Hi! Welcome to Arabia Dropshipping 🚀\n\n"
+            "Hi! Welcome to Arabia Dropshipping\n\n"
             "Are you:\n\n"
             "1️⃣ New customer\n"
             "2️⃣ Existing customer\n\n"
@@ -59,7 +59,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Tip: type /reset anytime to restart this menu."
         ),
         "arabic": (
-            "👋 السلام عليكم! مرحبًا بك في Arabia Dropshipping 🚀\n\n"
+            "السلام عليكم! مرحبًا بك في Arabia Dropshipping\n\n"
             "هل أنت:\n\n"
             "1️⃣ عميل جديد\n"
             "2️⃣ عميل حالي\n\n"
@@ -67,7 +67,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "لإعادة القائمة اكتب /reset"
         ),
         "roman_urdu": (
-            "👋 Salam! Welcome to Arabia Dropshipping 🚀\n\n"
+            "Salam! Welcome to Arabia Dropshipping\n\n"
             "Aap new customer hain ya existing customer?\n\n"
             "1️⃣ New customer\n"
             "2️⃣ Existing customer\n\n"
@@ -77,54 +77,54 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "new_welcome": {
         "english": (
-            "Great! 🎉\n\n"
+            "Great!\n\n"
             "How can we help you today?\n\n"
             "1️⃣ Browse products 🛍️\n"
             "2️⃣ Get information ℹ️\n"
-            "3️⃣ Talk to support 👨‍💼\n\n"
-            "Or type your question anytime 💬"
+            "3️⃣ Talk to support\n\n"
+            "Or type your question anytime"
         ),
         "arabic": (
-            "رائع! 🎉\n\n"
+            "رائع!\n\n"
             "كيف يمكننا مساعدتك اليوم؟\n\n"
             "1️⃣ تصفح المنتجات 🛍️\n"
             "2️⃣ الحصول على معلومات ℹ️\n"
-            "3️⃣ التحدث مع الدعم 👨‍💼\n\n"
-            "أو اكتب سؤالك في أي وقت 💬"
+            "3️⃣ التحدث مع الدعم\n\n"
+            "أو اكتب سؤالك في أي وقت"
         ),
         "roman_urdu": (
-            "Zabardast! 🎉\n\n"
+            "Great!\n\n"
             "Aap ko kis cheez mein madad chahiye?\n\n"
             "1️⃣ Products dekhna 🛍️\n"
             "2️⃣ Maloomat lena ℹ️\n"
-            "3️⃣ Support se baat karna 👨‍💼\n\n"
-            "Ya apna sawal likh dein 💬"
+            "3️⃣ Support se baat karna\n\n"
+            "Ya apna sawal likh dein"
         ),
     },
     "new_menu_after_greeting": {
         "english": (
-            "Hello! 👋\n\n"
+            "Hello!\n\n"
             "How can we help you today?\n\n"
             "1️⃣ Browse products 🛍️\n"
             "2️⃣ Get information ℹ️\n"
-            "3️⃣ Talk to support 👨‍💼\n\n"
-            "Or type your question anytime 💬"
+            "3️⃣ Talk to support\n\n"
+            "Or type your question anytime"
         ),
         "arabic": (
             "وعليكم السلام ورحمة الله 🌙\n\n"
             "كيف يمكننا مساعدتك اليوم؟\n\n"
             "1️⃣ تصفح المنتجات 🛍️\n"
             "2️⃣ الحصول على معلومات ℹ️\n"
-            "3️⃣ التحدث مع الدعم 👨‍💼\n\n"
-            "أو اكتب سؤالك في أي وقت 💬"
+            "3️⃣ التحدث مع الدعم\n\n"
+            "أو اكتب سؤالك في أي وقت"
         ),
         "roman_urdu": (
             "Walaykum assalam! 🌙\n\n"
             "Aap ko kis cheez mein madad chahiye?\n\n"
             "1️⃣ Products dekhna 🛍️\n"
             "2️⃣ Maloomat lena ℹ️\n"
-            "3️⃣ Support se baat karna 👨‍💼\n\n"
-            "Ya apna sawal likh dein 💬"
+            "3️⃣ Support se baat karna\n\n"
+            "Ya apna sawal likh dein"
         ),
     },
     "new_customer_order_use_existing_flow": {
@@ -152,22 +152,22 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "How can we assist you?\n\n"
             "1️⃣ Track your order 📦\n"
             "2️⃣ Order details 📄\n"
-            "3️⃣ Talk to support 👨‍💼\n\n"
-            "Or type your question 💬"
+            "3️⃣ Talk to support\n\n"
+            "Or type your question"
         ),
         "arabic": (
             "✅ تم التحقق بنجاح!\n\n"
             "كيف يمكننا مساعدتك؟\n\n"
             "1️⃣ تتبع الطلب 📦\n"
             "2️⃣ تفاصيل الطلب 📄\n"
-            "3️⃣ التحدث مع الدعم 👨‍💼"
+            "3️⃣ التحدث مع الدعم"
         ),
         "roman_urdu": (
             "✅ Verification successful!\n\n"
             "Aap kya karna chahte hain?\n\n"
             "1️⃣ Order track karein 📦\n"
             "2️⃣ Order details dekhein 📄\n"
-            "3️⃣ Support se baat karein 👨‍💼"
+            "3️⃣ Support se baat karein"
         ),
     },
     "ask_order": {
@@ -230,29 +230,29 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "connecting": {
         "english": (
-            "Sure! Connecting you to a human agent 👨‍💼\n"
+            "Sure! Connecting you to support\n"
             "Please wait a moment…"
         ),
         "arabic": (
-            "حسنًا! سيتم توصيلك بأحد الموظفين 👨‍💼\n"
+            "حسنًا! سيتم توصيلك بالدعم\n"
             "يرجى الانتظار قليلاً…"
         ),
         "roman_urdu": (
-            "Theek hai! Aap ko agent se connect kiya ja raha hai 👨‍💼\n"
+            "Theek hai! Aap ko support se connect kiya ja raha hai\n"
             "Thora intezar karein…"
         ),
     },
     "handoff_retry": {
         "english": (
-            "Still looking for an available agent 👨‍💼\n"
+            "Still looking for available support\n"
             "Please wait — we'll connect you as soon as someone is free."
         ),
         "arabic": (
-            "ما زلنا نبحث عن موظف متاح 👨‍💼\n"
+            "ما زلنا نبحث عن دعم متاح\n"
             "يرجى الانتظار — سنوصلك فور توفر أحد."
         ),
         "roman_urdu": (
-            "Abhi bhi available agent dhoondh rahe hain 👨‍💼\n"
+            "Abhi bhi available support dhoondh rahe hain\n"
             "Thora intezar karein — jaisay hi koi free ho ga connect kar dein ge."
         ),
     },
@@ -293,37 +293,37 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     "kb_wrap": {
         "english": (
             "💡 Here's what you need to know:\n\n{body}\n\n"
-            "Need more help? Type support 👨‍💼\n"
+            "Need more help? Type support\n"
             "To see the main choices again, type main menu."
         ),
         "arabic": (
             "💡 إليك المعلومات:\n\n{body}\n\n"
-            "لمزيد من المساعدة اكتب support 👨‍💼\n"
+            "لمزيد من المساعدة اكتب support\n"
             "لعرض الخيارات من جديد اكتب: القائمة الرئيسية"
         ),
         "roman_urdu": (
             "💡 Yeh information aap ke liye:\n\n{body}\n\n"
-            "Mazeed madad ke liye support likhein 👨‍💼\n"
+            "Mazeed madad ke liye support likhein\n"
             "Menu dubara dekhne ke liye likhein: main menu"
         ),
     },
     "products_hint": {
-        "english": "Browse products section is available. You can also type your question 💬",
-        "arabic": "يمكنك تصفح قسم المنتجات. ويمكنك أيضاً كتابة سؤالك 💬",
-        "roman_urdu": "Aap products browse kar sakte hain. Ya apna sawal likh dein 💬",
+        "english": "Browse products section is available. You can also type your question.",
+        "arabic": "يمكنك تصفح قسم المنتجات. ويمكنك أيضاً كتابة سؤالك.",
+        "roman_urdu": "Aap products browse kar sakte hain. Ya apna sawal likh dein.",
     },
     "fallback": {
         "english": (
             "I didn’t understand that 🤔\n"
-            "Please choose an option or type your question 💬"
+            "Please choose an option or type your question."
         ),
         "arabic": (
             "لم أفهم ذلك 🤔\n"
-            "يرجى اختيار خيار أو كتابة سؤالك 💬"
+            "يرجى اختيار خيار أو كتابة سؤالك."
         ),
         "roman_urdu": (
             "Mujhay samajh nahi aaya 🤔\n"
-            "Please option select karein ya sawal likhein 💬"
+            "Please option select karein ya sawal likhein."
         ),
     },
 }

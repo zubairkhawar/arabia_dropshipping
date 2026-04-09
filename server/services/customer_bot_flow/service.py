@@ -108,6 +108,40 @@ def _looks_like_greeting(text: str) -> bool:
     return False
 
 
+def _looks_like_free_text_question(text: str) -> bool:
+    """
+    Detect likely FAQ/free-text requests at the entry step so we don't hard-loop
+    on the 1/2 qualifier menu for real questions.
+    """
+    s = (text or "").strip().lower()
+    if not s:
+        return False
+    if _looks_like_greeting(s):
+        return False
+    if solo_menu_digit(s):
+        return False
+    if _parse_choice(
+        s,
+        {"1": "new", "new": "new", "n": "new", "2": "existing", "existing": "existing", "old": "existing", "e": "existing"},
+    ):
+        return False
+    if "?" in s:
+        return True
+    faq_markers = (
+        "tell me",
+        "about",
+        "what is",
+        "who are",
+        "dropship arabia",
+        "maloomat",
+        "btao",
+        "batao",
+        "kya",
+        "ka btao",
+    )
+    return any(m in s for m in faq_markers) and len(s) >= 8
+
+
 def _looks_like_order_status_question(text: str) -> bool:
     """Order / tracking intent while user is still on the new-customer menu."""
     t = (text or "").strip().lower()
@@ -508,6 +542,9 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(f, _t(flow_lang, MSGS["verify"]))
+        if _looks_like_free_text_question(text):
+            f = {**flow, "step": "awaiting_customer_type", "intro_shown": True, "lang": flow_lang}
+            return ai_forward("[Customer entry question] " + text, f, skip_api=True)
         # Unclear reply (e.g. "hi") — send the fixed entry template again, not generic fallback.
         return save(
             {**flow, "step": "awaiting_customer_type", "lang": flow_lang},

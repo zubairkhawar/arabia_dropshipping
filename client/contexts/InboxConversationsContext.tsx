@@ -18,6 +18,7 @@ export type ConversationStatus = 'active' | 'resolved' | 'pending';
 export interface InboxConversation {
   id: number;
   customerName: string;
+  customerPhone?: string;
   customerId: string;
   lastMessage: string;
   lastActivityAt: string;
@@ -101,6 +102,7 @@ interface ConversationSummaryApi {
   id: number;
   customer_id: number;
   customer_name?: string | null;
+  customer_phone?: string | null;
   last_message?: string | null;
   last_activity_at?: string | null;
   channel: 'whatsapp' | 'web' | 'portal';
@@ -225,6 +227,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       return {
         id: c.id,
         customerName: c.customer_name || `Customer #${c.customer_id}`,
+        customerPhone: c.customer_phone || undefined,
         customerId: `#${c.customer_id}`,
         lastMessage: c.last_message || '',
         lastActivityAt: formatConversationListTime(c.last_activity_at, timeZone),

@@ -16,6 +16,7 @@ type ConversationStatus = 'active' | 'resolved' | 'pending';
 interface Conversation {
   id: number;
   customerName: string;
+  customerPhone?: string;
   customerId: string;
   lastMessage: string;
   lastActivityAt: string;
@@ -447,6 +448,15 @@ export function ChatList() {
                             {conv.lastActivityAt}
                           </span>
                         </div>
+                        {conv.customerPhone && (
+                          <p
+                            className={`text-[11px] truncate mb-0.5 ${
+                              isSelected ? 'text-white/85' : 'text-text-muted'
+                            }`}
+                          >
+                            {conv.customerPhone}
+                          </p>
+                        )}
                         {showNewLead && (
                           <p
                             className={`text-[10px] font-semibold uppercase tracking-wide mb-0.5 ${
@@ -535,6 +545,15 @@ export function ChatList() {
                             {conv.closedAt ?? conv.lastActivityAt}
                           </span>
                         </div>
+                        {conv.customerPhone && (
+                          <p
+                            className={`text-[11px] truncate mb-0.5 ${
+                              isSelected ? 'text-white/85' : 'text-text-muted'
+                            }`}
+                          >
+                            {conv.customerPhone}
+                          </p>
+                        )}
                         <p
                           className={`text-xs truncate ${
                             isSelected ? 'text-white/90' : 'text-text-secondary'

@@ -61,6 +61,7 @@ class ConversationSummary(BaseModel):
     tenant_id: int
     store_id: int
     customer_id: int
+    customer_phone: Optional[str] = None
     agent_id: Optional[int]
     channel: str
     status: str
@@ -136,8 +137,11 @@ class WhatsAppWebhookPayload(BaseModel):
 def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> ConversationSummary:
     last_msg = c.messages[-1] if c.messages else None
     customer_name = None
+    customer_phone = None
     if c.customer and getattr(c.customer, "name", None):
         customer_name = c.customer.name
+    if c.customer and getattr(c.customer, "phone", None):
+        customer_phone = c.customer.phone
 
     meta = c.conversation_metadata if isinstance(c.conversation_metadata, dict) else {}
     bot_flow = meta.get("bot_flow") if isinstance(meta.get("bot_flow"), dict) else {}
@@ -148,6 +152,7 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
         tenant_id=c.tenant_id,
         store_id=c.store_id,
         customer_id=c.customer_id,
+        customer_phone=customer_phone,
         agent_id=c.agent_id,
         channel=c.channel,
         status=c.status,
@@ -781,16 +786,28 @@ async def send_message(
         phone = customer.phone if customer else None
         wa = MetaWhatsAppClient()
         if phone and wa.is_configured():
-            line = content_stripped
-            if has_media:
-                if meta_to_store and meta_to_store.get("type") == "image":
-                    line = content_stripped if content_stripped != "Image" else "[Image — view in our support chat link]"
-                elif meta_to_store and meta_to_store.get("type") == "voice":
-                    line = content_stripped if content_stripped != "Voice message" else "[Voice message — view in support portal]"
-                elif meta_to_store and meta_to_store.get("type") == "file":
-                    line = content_stripped
             try:
-                await wa.send_text_message(to_phone=str(phone), text=line[:4096])
+                if has_media and meta_to_store and meta_to_store.get("type") == "image":
+                    meta_api = enrich_metadata_for_api(meta_to_store) or {}
+                    image_url = str(meta_api.get("media_url") or "").strip()
+                    caption = "" if content_stripped == "Image" else content_stripped
+                    if image_url:
+                        await wa.send_image_message(
+                            to_phone=str(phone),
+                            image_url=image_url,
+                            caption=caption,
+                        )
+                    else:
+                        line = caption or "[Image]"
+                        await wa.send_text_message(to_phone=str(phone), text=line[:4096])
+                else:
+                    line = content_stripped
+                    if has_media:
+                        if meta_to_store and meta_to_store.get("type") == "voice":
+                            line = content_stripped if content_stripped != "Voice message" else "[Voice message — view in support portal]"
+                        elif meta_to_store and meta_to_store.get("type") == "file":
+                            line = content_stripped
+                    await wa.send_text_message(to_phone=str(phone), text=line[:4096])
                 msg.wa_delivered_at = datetime.utcnow()
                 db.add(msg)
                 db.commit()
