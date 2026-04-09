@@ -143,13 +143,15 @@ export function ChatList() {
     return [...list].sort((a, b) => b.id - a.id);
   }, [conversations, view]);
 
-  const liveConversations = filteredConversations.filter((c) => c.status === 'active');
+  const liveConversations = filteredConversations.filter((c) =>
+    isAgentInbox ? c.status === 'active' : c.status === 'active' || c.status === 'transferred',
+  );
   const closedConversations = filteredConversations.filter((c) => c.status === 'resolved');
   const transferredConversations = filteredConversations.filter((c) => c.status === 'transferred');
   const hasAnyInboxConversation =
     liveConversations.length > 0 ||
     closedConversations.length > 0 ||
-    transferredConversations.length > 0;
+    (isAgentInbox && transferredConversations.length > 0);
   const activeSearch = inboxQuery.trim();
   const localFallbackResults = useMemo(() => {
     const q = activeSearch.toLowerCase();
@@ -288,7 +290,7 @@ export function ChatList() {
                 ))}
               </div>
             ) : null}
-            {!(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
+            {isAgentInbox && !(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -541,7 +543,7 @@ export function ChatList() {
             {!(isAgentInbox && inboxConv?.isLoading) &&
               liveConversations.length === 0 &&
               closedConversations.length === 0 &&
-              transferredConversations.length === 0 && (
+              (!isAgentInbox || transferredConversations.length === 0) && (
               <div className="px-2 py-4 text-[12px] text-text-muted">
                 No conversations match this view yet. Adjust the agent selection or try a different
                 inbox view.
