@@ -10,6 +10,8 @@ const API_BASE =
   'https://arabia-dropshipping.onrender.com';
 const TENANT_ID = 1;
 const DM_CONVERSATIONS_REFRESH_MS = 10_000;
+const DM_GET_CACHE_TTL_MS = 10_000;
+const dmGetCache = new Map<string, { timestamp: number; data: unknown }>();
 
 function dmAuthHeaders(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -22,6 +24,23 @@ function dmAuthHeaders(): Record<string, string> {
 
 function dmJsonHeaders(): Record<string, string> {
   return { 'Content-Type': 'application/json', ...dmAuthHeaders() };
+}
+
+async function dmGetJsonWithCache(url: string, ttlMs = DM_GET_CACHE_TTL_MS): Promise<unknown> {
+  const auth = dmAuthHeaders().Authorization ?? '';
+  const key = `${url}|${auth}`;
+  const now = Date.now();
+  const cached = dmGetCache.get(key);
+  if (cached && now - cached.timestamp < ttlMs) {
+    return cached.data;
+  }
+  const res = await fetch(url, { headers: dmAuthHeaders() });
+  if (!res.ok) {
+    throw new Error(`GET failed: ${res.status}`);
+  }
+  const data = (await res.json()) as unknown;
+  dmGetCache.set(key, { timestamp: now, data });
+  return data;
 }
 
 const DM_UNREAD_STORAGE_KEY = 'dm-unread-by-slug:v1';
@@ -184,20 +203,16 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
     listUrl.searchParams.set('agent_id', String(Number(currentAgentId)));
 
     try {
-      const [listRes, messagesRes] = await Promise.all([
-        fetch(listUrl.toString(), { headers: dmAuthHeaders() }),
-        last
-          ? fetch(
-              `${API_BASE}/api/internal-dm/conversations/${last.conversationId}/messages?agent_id=${encodeURIComponent(
-                String(Number(currentAgentId)),
-              )}&limit=50`,
-              { headers: dmAuthHeaders() },
-            )
-          : Promise.resolve({ ok: false } as Response),
+      const lastMessagesUrl = last
+        ? `${API_BASE}/api/internal-dm/conversations/${last.conversationId}/messages?agent_id=${encodeURIComponent(
+            String(Number(currentAgentId)),
+          )}&limit=50`
+        : null;
+      const [rowsRaw, lastMessagesRaw] = await Promise.all([
+        dmGetJsonWithCache(listUrl.toString()),
+        lastMessagesUrl ? dmGetJsonWithCache(lastMessagesUrl) : Promise.resolve(null),
       ]);
-
-      if (!listRes.ok) return;
-      const rows = (await listRes.json()) as Array<{
+      const rows = rowsRaw as Array<{
         id: number;
         peer: { agent_id: number; name: string; avatar_url?: string | null };
         last_message_at: string | null;
@@ -268,10 +283,9 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      if (messagesRes.ok && last) {
+      if (lastMessagesRaw && last) {
         const slugFromList = mapped.find((c) => c.id === last.conversationId)?.slug ?? last.slug;
-        const raw = await messagesRes.json();
-        const { rows: msgRows, hasMoreOlder } = parseDmMessagesPayload(raw);
+        const { rows: msgRows, hasMoreOlder } = parseDmMessagesPayload(lastMessagesRaw);
         const peerName =
           mapped.find((c) => c.slug === slugFromList)?.name ||
           'Agent';

@@ -1173,7 +1173,19 @@ export function ChatWindow({
   );
 
   const { sendTyping: sendTypingWs, sendDeliveryAck: teamSendDeliveryAck } = useTeamChannelRealtime(
-    Boolean(isInternalChat && isTeamChannel && teamId && typeof window !== 'undefined'),
+    Boolean(
+      isInternalChat &&
+        isTeamChannel &&
+        teamId &&
+        typeof window !== 'undefined' &&
+        (
+          // Admin broadcast mode can observe channels without member roster.
+          broadcastMode ||
+          (viewerAgentId > 0 &&
+            Array.isArray(teamMemberRoster) &&
+            teamMemberRoster.some((m) => Number.parseInt(String(m.agentId || ''), 10) === viewerAgentId))
+        ),
+    ),
     teamId ? Number(teamId) : null,
     TENANT_ID,
     handleTeamChannelWs,
