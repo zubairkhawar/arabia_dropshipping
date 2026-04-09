@@ -436,6 +436,20 @@ async def add_member(
     )
     if existing:
         return
+    existing_any_team = (
+        db.query(TeamMembership)
+        .filter(
+            TeamMembership.tenant_id == payload.tenant_id,
+            TeamMembership.agent_id == payload.agent_id,
+            TeamMembership.team_id != team_id,
+        )
+        .first()
+    )
+    if existing_any_team:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent is already assigned to another team",
+        )
 
     membership = TeamMembership(
         tenant_id=payload.tenant_id,
@@ -625,6 +639,17 @@ async def transfer_member(payload: TeamTransfer, db: Session = Depends(get_db)):
             created_at=datetime.utcnow(),
         )
     )
+    if payload.from_team_id:
+        db.add(
+            TeamEvent(
+                tenant_id=payload.tenant_id,
+                team_id=payload.from_team_id,
+                event_type="member_transferred",
+                target_agent_id=payload.agent_id,
+                payload={"to_team_id": payload.to_team_id},
+                created_at=datetime.utcnow(),
+            )
+        )
     db.commit()
     db.refresh(xfer_notif)
     from services.agent_portal_service.broadcast import push_notification_event

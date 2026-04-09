@@ -3212,21 +3212,8 @@ export function ChatWindow({
                           closeMenus();
                           return;
                         }
-                        const content = 'Conversation sent back to AI bot.';
                         if (inboxConv?.selectedId != null) {
-                          const now = new Date();
-                          const systemMsg: Message = {
-                            id: Math.max(0, ...messages.map((m) => m.id)) + 1,
-                            content,
-                            sender: 'ai',
-                            senderName: 'System',
-                            timestamp: formatTime12hInZone(now, timeZone),
-                            sentAt: now.toISOString(),
-                          };
-                          inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
                           inboxConv.sendConversationToAI(inboxConv.selectedId);
-                        } else {
-                          addSystemNote(content);
                         }
                         closeMenus();
                       }}

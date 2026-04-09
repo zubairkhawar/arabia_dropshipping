@@ -50,7 +50,7 @@ interface TeamEventApiModel {
   event_type: TeamEventType;
   actor_agent_id: number | null;
   target_agent_id: number | null;
-  payload: { from_team_id?: number };
+  payload: { from_team_id?: number; to_team_id?: number };
   created_at: string;
 }
 
@@ -152,8 +152,11 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
         const eventRows = (await response.json()) as TeamEventApiModel[];
         for (const row of eventRows) {
           const fromTeamId = row.payload?.from_team_id ? String(row.payload.from_team_id) : undefined;
+          const toTeamId = row.payload?.to_team_id ? String(row.payload.to_team_id) : undefined;
           const targetTeamName = row.event_type === 'member_transferred'
-            ? team.name
+            ? (toTeamId
+              ? teamsById.get(toTeamId)?.name
+              : team.name)
             : fromTeamId
               ? teamsById.get(fromTeamId)?.name
               : undefined;

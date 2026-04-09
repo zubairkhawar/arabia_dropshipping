@@ -704,6 +704,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
               status: 'resolved',
               closedAt,
               unread: 0,
+              lastMessage: 'Conversation transferred to Arabia Dropbot.',
               lastActivityAt: 'Just now',
             }
           : c,

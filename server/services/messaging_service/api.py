@@ -1091,6 +1091,7 @@ async def update_conversation_status(
 async def send_conversation_to_ai(
     conversation_id: int,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """
     Return ownership of a conversation to AI by clearing assigned agent.
@@ -1102,12 +1103,73 @@ async def send_conversation_to_ai(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
         )
+    transfer_by_name = "Agent"
+    if current_user is not None:
+        ag = (
+            db.query(Agent)
+            .filter(Agent.user_id == current_user.id, Agent.tenant_id == conversation.tenant_id)
+            .first()
+        )
+        if ag and isinstance(ag.name, str) and ag.name.strip():
+            transfer_by_name = ag.name.strip()
+
+    handoff_note = f"{transfer_by_name} transferred this chat to Arabia Dropbot."
+    dropbot_greeting = "How may I help further?"
+
+    handoff_msg = Message(
+        conversation_id=conversation.id,
+        content=handoff_note,
+        sender_type="ai",
+        sender_id=None,
+        created_at=datetime.utcnow(),
+    )
+    greeting_msg = Message(
+        conversation_id=conversation.id,
+        content=dropbot_greeting,
+        sender_type="ai",
+        sender_id=None,
+        created_at=datetime.utcnow(),
+    )
+    db.add(handoff_msg)
+    db.add(greeting_msg)
+
     conversation.agent_id = None
     conversation.status = "closed"
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)
     db.commit()
     db.refresh(conversation)
+
+    if (conversation.channel or "").lower() == "whatsapp":
+        customer = db.query(Customer).filter(Customer.id == conversation.customer_id).first()
+        phone = customer.phone if customer else None
+        wa = MetaWhatsAppClient()
+        if phone and wa.is_configured():
+            try:
+                wa_resp_1 = await wa.send_text_message(to_phone=str(phone), text=handoff_note)
+                handoff_msg.wa_delivered_at = datetime.utcnow()
+                msgs1 = wa_resp_1.get("messages") if isinstance(wa_resp_1, dict) else None
+                if isinstance(msgs1, list) and msgs1 and isinstance(msgs1[0], dict):
+                    out_wa_id_1 = str(msgs1[0].get("id") or "").strip()
+                    if out_wa_id_1:
+                        handoff_msg.message_metadata = {"wa_message_id": out_wa_id_1}
+
+                wa_resp_2 = await wa.send_text_message(to_phone=str(phone), text=dropbot_greeting)
+                greeting_msg.wa_delivered_at = datetime.utcnow()
+                msgs2 = wa_resp_2.get("messages") if isinstance(wa_resp_2, dict) else None
+                if isinstance(msgs2, list) and msgs2 and isinstance(msgs2[0], dict):
+                    out_wa_id_2 = str(msgs2[0].get("id") or "").strip()
+                    if out_wa_id_2:
+                        greeting_msg.message_metadata = {"wa_message_id": out_wa_id_2}
+                db.add(handoff_msg)
+                db.add(greeting_msg)
+                db.commit()
+            except Exception:
+                logger.exception(
+                    "WhatsApp send-to-ai handoff failed (conversation_id=%s)",
+                    conversation.id,
+                )
+
     _ = conversation.customer
     _ = conversation.messages
     return _build_conversation_summary(conversation)

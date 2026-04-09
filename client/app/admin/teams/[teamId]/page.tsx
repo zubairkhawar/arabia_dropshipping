@@ -16,12 +16,13 @@ export default function AdminTeamManagePage() {
   const { toast } = useToast();
   const team = getTeam(teamId);
   const otherTeams = teams.filter((t) => t.id !== teamId);
+  const assignedAgentIds = new Set(teams.flatMap((t) => t.members.map((m) => m.agentId)));
 
   const [newMemberId, setNewMemberId] = useState('');
   const [transferTarget, setTransferTarget] = useState<Record<string, string>>({});
 
   const availableAgentsToAdd = team
-    ? agents.filter((a) => !team.members.some((member) => member.agentId === a.id))
+    ? agents.filter((a) => !assignedAgentIds.has(a.id))
     : [];
 
   if (!team) {
