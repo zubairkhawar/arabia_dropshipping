@@ -157,6 +157,14 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type !== 'portal_connected') return;
+      // One-shot catch-up on websocket connect/reconnect.
+      void refreshNotifications();
+    });
+  }, [subscribe, refreshNotifications]);
+
+  useEffect(() => {
     setIsNotificationsLoading(true);
     void refreshNotifications({ trackInitialLoad: true });
   }, [refreshNotifications]);

@@ -51,7 +51,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "entry": {
         "english": (
-            "Hi! Welcome to Arabia Dropshipping\n\n"
+            "Hi! Welcome to Arabia Dropshipping 😊\n\n"
             "Are you:\n\n"
             "1️⃣ New customer\n"
             "2️⃣ Existing customer\n\n"
@@ -59,7 +59,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Tip: type /reset anytime to restart this menu."
         ),
         "arabic": (
-            "السلام عليكم! مرحبًا بك في Arabia Dropshipping\n\n"
+            "السلام عليكم! مرحبًا بك في Arabia Dropshipping 😊\n\n"
             "هل أنت:\n\n"
             "1️⃣ عميل جديد\n"
             "2️⃣ عميل حالي\n\n"
@@ -67,7 +67,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "لإعادة القائمة اكتب /reset"
         ),
         "roman_urdu": (
-            "Salam! Welcome to Arabia Dropshipping\n\n"
+            "Salam! Welcome to Arabia Dropshipping 😊\n\n"
             "Aap new customer hain ya existing customer?\n\n"
             "1️⃣ New customer\n"
             "2️⃣ Existing customer\n\n"
@@ -77,7 +77,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "new_welcome": {
         "english": (
-            "Great!\n\n"
+            "Great! 😊\n\n"
             "How can we help you today?\n\n"
             "1️⃣ Browse products 🛍️\n"
             "2️⃣ Get information ℹ️\n"
@@ -85,7 +85,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Or type your question anytime"
         ),
         "arabic": (
-            "رائع!\n\n"
+            "رائع! 😊\n\n"
             "كيف يمكننا مساعدتك اليوم؟\n\n"
             "1️⃣ تصفح المنتجات 🛍️\n"
             "2️⃣ الحصول على معلومات ℹ️\n"
@@ -93,7 +93,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "أو اكتب سؤالك في أي وقت"
         ),
         "roman_urdu": (
-            "Great!\n\n"
+            "Great! 😊\n\n"
             "Aap ko kis cheez mein madad chahiye?\n\n"
             "1️⃣ Products dekhna 🛍️\n"
             "2️⃣ Maloomat lena ℹ️\n"
@@ -103,7 +103,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "new_menu_after_greeting": {
         "english": (
-            "Hello!\n\n"
+            "Hello! 😊\n\n"
             "How can we help you today?\n\n"
             "1️⃣ Browse products 🛍️\n"
             "2️⃣ Get information ℹ️\n"
@@ -231,15 +231,15 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     "connecting": {
         "english": (
             "Sure! Connecting you to support\n"
-            "Please wait a moment…"
+            "Please wait a moment 😊"
         ),
         "arabic": (
             "حسنًا! سيتم توصيلك بالدعم\n"
-            "يرجى الانتظار قليلاً…"
+            "يرجى الانتظار قليلاً 😊"
         ),
         "roman_urdu": (
             "Theek hai! Aap ko support se connect kiya ja raha hai\n"
-            "Thora intezar karein…"
+            "Thora intezar karein 😊"
         ),
     },
     "handoff_retry": {

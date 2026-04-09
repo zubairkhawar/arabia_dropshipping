@@ -144,6 +144,8 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
           const id = readAuthAgentId();
           if (id) void setAgentStatus(id, 'online');
         };
+        // Let downstream contexts recover any missed events during reconnect gaps.
+        notify({ type: 'portal_connected' });
         sync();
         window.setTimeout(sync, 500);
       };

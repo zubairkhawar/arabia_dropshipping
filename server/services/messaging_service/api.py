@@ -812,6 +812,17 @@ async def send_message(
                 db.add(msg)
                 db.commit()
                 db.refresh(msg)
+                if conversation.agent_id:
+                    await push_inbox_sync_event(
+                        db,
+                        conversation.tenant_id,
+                        conversation.agent_id,
+                        {
+                            "type": "inbox_message_updated",
+                            "conversation_id": conversation.id,
+                            "message": _message_dict_for_ws(db, msg),
+                        },
+                    )
             except Exception:
                 logger.exception(
                     "WhatsApp outbound (agent) failed conversation_id=%s",

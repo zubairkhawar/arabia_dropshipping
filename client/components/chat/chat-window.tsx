@@ -2448,7 +2448,13 @@ export function ChatWindow({
     const now = new Date();
     const newMsg: Message = {
       id: nextId,
-      content: text || (pendingAttachment?.type === 'voice' ? 'Voice message' : pendingAttachment?.name || 'Attachment'),
+      content:
+        text ||
+        (pendingAttachment?.type === 'voice'
+          ? 'Voice message'
+          : pendingAttachment?.type === 'photo'
+            ? 'Image'
+            : pendingAttachment?.name || 'Attachment'),
       sender: 'agent' as const,
       senderName: showBroadcastInput ? 'Admin' : 'You',
       timestamp: formatTime12hInZone(now, timeZone),
