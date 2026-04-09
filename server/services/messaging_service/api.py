@@ -24,7 +24,9 @@ from services.ai_orchestrator_service.services import AIOrchestrator
 from langchain_bot import ArabiaLangChainBot
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 from services.customer_bot_flow import (
+    append_handoff_agent_line,
     format_kb_reply,
+    lookup_agent_display_name,
     process_customer_bot_message,
     resolve_bot_template,
 )
@@ -516,6 +518,7 @@ async def get_conversation(
         None, description="Messages strictly after this time (reconnect gap fill)"
     ),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """
     Get conversation details and a page of messages (latest page by default; older via before_id).
@@ -755,11 +758,7 @@ async def send_message(
     if conversation.agent_id is not None:
         await push_unread_summary(db, conversation.tenant_id, conversation.agent_id)
 
-    if (
-        msg.sender_type == "agent"
-        and (conversation.channel or "").lower() == "whatsapp"
-        and has_media
-    ):
+    if msg.sender_type == "agent" and (conversation.channel or "").lower() == "whatsapp":
         customer = (
             db.query(Customer).filter(Customer.id == conversation.customer_id).first()
         )
@@ -767,12 +766,13 @@ async def send_message(
         wa = MetaWhatsAppClient()
         if phone and wa.is_configured():
             line = content_stripped
-            if meta_to_store and meta_to_store.get("type") == "image":
-                line = content_stripped if content_stripped != "Image" else "[Image — view in our support chat link]"
-            elif meta_to_store and meta_to_store.get("type") == "voice":
-                line = content_stripped if content_stripped != "Voice message" else "[Voice message — view in support portal]"
-            elif meta_to_store and meta_to_store.get("type") == "file":
-                line = content_stripped
+            if has_media:
+                if meta_to_store and meta_to_store.get("type") == "image":
+                    line = content_stripped if content_stripped != "Image" else "[Image — view in our support chat link]"
+                elif meta_to_store and meta_to_store.get("type") == "voice":
+                    line = content_stripped if content_stripped != "Voice message" else "[Voice message — view in support portal]"
+                elif meta_to_store and meta_to_store.get("type") == "file":
+                    line = content_stripped
             try:
                 await wa.send_text_message(to_phone=str(phone), text=line[:4096])
                 msg.wa_delivered_at = datetime.utcnow()
@@ -781,7 +781,7 @@ async def send_message(
                 db.refresh(msg)
             except Exception:
                 logger.exception(
-                    "WhatsApp fallback text failed conversation_id=%s",
+                    "WhatsApp outbound (agent) failed conversation_id=%s",
                     conversation.id,
                 )
 
@@ -1226,6 +1226,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         )
         db.refresh(conversation)
         if assign_result.agent_id is not None and assign_result.reason != "conversation_already_assigned":
+            aname = lookup_agent_display_name(db, assign_result.agent_id)
+            if aname:
+                reply_text = append_handoff_agent_line(
+                    bf_lang or detected_language,
+                    reply_text,
+                    aname,
+                )
             await notify_bot_handoff_assigned(
                 db,
                 tenant_id,

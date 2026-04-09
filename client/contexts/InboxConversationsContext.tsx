@@ -266,6 +266,29 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     [timeZone],
   );
 
+  const syncInboxReadState = useCallback(async (convId: number, lastReadMessageId: number) => {
+    if (!isAgentPortal) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/agent-portal/inbox/read-state`, {
+        method: 'POST',
+        headers: authJsonHeaders(),
+        body: JSON.stringify({
+          tenant_id: TENANT_ID,
+          conversation_id: convId,
+          last_read_message_id: lastReadMessageId,
+        }),
+      });
+      if (res.ok) {
+        writeInboxLastReadEntry(convId, lastReadMessageId);
+        setConversations((prev) =>
+          prev.map((c) => (c.id === convId ? { ...c, unread: 0 } : c)),
+        );
+      }
+    } catch {
+      // ignore
+    }
+  }, [isAgentPortal]);
+
   const refreshConversations = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -301,6 +324,10 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           ...prev,
           [convId]: { hasMoreOlder: Boolean(data.has_more_older) },
         }));
+        if (mapped.length > 0) {
+          const maxId = Math.max(...mapped.map((m) => m.id));
+          void syncInboxReadState(convId, maxId);
+        }
       } catch {
         setMessagesByConvId((prev) => ({ ...prev, [convId]: [] }));
         setInboxMetaByConvId((prev) => ({ ...prev, [convId]: { hasMoreOlder: false } }));
@@ -308,7 +335,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         setLoadingConversationId((id) => (id === convId ? null : id));
       }
     },
-    [mapDetailToMessages],
+    [mapDetailToMessages, syncInboxReadState],
   );
 
   const loadOlderInboxMessages = useCallback(
@@ -353,29 +380,6 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     (convId: number) => inboxMetaByConvId[convId]?.hasMoreOlder ?? false,
     [inboxMetaByConvId],
   );
-
-  const syncInboxReadState = useCallback(async (convId: number, lastReadMessageId: number) => {
-    if (!isAgentPortal) return;
-    try {
-      const res = await fetch(`${API_BASE}/api/agent-portal/inbox/read-state`, {
-        method: 'POST',
-        headers: authJsonHeaders(),
-        body: JSON.stringify({
-          tenant_id: TENANT_ID,
-          conversation_id: convId,
-          last_read_message_id: lastReadMessageId,
-        }),
-      });
-      if (res.ok) {
-        writeInboxLastReadEntry(convId, lastReadMessageId);
-        setConversations((prev) =>
-          prev.map((c) => (c.id === convId ? { ...c, unread: 0 } : c)),
-        );
-      }
-    } catch {
-      // ignore
-    }
-  }, [isAgentPortal]);
 
   useEffect(() => {
     return subscribe((msg) => {
@@ -487,9 +491,9 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         const [rowsRaw, detailData] = await Promise.all([
           fetch(listUrl.toString()).then(async (r) => (r.ok ? r.json() : [])),
           lastId != null
-            ? fetch(`${API_BASE}/api/messaging/conversations/${lastId}?limit=50`).then(async (r) =>
-                r.ok ? r.json() : null,
-              )
+            ? fetch(`${API_BASE}/api/messaging/conversations/${lastId}?limit=50`, {
+                headers: authJsonHeaders(),
+              }).then(async (r) => (r.ok ? r.json() : null))
             : Promise.resolve(null),
         ]);
 
@@ -508,6 +512,10 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
             ...prev,
             [convId]: { hasMoreOlder: Boolean(data.has_more_older) },
           }));
+          if (mappedMsgs.length > 0) {
+            const maxId = Math.max(...mappedMsgs.map((m) => m.id));
+            void syncInboxReadState(convId, maxId);
+          }
         }
 
         setSelectedId((prev) => pickInboxSelection(mapped, lastId, prev));
@@ -520,7 +528,14 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     return () => {
       cancelled = true;
     };
-  }, [isAgentPortal, currentAgentId, mapConversation, fetchConversationRowsFromApi, mapDetailToMessages]);
+  }, [
+    isAgentPortal,
+    currentAgentId,
+    mapConversation,
+    fetchConversationRowsFromApi,
+    mapDetailToMessages,
+    syncInboxReadState,
+  ]);
 
   useEffect(() => {
     if (!isAgentPortal || selectedId == null) return;

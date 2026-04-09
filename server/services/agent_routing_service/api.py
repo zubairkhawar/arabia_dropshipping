@@ -270,7 +270,7 @@ def _get_random_available_agent(
     """Pick a random online agent under capacity, optionally filtered by team."""
     query = db.query(Agent).filter(
         Agent.tenant_id == tenant_id,
-        Agent.status == AgentStatus.online.value,
+        Agent.status.in_((AgentStatus.online.value, AgentStatus.busy.value)),
     )
     if team:
         query = query.filter(Agent.team == team)

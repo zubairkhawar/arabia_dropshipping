@@ -12,7 +12,9 @@ from database import get_db
 from langchain_bot import ArabiaLangChainBot
 from models import Conversation, Message, Tenant
 from services.customer_bot_flow import (
+    append_handoff_agent_line,
     format_kb_reply,
+    lookup_agent_display_name,
     process_customer_bot_message,
     public_templates_payload,
     resolve_bot_template,
@@ -225,6 +227,14 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
         )
         db.refresh(conversation)
         if assign_result.agent_id is not None and assign_result.reason != "conversation_already_assigned":
+            aname = lookup_agent_display_name(db, assign_result.agent_id)
+            if aname:
+                lang = (
+                    bf_lang
+                    if isinstance(bf_lang, str) and bf_lang.strip()
+                    else detected_language
+                )
+                reply_text = append_handoff_agent_line(lang, reply_text, aname)
             await notify_bot_handoff_assigned(
                 db,
                 message.tenant_id,

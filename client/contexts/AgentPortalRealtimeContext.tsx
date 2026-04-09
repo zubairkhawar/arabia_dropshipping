@@ -11,6 +11,12 @@ import React, {
   ReactNode,
 } from 'react';
 
+import { useAgents } from '@/contexts/AgentsContext';
+import {
+  AGENT_PORTAL_PREFERS_OFFLINE_KEY,
+  readAuthAgentId,
+} from '@/lib/agent-session-storage';
+
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
@@ -52,6 +58,7 @@ function parseUnread(msg: Record<string, unknown>): AgentPortalUnread | null {
 }
 
 export function AgentPortalRealtimeProvider({ children }: { children: ReactNode }) {
+  const { setAgentStatus } = useAgents();
   const [unread, setUnread] = useState<AgentPortalUnread>(defaultUnread);
   const listenersRef = useRef(new Set<PortalListener>());
   const wsRef = useRef<WebSocket | null>(null);
@@ -130,6 +137,16 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
         return;
       }
       wsRef.current = ws;
+      ws.onopen = () => {
+        if (typeof window === 'undefined') return;
+        const sync = () => {
+          if (sessionStorage.getItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY) === '1') return;
+          const id = readAuthAgentId();
+          if (id) void setAgentStatus(id, 'online');
+        };
+        sync();
+        window.setTimeout(sync, 500);
+      };
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(String(ev.data)) as Record<string, unknown>;
@@ -175,7 +192,7 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
       }
       wsRef.current = null;
     };
-  }, [notify, refreshUnread]);
+  }, [notify, refreshUnread, setAgentStatus]);
 
   const value = useMemo(
     () => ({ unread, setUnread, subscribe, refreshUnread, sendToPortal }),

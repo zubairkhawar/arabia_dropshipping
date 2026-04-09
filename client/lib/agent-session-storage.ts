@@ -1,5 +1,8 @@
 /** Persisted agent session hints for fast cold start and restoring the last-open thread. */
 
+/** When set, WebSocket must not auto-mark the agent online (user chose Offline). */
+export const AGENT_PORTAL_PREFERS_OFFLINE_KEY = 'agent_portal_prefers_offline';
+
 export const AUTH_AGENT_ID_KEY = 'auth_agent_id';
 export const LAST_INBOX_CONVERSATION_ID_KEY = 'agent_last_inbox_conversation_id';
 export const LAST_DM_CONVERSATION_ID_KEY = 'agent_last_dm_conversation_id';

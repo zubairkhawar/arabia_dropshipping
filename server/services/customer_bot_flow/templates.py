@@ -6,7 +6,7 @@ invent or paraphrase welcome lines, onboarding menus, verification prompts, or
 other scripted steps — see langchain_bot/prompts.py.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # Template id → language code → exact message ({placeholders} only where noted).
 BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
@@ -214,6 +214,20 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "ya **agent** / **support** likhein."
         ),
     },
+    "connecting_agent_named": {
+        "english": (
+            "\n\nYou're connected with {agent_name}. "
+            "They'll reply to you here in WhatsApp."
+        ),
+        "arabic": (
+            "\n\nتم توصيلك بـ {agent_name}. "
+            "سيردّ عليك هنا في واتساب."
+        ),
+        "roman_urdu": (
+            "\n\nAap {agent_name} se connect ho chuke hain. "
+            "Woh yahin WhatsApp par jawab dein ge."
+        ),
+    },
     "connecting": {
         "english": (
             "Sure! Connecting you to a human agent 👨‍💼\n"
@@ -321,6 +335,34 @@ def resolve_bot_template(lang: str, template_id: str) -> str:
     if not table:
         return ""
     return table.get(lang) or table.get("english") or next(iter(table.values()))
+
+
+def append_handoff_agent_line(lang: str, reply_text: str, agent_name: str) -> str:
+    """Append one line naming the assigned human agent after the generic 'connecting' copy."""
+    n = (agent_name or "").strip()
+    if not n:
+        return reply_text or ""
+    tpl = resolve_bot_template(lang, "connecting_agent_named")
+    if not tpl:
+        return reply_text or ""
+    try:
+        suffix = tpl.format(agent_name=n)
+    except Exception:
+        suffix = f"\n\nYou're connected with {n}."
+    return f"{(reply_text or '').strip()}{suffix}"
+
+
+def lookup_agent_display_name(db: Any, agent_id: int) -> Optional[str]:
+    """Display name for WhatsApp handoff follow-up (User.full_name, else Agent id)."""
+    from models import Agent, User
+
+    ag = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not ag:
+        return None
+    u = db.query(User).filter(User.id == ag.user_id).first()
+    if u and (u.full_name or "").strip():
+        return (u.full_name or "").strip()
+    return f"Agent #{agent_id}"
 
 
 def public_templates_payload() -> Dict[str, Any]:

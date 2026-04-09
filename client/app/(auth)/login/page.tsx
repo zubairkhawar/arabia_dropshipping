@@ -3,7 +3,11 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { clearAuthAgentId, writeAuthAgentId } from '@/lib/agent-session-storage';
+import {
+  AGENT_PORTAL_PREFERS_OFFLINE_KEY,
+  clearAuthAgentId,
+  writeAuthAgentId,
+} from '@/lib/agent-session-storage';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'https://arabia-dropshipping.onrender.com';
 
@@ -64,6 +68,7 @@ export default function LoginPage() {
           }
           const agentMe = (await agentMeRes.json()) as { id: number };
           writeAuthAgentId(String(agentMe.id));
+          sessionStorage.removeItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY);
         } else {
           clearAuthAgentId();
         }

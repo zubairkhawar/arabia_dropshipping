@@ -12,7 +12,7 @@ import { useNotifications } from '@/contexts/NotificationsContext';
 import type { AgentNotification } from '@/contexts/NotificationsContext';
 import { useToast } from '@/contexts/ToastContext';
 import { usePathname, useRouter } from 'next/navigation';
-import { readAuthAgentId } from '@/lib/agent-session-storage';
+import { AGENT_PORTAL_PREFERS_OFFLINE_KEY, readAuthAgentId } from '@/lib/agent-session-storage';
 import { useAgentSearch } from '@/contexts/AgentSearchContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { formatCompactActivity } from '@/lib/tenant-time';
@@ -78,7 +78,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const avatarMenuRef = useRef<HTMLDivElement>(null);
   const { isCollapsed, toggleSidebar } = useSidebar();
   const { avatarUrl, fullName, setAvatarUrl, setFullName } = useAgentProfile();
-  const { currentAgentId, updateAgent, getCurrentAgent, setAgentStatus } = useAgents();
+  const { currentAgentId, updateAgent, getCurrentAgent, setAgentStatus, agents } = useAgents();
   const currentAgent = getCurrentAgent();
   const { setPresence } = useAgentPresence();
   const { isWithinSchedule, schedule } = useOnlineSchedule();
@@ -142,6 +142,13 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const applyStatusChange = useCallback(
     (status: AgentStatus) => {
       const targetBackendStatus = status === 'active' ? 'online' : 'offline';
+      if (typeof window !== 'undefined') {
+        if (status === 'offline') {
+          sessionStorage.setItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY, '1');
+        } else {
+          sessionStorage.removeItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY);
+        }
+      }
       if (currentAgentId) {
         void setAgentStatus(currentAgentId, targetBackendStatus);
       }
@@ -168,11 +175,13 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
         setActiveSinceMs(now);
       }
     } else {
+      // While agents are still loading, `currentAgent` is null and status looks "offline" — do not wipe the timer.
+      if (!currentAgent) return;
       if (typeof window !== 'undefined') localStorage.removeItem(key);
       setActiveSinceMs(null);
       setActiveElapsedLabel('00:00');
     }
-  }, [agentStatus, currentAgentId]);
+  }, [agentStatus, currentAgentId, currentAgent, agents.length]);
 
   useEffect(() => {
     if (agentStatus !== 'active' || !activeSinceMs) {
