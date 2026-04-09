@@ -144,9 +144,9 @@ async def get_tenant_display_timezone(
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    raw = getattr(tenant, "display_timezone", None) or "UTC"
-    cleaned = raw.strip() if isinstance(raw, str) else "UTC"
-    return TenantDisplayTimezoneOut(display_timezone=cleaned or "UTC")
+    raw = getattr(tenant, "display_timezone", None) or "Asia/Karachi"
+    cleaned = raw.strip() if isinstance(raw, str) else "Asia/Karachi"
+    return TenantDisplayTimezoneOut(display_timezone=cleaned or "Asia/Karachi")
 
 
 def _validate_iana_timezone(tz: str) -> str:

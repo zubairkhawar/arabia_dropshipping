@@ -16,7 +16,7 @@ class Tenant(Base):
     name = Column(String, nullable=False)
     domain = Column(String, unique=True, index=True, nullable=True)
     # IANA zone id (e.g. America/New_York). All UI times for the tenant use this; DB stays UTC.
-    display_timezone = Column(String, nullable=False, default="UTC")
+    display_timezone = Column(String, nullable=False, default="Asia/Karachi")
     # OpenAI key for this tenant (admin Settings); loaded at startup into runtime override.
     openai_api_key = Column(Text, nullable=True)
     # Applied to all agents in this tenant (routing capacity); synced to Agent.max_concurrent_chats on update.

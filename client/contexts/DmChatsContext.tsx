@@ -143,6 +143,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
   const [loadingDmSlug, setLoadingDmSlug] = useState<string | null>(null);
   const [loadingOlderDmSlug, setLoadingOlderDmSlug] = useState<string | null>(null);
   const lastSeenConversationTsRef = useRef<Record<string, string>>({});
+  const hasLoadedDmListRef = useRef(false);
 
   const mapRowsToMessages = useCallback(
     (slug: string, rows: DmApiMessageRow[]): DmMessage[] => {
@@ -171,10 +172,12 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
       setMessagesBySlug({});
       setDmMetaBySlug({});
       lastSeenConversationTsRef.current = {};
+      hasLoadedDmListRef.current = false;
       setIsDmListLoading(false);
       return;
     }
-    setIsDmListLoading(true);
+    // Only show full-list skeleton on first load; background refreshes should be silent.
+    if (!hasLoadedDmListRef.current) setIsDmListLoading(true);
     const last = readLastDmPrefs();
     const listUrl = new URL(`${API_BASE}/api/internal-dm/conversations`);
     listUrl.searchParams.set('tenant_id', String(TENANT_ID));
@@ -269,17 +272,33 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         const slugFromList = mapped.find((c) => c.id === last.conversationId)?.slug ?? last.slug;
         const raw = await messagesRes.json();
         const { rows: msgRows, hasMoreOlder } = parseDmMessagesPayload(raw);
-        const mappedMsgs: DmMessage[] = mapRowsToMessages(slugFromList, msgRows);
+        const peerName =
+          mapped.find((c) => c.slug === slugFromList)?.name ||
+          'Agent';
+        const mappedMsgs: DmMessage[] = msgRows.map((row) => ({
+          id: row.id,
+          senderAgentId: String(row.sender_agent_id),
+          senderName: String(row.sender_agent_id) === String(currentAgentId) ? 'You' : peerName,
+          content: row.content,
+          createdAt: row.created_at,
+          replyToMessageId: row.reply_to_message_id ?? undefined,
+          editedAt: row.edited_at ?? undefined,
+          deletedForEveryone: Boolean(row.deleted_for_everyone_at),
+          peerDeliveredAt: row.peer_delivered_at ?? undefined,
+          peerReadAt: row.peer_read_at ?? undefined,
+          messageMetadata: row.message_metadata ?? undefined,
+        }));
         setMessagesBySlug((prev) => ({ ...prev, [slugFromList]: mappedMsgs }));
         setDmMetaBySlug((prev) => ({ ...prev, [slugFromList]: { hasMoreOlder } }));
         writeLastDmPrefs(last.conversationId, slugFromList);
       }
+      hasLoadedDmListRef.current = true;
     } catch {
       // ignore network errors
     } finally {
       setIsDmListLoading(false);
     }
-  }, [currentAgentId, mapRowsToMessages]);
+  }, [currentAgentId]);
 
   useEffect(() => {
     void refreshConversations();

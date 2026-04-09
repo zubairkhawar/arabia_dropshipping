@@ -19,7 +19,7 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     created_at: datetime
-    tenant_display_timezone: str = "UTC"
+    tenant_display_timezone: str = "Asia/Karachi"
 
     class Config:
         from_attributes = True

@@ -41,7 +41,7 @@ class ChangePasswordRequest(BaseModel):
 
 
 def _create_user_response(user: User, db: Session) -> UserResponse:
-    tz = "UTC"
+    tz = "Asia/Karachi"
     tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id).first()
     if tenant is not None:
         raw = getattr(tenant, "display_timezone", None)

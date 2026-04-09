@@ -139,7 +139,7 @@ def ensure_tenant_display_timezone_column() -> None:
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "ALTER TABLE tenants ADD COLUMN display_timezone VARCHAR NOT NULL DEFAULT 'UTC'"
+                    "ALTER TABLE tenants ADD COLUMN display_timezone VARCHAR NOT NULL DEFAULT 'Asia/Karachi'"
                 )
             )
     except Exception:

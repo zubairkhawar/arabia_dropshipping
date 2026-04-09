@@ -53,10 +53,20 @@ def ensure_admin_user() -> None:
     try:
         tenant = db.query(Tenant).filter(Tenant.id == 1).first()
         if tenant is None:
-            tenant = Tenant(id=1, name="Default Tenant", domain=None, is_active=True)
+            tenant = Tenant(
+                id=1,
+                name="Default Tenant",
+                domain=None,
+                display_timezone="Asia/Karachi",
+                is_active=True,
+            )
             db.add(tenant)
             db.commit()
             db.refresh(tenant)
+        elif not getattr(tenant, "display_timezone", None):
+            tenant.display_timezone = "Asia/Karachi"
+            db.add(tenant)
+            db.commit()
 
         existing = db.query(User).filter(User.email == settings.admin_email).first()
         if existing:
