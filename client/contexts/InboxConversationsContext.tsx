@@ -32,6 +32,7 @@ export interface InboxConversation {
   isNewLead?: boolean;
   reopenedAt?: string;
   transferredToAgentName?: string;
+  transferredFromAgentName?: string;
   transferredAt?: string;
 }
 
@@ -270,6 +271,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         handlerAgentId,
         isNewLead: Boolean(c.is_new_customer),
         transferredToAgentName: c.transfer_to_agent_name ?? undefined,
+        transferredFromAgentName: c.transfer_from_agent_name ?? undefined,
         transferredAt: transferredOut ? formatConversationListTime(c.last_activity_at, timeZone) : undefined,
       };
     },

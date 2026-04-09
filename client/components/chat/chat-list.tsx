@@ -4,7 +4,6 @@ import { useState, useMemo, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import { useInboxPanels } from '@/contexts/InboxPanelsContext';
 import { useInboxConversations } from '@/contexts/InboxConversationsContext';
-import { useAgents } from '@/contexts/AgentsContext';
 import { ChevronDown } from 'lucide-react';
 import { useAgentSearch } from '@/contexts/AgentSearchContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
@@ -34,15 +33,6 @@ interface Conversation {
   reopenedAt?: string;
   transferredToAgentName?: string;
   transferredAt?: string;
-}
-
-interface AgentAvatar {
-  id: string;
-  agentId: string;
-  name: string;
-  initials: string;
-  online: boolean;
-  avatarUrl: string | null;
 }
 
 const defaultConversations: Conversation[] = [
@@ -118,10 +108,8 @@ export function ChatList() {
   const inboxPanels = useInboxPanels();
   const pathname = usePathname();
   const inboxConv = useInboxConversations();
-  const { agents: allAgents, currentAgentId } = useAgents();
   const [localSelectedId, setLocalSelectedId] = useState<number | null>(1);
   const [localConversations] = useState<Conversation[]>(defaultConversations);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [liveOpen, setLiveOpen] = useState(true);
   const [closedOpen, setClosedOpen] = useState(true);
   const [transferredOpen, setTransferredOpen] = useState(true);
@@ -135,29 +123,13 @@ export function ChatList() {
   const setSelectedId = inboxConv ? inboxConv.setSelectedId : setLocalSelectedId;
 
   const view: 'all' | 'live' | 'closed' = useMemo(() => {
+    // Admin inbox should always show all buckets (Live / Closed / Transferred)
+    // regardless of route, so operators can monitor full flow in one place.
+    if (pathname?.startsWith('/admin/inbox')) return 'all';
     if (pathname?.startsWith('/admin/inbox/live')) return 'live';
     if (pathname?.startsWith('/admin/inbox/closed')) return 'closed';
     return 'all';
   }, [pathname]);
-
-  const agents: AgentAvatar[] = useMemo(() => {
-    return allAgents
-      .filter((a) => !currentAgentId || a.id !== currentAgentId)
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-      .map((a) => ({
-        id: a.id,
-        agentId: a.id,
-        name: a.name,
-        initials: a.name
-          .split(' ')
-          .map((p) => p[0])
-          .join('')
-          .slice(0, 2)
-          .toUpperCase(),
-        online: a.status === 'online' || a.status === 'busy',
-        avatarUrl: a.avatarUrl ?? null,
-      }));
-  }, [allAgents, currentAgentId]);
 
   const filteredConversations = useMemo(() => {
     let list = conversations;
@@ -168,14 +140,8 @@ export function ChatList() {
       list = list.filter((c) => c.status === 'resolved');
     }
 
-    if (selectedAgentId) {
-      list = list.filter(
-        (c) => c.handlerType === 'agent' && c.handlerAgentId === selectedAgentId,
-      );
-    }
-
     return [...list].sort((a, b) => b.id - a.id);
-  }, [conversations, view, selectedAgentId]);
+  }, [conversations, view]);
 
   const liveConversations = filteredConversations.filter((c) => c.status === 'active');
   const closedConversations = filteredConversations.filter((c) => c.status === 'resolved');
@@ -211,7 +177,7 @@ export function ChatList() {
 
   useEffect(() => {
     if (!isAgentInbox) return;
-    const aid = currentAgentId ?? readAuthAgentId();
+    const aid = readAuthAgentId();
     const q = activeSearch;
     if (!q) {
       setSearchResults([]);
@@ -237,7 +203,7 @@ export function ChatList() {
         .finally(() => setSearchLoading(false));
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [activeSearch, currentAgentId, isAgentInbox]);
+  }, [activeSearch, isAgentInbox]);
 
   const renderHighlighted = (text: string, query: string) => {
     if (!query) return text;
@@ -256,68 +222,7 @@ export function ChatList() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex flex-1 min-h-0">
-        {/* Thin vertical agent avatar bar (agent inbox only) */}
-        {isAgentInbox && (
-          <div className="w-12 border-r border-border bg-panel flex flex-col items-center pt-4 gap-3">
-            {agents.map((agent) => {
-              const isActive = agent.id === selectedAgentId;
-              return (
-                <div key={agent.id} className="relative group">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSelectedAgentId((current) => (current === agent.id ? null : agent.id))
-                    }
-                    className={`relative w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
-                      isActive
-                        ? 'bg-primary text-white ring-2 ring-white shadow-md'
-                        : 'bg-white text-text-primary hover:bg-white/80 border border-border'
-                    }`}
-                  >
-                    {agent.avatarUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={agent.avatarUrl} alt={agent.name} className="w-full h-full object-cover rounded-full" />
-                    ) : (
-                      <span>{agent.initials}</span>
-                    )}
-                    <span
-                      className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-panel ${
-                        agent.online ? 'bg-status-success' : 'bg-text-muted'
-                      }`}
-                    />
-                  </button>
-                  <div className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-4 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
-                    <div className="rounded-2xl bg-white shadow-xl border border-border px-4 py-3 flex items-center gap-3 min-w-[180px]">
-                      <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary overflow-hidden">
-                        {agent.avatarUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={agent.avatarUrl} alt={agent.name} className="w-full h-full object-cover" />
-                        ) : (
-                          agent.initials
-                        )}
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-sm font-semibold text-text-primary truncate">
-                          {agent.name}
-                        </span>
-                        <span className="text-[10px] font-mono text-text-muted">
-                          ID: {agent.agentId}
-                        </span>
-                        <span className="text-[11px] text-text-muted">
-                          {agent.online ? 'Online' : 'Offline'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Conversation list as system activity feed */}
-        <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto">
           <div className="p-2 space-y-3">
             {activeSearch && (
               <div className="space-y-2">
@@ -645,7 +550,6 @@ export function ChatList() {
               </>
             )}
           </div>
-        </div>
       </div>
     </div>
   );

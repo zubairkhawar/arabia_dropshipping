@@ -12,9 +12,18 @@ function ContextPanel() {
     inboxConv?.selectedId != null
       ? inboxConv.conversations.find((c) => c.id === inboxConv.selectedId)
       : null;
+  const selectedMessages =
+    inboxConv?.selectedId != null ? inboxConv.getMessages(inboxConv.selectedId) : [];
+
+  const transferEvents = selectedMessages
+    .filter((m) => typeof m.content === 'string' && /conversation transferred to .* by /i.test(m.content))
+    .map((m) => m.content.trim());
+  const closedEvents = selectedMessages
+    .filter((m) => typeof m.content === 'string' && /conversation closed by agent/i.test(m.content))
+    .map((m) => m.content.trim());
 
   return (
-    <div className="hidden xl:block w-80 2xl:w-96 shrink-0 border-l border-border bg-panel p-4 transition-all duration-300">
+    <div className="hidden xl:block w-80 2xl:w-96 shrink-0 border-l border-border bg-panel p-4 transition-all duration-300 overflow-y-auto">
       <h3 className="text-sm font-semibold text-text-primary mb-3">Conversation Context</h3>
       {selected ? (
         <div className="space-y-3 text-xs">
@@ -40,6 +49,34 @@ function ContextPanel() {
               {selected.handlerType === 'ai' ? 'AI' : selected.handlerName || 'Agent'}
             </span>
           </div>
+          {(selected.transferredFromAgentName || selected.transferredToAgentName || transferEvents.length > 0) && (
+            <div className="border-t border-border pt-3 space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Transfer Details</p>
+              {(selected.transferredFromAgentName || selected.transferredToAgentName) && (
+                <p className="text-text-primary">
+                  {selected.transferredFromAgentName || 'Unknown'} {'->'} {selected.transferredToAgentName || 'Unknown'}
+                </p>
+              )}
+              {selected.transferredAt && (
+                <p className="text-text-secondary">Last transfer at: {selected.transferredAt}</p>
+              )}
+              {transferEvents.slice(-5).map((event, idx) => (
+                <p key={`${idx}-${event}`} className="text-text-secondary break-words">
+                  {event}
+                </p>
+              ))}
+            </div>
+          )}
+          {closedEvents.length > 0 && (
+            <div className="border-t border-border pt-3 space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Closure Details</p>
+              {closedEvents.slice(-3).map((event, idx) => (
+                <p key={`${idx}-${event}`} className="text-text-secondary break-words">
+                  {event}
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <p className="text-xs text-text-muted">Select a conversation to view context.</p>
@@ -66,7 +103,7 @@ function AdminInboxContent() {
             </span>
           </div>
         </div>
-        <div className="relative flex-1">
+        <div className="relative flex-1 min-h-0 overflow-hidden">
           <ChatWindow readOnly />
         </div>
       </div>
