@@ -125,7 +125,6 @@ export function ChatList() {
   const [liveOpen, setLiveOpen] = useState(true);
   const [closedOpen, setClosedOpen] = useState(true);
   const [transferredOpen, setTransferredOpen] = useState(true);
-  const [emptyStateOpen, setEmptyStateOpen] = useState(true);
   const { inboxQuery } = useAgentSearch();
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<InboxSearchResult[]>([]);
@@ -181,6 +180,10 @@ export function ChatList() {
   const liveConversations = filteredConversations.filter((c) => c.status === 'active');
   const closedConversations = filteredConversations.filter((c) => c.status === 'resolved');
   const transferredConversations = filteredConversations.filter((c) => c.status === 'transferred');
+  const hasAnyInboxConversation =
+    liveConversations.length > 0 ||
+    closedConversations.length > 0 ||
+    transferredConversations.length > 0;
   const activeSearch = inboxQuery.trim();
   const localFallbackResults = useMemo(() => {
     const q = activeSearch.toLowerCase();
@@ -378,7 +381,7 @@ export function ChatList() {
                 ))}
               </div>
             ) : null}
-            {!(isAgentInbox && inboxConv?.isLoading) && (
+            {!(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -400,7 +403,7 @@ export function ChatList() {
                   </span>
                 </button>
                 {liveOpen &&
-                  (liveConversations.length > 0 ? liveConversations.map((conv) => {
+                  liveConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
                     const isReopened = !!(conv as { reopenedAt?: string }).reopenedAt;
                     const showNewLead = isAgentInbox && conv.status === 'active' && conv.isNewLead && !isReopened;
@@ -479,13 +482,11 @@ export function ChatList() {
                         </p>
                       </button>
                     );
-                  }) : (
-                    <div className="px-2 py-2 text-[11px] text-text-muted">No live conversations</div>
-                  ))}
+                  })}
               </div>
             )}
 
-            {!(isAgentInbox && inboxConv?.isLoading) && (
+            {!(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -504,7 +505,7 @@ export function ChatList() {
                   </span>
                 </button>
                 {closedOpen &&
-                  (closedConversations.length > 0 ? closedConversations.map((conv) => {
+                  closedConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
                     return (
                       <button
@@ -560,13 +561,11 @@ export function ChatList() {
                         </p>
                       </button>
                     );
-                  }) : (
-                    <div className="px-2 py-2 text-[11px] text-text-muted">No closed conversations</div>
-                  ))}
+                  })}
               </div>
             )}
 
-            {!(isAgentInbox && inboxConv?.isLoading) && (
+            {!(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -585,7 +584,7 @@ export function ChatList() {
                   </span>
                 </button>
                 {transferredOpen &&
-                  (transferredConversations.length > 0 ? transferredConversations.map((conv) => {
+                  transferredConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
                     return (
                       <button
@@ -628,9 +627,7 @@ export function ChatList() {
                         </p>
                       </button>
                     );
-                  }) : (
-                    <div className="px-2 py-2 text-[11px] text-text-muted">No transferred conversations</div>
-                  ))}
+                  })}
               </div>
             )}
 
@@ -638,27 +635,9 @@ export function ChatList() {
               liveConversations.length === 0 &&
               closedConversations.length === 0 &&
               transferredConversations.length === 0 && (
-              <div className="space-y-1">
-                <button
-                  type="button"
-                  className="w-full px-1 py-1 flex items-center justify-between mt-2 hover:bg-panel rounded"
-                  onClick={() => setEmptyStateOpen((open) => !open)}
-                >
-                  <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">
-                    Empty View
-                  </span>
-                  <ChevronDown
-                    className={`h-3 w-3 text-text-muted transition-transform ${
-                      emptyStateOpen ? 'rotate-180' : ''
-                    }`}
-                  />
-                </button>
-                {emptyStateOpen && (
-                  <div className="px-2 py-4 text-[12px] text-text-muted">
-                    No conversations match this view yet. Adjust the agent selection or try a different
-                    inbox view.
-                  </div>
-                )}
+              <div className="px-2 py-4 text-[12px] text-text-muted">
+                No conversations match this view yet. Adjust the agent selection or try a different
+                inbox view.
               </div>
             )}
               </>

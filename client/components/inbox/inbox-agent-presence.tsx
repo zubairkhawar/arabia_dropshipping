@@ -81,9 +81,9 @@ export function InboxAgentPresenceStack() {
       {sorted.map((agent) => {
         const online = agent.status === 'online';
         return (
-          <div key={agent.id} className="group flex w-full justify-center py-1.5">
+          <div key={agent.id} className="group flex w-full justify-center py-2">
             {/* Anchor popover to avatar-sized box so it never sits over the rail avatar */}
-            <div className="relative shrink-0 translate-x-6">
+            <div className="relative shrink-0">
               <button
                 type="button"
                 className="relative block shrink-0 outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-primary"
