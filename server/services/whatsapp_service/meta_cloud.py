@@ -38,6 +38,15 @@ class MetaWhatsAppClient:
             "Content-Type": "application/json",
         }
 
+    def _auth_headers(self) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+    def _media_upload_url(self) -> str:
+        return (
+            f"https://graph.facebook.com/{self.graph_version}/"
+            f"{self.phone_number_id}/media"
+        )
+
     async def send_text_message(self, to_phone: str, text: str) -> Dict[str, Any]:
         if not self.is_configured():
             raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
@@ -109,23 +118,55 @@ class MetaWhatsAppClient:
         self,
         to_phone: str,
         audio_url: str,
+        mime_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not self.is_configured():
             raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
         if not to_phone or not audio_url:
             raise ValueError("to_phone and audio_url are required")
-        url = self._messages_url()
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "audio",
-            "audio": {
-                "link": audio_url,
-            },
-        }
-        headers = self._headers()
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            media_resp = await client.get(audio_url)
+            if media_resp.status_code >= 400:
+                logger.error(
+                    "Audio download for Meta upload HTTP %s: %s",
+                    media_resp.status_code,
+                    (media_resp.text or "")[:500],
+                )
+            media_resp.raise_for_status()
+            body = media_resp.content
+            if not body:
+                raise RuntimeError("Audio file download is empty")
+
+            ct = (mime_type or media_resp.headers.get("content-type") or "audio/ogg").split(";")[0].strip()
+            files = {
+                "file": ("voice_note.ogg", body, ct),
+                "messaging_product": (None, "whatsapp"),
+                "type": (None, ct),
+            }
+            upload = await client.post(
+                self._media_upload_url(),
+                files=files,
+                headers=self._auth_headers(),
+            )
+            if upload.status_code >= 400:
+                logger.error(
+                    "Meta media upload API HTTP %s: %s",
+                    upload.status_code,
+                    (upload.text or "")[:800],
+                )
+            upload.raise_for_status()
+            upload_json = upload.json()
+            media_id = str(upload_json.get("id") or "").strip()
+            if not media_id:
+                raise RuntimeError("Meta media upload response missing id")
+
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": to_phone,
+                "type": "audio",
+                "audio": {"id": media_id},
+            }
+            resp = await client.post(self._messages_url(), json=payload, headers=self._headers())
             if resp.status_code >= 400:
                 logger.error(
                     "Meta WhatsApp audio API HTTP %s: %s",

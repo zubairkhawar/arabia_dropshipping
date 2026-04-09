@@ -12,6 +12,7 @@ from database import get_db
 from models import Agent, Conversation, Customer, Store, StoreAgentMapping, AgentAttendanceSession
 from services.auth_service.api import get_current_user
 from services.auth_service.models import User as AuthUser
+from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 
 
 router = APIRouter()
@@ -419,6 +420,7 @@ async def transfer_conversation(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant mismatch")
 
     role = (current_user.role or "").lower()
+    caller_agent_name = "Agent"
     if role == "admin":
         pass
     elif role == "agent":
@@ -439,6 +441,7 @@ async def transfer_conversation(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Transfer is disabled for your account",
             )
+        caller_agent_name = (caller_agent.name or "Agent").strip()
     else:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to transfer")
 
@@ -475,15 +478,56 @@ async def transfer_conversation(
         )
 
     prev_agent_id = conversation.agent_id
+    prev_agent = db.query(Agent).filter(Agent.id == prev_agent_id).first() if prev_agent_id else None
+    if role == "admin" and prev_agent is not None:
+        caller_agent_name = (prev_agent.name or "Agent").strip()
+
     conversation.agent_id = agent.id
+    meta = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
+    meta["last_transfer"] = {
+        "from_agent_id": prev_agent_id,
+        "from_agent_name": caller_agent_name,
+        "to_agent_id": agent.id,
+        "to_agent_name": (agent.name or f"Agent {agent.id}").strip(),
+        "at": datetime.utcnow().isoformat(),
+    }
+    conversation.conversation_metadata = meta
     db.add(conversation)
     db.commit()
-    from services.agent_portal_service.broadcast import push_unread_summary
+    from services.agent_portal_service.broadcast import push_unread_summary, push_inbox_sync_event
 
     tid = conversation.tenant_id
     await push_unread_summary(db, tid, agent.id)
+    await push_inbox_sync_event(
+        db,
+        tid,
+        agent.id,
+        {"type": "inbox_conversation_refresh", "conversation_id": conversation.id},
+    )
     if prev_agent_id is not None and prev_agent_id != agent.id:
         await push_unread_summary(db, tid, prev_agent_id)
+        await push_inbox_sync_event(
+            db,
+            tid,
+            prev_agent_id,
+            {"type": "inbox_conversation_refresh", "conversation_id": conversation.id},
+        )
+
+    # Notify customer on WhatsApp which agent is now handling the chat.
+    if (conversation.channel or "").lower() == "whatsapp":
+        customer = db.query(Customer).filter(Customer.id == conversation.customer_id).first()
+        phone = customer.phone if customer else None
+        wa = MetaWhatsAppClient()
+        if phone and wa.is_configured():
+            transfer_note = (
+                f"Your chat has been transferred by {caller_agent_name}. "
+                f"{(agent.name or 'An agent').strip()} will assist you now."
+            )
+            try:
+                await wa.send_text_message(to_phone=str(phone), text=transfer_note[:4096])
+            except Exception:
+                # Keep transfer successful even if WhatsApp notification fails.
+                pass
 
     return AssignResponse(
         conversation_id=conversation.id,

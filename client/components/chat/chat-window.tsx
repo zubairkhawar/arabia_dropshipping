@@ -445,7 +445,9 @@ export function ChatWindow({
   const hasSelectedConversation = !!selectedConv;
   const inboxConversationClosed =
     Boolean(isInboxPage && !isInternalChat && selectedConv?.status === 'resolved');
-  const readOnlyMode = readOnly || inboxConversationClosed;
+  const inboxConversationTransferred =
+    Boolean(isInboxPage && !isInternalChat && selectedConv?.status === 'transferred');
+  const readOnlyMode = readOnly || inboxConversationClosed || inboxConversationTransferred;
   const headerTitle = isTeamChannel && teamName
     ? `# Team Channel • ${teamName}`
     : isInboxPage
@@ -640,6 +642,7 @@ export function ChatWindow({
   const [voiceIsPlaying, setVoiceIsPlaying] = useState(false);
   const [voiceProgress, setVoiceProgress] = useState<Record<number, number>>({});
   const [voiceCurrentSec, setVoiceCurrentSec] = useState<Record<number, number>>({});
+  const [voiceTotalSec, setVoiceTotalSec] = useState<Record<number, number>>({});
   const [showTransferMenu, setShowTransferMenu] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferTargetId, setTransferTargetId] = useState<string | null>(null);
@@ -1831,6 +1834,7 @@ export function ChatWindow({
       setVoiceCurrentSec((prev) => ({ ...prev, [id]: t }));
       const dur = effectiveDuration();
       if (dur > 0) {
+        setVoiceTotalSec((prev) => ({ ...prev, [id]: dur }));
         setVoiceProgress((prev) => ({ ...prev, [id]: Math.min(1, t / dur) }));
       }
     };
@@ -2483,7 +2487,7 @@ export function ChatWindow({
   };
 
   const sendMessage = async () => {
-    if (inboxConversationClosed) return;
+    if (inboxConversationClosed || inboxConversationTransferred) return;
     const text = inputValue.trim();
     const hasContent = text.length > 0 || pendingAttachment;
     if (!hasContent) return;
@@ -2774,7 +2778,20 @@ export function ChatWindow({
       recordingStartRef.current = Date.now();
       setRecordingElapsedSec(0);
       setRecordingPaused(false);
-      const recorder = new MediaRecorder(stream);
+      const preferredVoiceMimeTypes = [
+        'audio/ogg;codecs=opus',
+        'audio/ogg',
+        'audio/webm;codecs=opus',
+        'audio/webm',
+      ];
+      const selectedMimeType = preferredVoiceMimeTypes.find((t) =>
+        typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function'
+          ? MediaRecorder.isTypeSupported(t)
+          : false,
+      );
+      const recorder = selectedMimeType
+        ? new MediaRecorder(stream, { mimeType: selectedMimeType })
+        : new MediaRecorder(stream);
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) recordingChunksRef.current.push(e.data);
       };
@@ -3189,9 +3206,9 @@ export function ChatWindow({
                   <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-border rounded-lg shadow-xl z-20 py-1">
                     <button
                       type="button"
-                      disabled={inboxConversationClosed}
+                      disabled={inboxConversationClosed || inboxConversationTransferred}
                       onClick={() => {
-                        if (inboxConversationClosed) {
+                        if (inboxConversationClosed || inboxConversationTransferred) {
                           closeMenus();
                           return;
                         }
@@ -3218,7 +3235,7 @@ export function ChatWindow({
                       <Bot className="w-4 h-4" />
                       Send back to AI
                     </button>
-                    {showTransferControls && canTransferConversations && hasSelectedConversation && !inboxConversationClosed && (
+                    {showTransferControls && canTransferConversations && hasSelectedConversation && !inboxConversationClosed && !inboxConversationTransferred && (
                       <button
                         type="button"
                         onClick={() => {
@@ -3236,9 +3253,9 @@ export function ChatWindow({
                     )}
                     <button
                       type="button"
-                      disabled={inboxConversationClosed}
+                      disabled={inboxConversationClosed || inboxConversationTransferred}
                       onClick={() => {
-                        if (inboxConversationClosed) {
+                        if (inboxConversationClosed || inboxConversationTransferred) {
                           closeMenus();
                           return;
                         }
@@ -3454,10 +3471,14 @@ export function ChatWindow({
         ref={scrollContainerRef}
         className="chat-messages-scroll chat-wallpaper flex-1 overflow-y-auto p-6 space-y-4 relative"
       >
-        {inboxConversationClosed && (
+        {(inboxConversationClosed || inboxConversationTransferred) && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-white/45 backdrop-blur-[1px]">
             <div className="rounded-full border border-black/10 bg-white/90 px-4 py-2 text-sm font-medium text-text-secondary shadow-sm">
-              Conversation closed. Reopen to send messages or transfer.
+              {inboxConversationTransferred
+                ? `Conversation transferred${
+                    selectedConv?.transferredToAgentName ? ` to ${selectedConv.transferredToAgentName}` : ''
+                  }.`
+                : 'Conversation closed. Reopen to send messages or transfer.'}
             </div>
           </div>
         )}
@@ -3811,7 +3832,7 @@ export function ChatWindow({
                               </a>
                             )}
                             {message.attachment.type === 'voice' && (() => {
-                              const totalSec = message.attachment.durationSeconds ?? 0;
+                              const totalSec = voiceTotalSec[message.id] ?? message.attachment.durationSeconds ?? 0;
                               const isVoiceActive = activeVoiceMessageId === message.id;
                               const showCurrentTime = isVoiceActive;
                               const currentSec = voiceCurrentSec[message.id] ?? 0;
@@ -3893,11 +3914,21 @@ export function ChatWindow({
                             This message was deleted.
                           </p>
                         ) : (
-                          <p
-                            className={`whitespace-pre-wrap break-words leading-relaxed text-[#111b21] ${emojiOnly ? 'text-5xl' : 'text-sm'}`}
-                          >
-                            {isTeamChannel ? renderTeamMessageBody(message.content) : message.content}
-                          </p>
+                          (() => {
+                            const bodyText = isTeamChannel ? renderTeamMessageBody(message.content) : message.content;
+                            const isAttachmentOnlyLabel =
+                              Boolean(message.attachment) &&
+                              typeof message.content === 'string' &&
+                              ['Voice message', 'Image', 'Attachment', 'File'].includes(message.content.trim());
+                            if (isAttachmentOnlyLabel) return null;
+                            return (
+                              <p
+                                className={`whitespace-pre-wrap break-words leading-relaxed text-[#111b21] ${emojiOnly ? 'text-5xl' : 'text-sm'}`}
+                              >
+                                {bodyText}
+                              </p>
+                            );
+                          })()
                         )}
                         <div className="mt-1 flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
                           {message.editedAt && (

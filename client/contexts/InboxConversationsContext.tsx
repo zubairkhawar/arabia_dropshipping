@@ -13,7 +13,7 @@ import {
   writeInboxLastReadEntry,
 } from '@/lib/agent-session-storage';
 
-export type ConversationStatus = 'active' | 'resolved' | 'pending';
+export type ConversationStatus = 'active' | 'resolved' | 'pending' | 'transferred';
 
 export interface InboxConversation {
   id: number;
@@ -31,6 +31,8 @@ export interface InboxConversation {
   closedAt?: string;
   isNewLead?: boolean;
   reopenedAt?: string;
+  transferredToAgentName?: string;
+  transferredAt?: string;
 }
 
 export interface InboxMessage {
@@ -111,6 +113,10 @@ interface ConversationSummaryApi {
   agent_id?: number | null;
   unread_count?: number;
   is_new_customer?: boolean;
+  transfer_from_agent_id?: number | null;
+  transfer_from_agent_name?: string | null;
+  transfer_to_agent_id?: number | null;
+  transfer_to_agent_name?: string | null;
 }
 
 interface ConversationDetailsApi {
@@ -205,6 +211,7 @@ function apiMessageToInbox(
 
 function toConversationStatus(status: string): ConversationStatus {
   if (status === 'closed' || status === 'resolved') return 'resolved';
+  if (status === 'transferred') return 'transferred';
   if (status === 'pending') return 'pending';
   return 'active';
 }
@@ -238,9 +245,16 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
 
   const mapConversation = useCallback(
     (c: ConversationSummaryApi): InboxConversation => {
+      const aid = currentAgentId ?? readAuthAgentId();
       const handlerAgentId = c.agent_id != null ? String(c.agent_id) : undefined;
       const handlerName =
         handlerAgentId != null ? agents.find((a) => a.id === handlerAgentId)?.name : undefined;
+      const transferredOut =
+        aid != null &&
+        c.transfer_from_agent_id != null &&
+        Number(c.transfer_from_agent_id) === Number(aid) &&
+        c.transfer_to_agent_id != null &&
+        c.transfer_to_agent_id !== c.agent_id;
       return {
         id: c.id,
         customerName: c.customer_name || `Customer #${c.customer_id}`,
@@ -250,14 +264,16 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         lastActivityAt: formatConversationListTime(c.last_activity_at, timeZone),
         unread: typeof c.unread_count === 'number' ? c.unread_count : 0,
         channel: c.channel,
-        status: toConversationStatus(c.status),
+        status: transferredOut ? 'transferred' : toConversationStatus(c.status),
         handlerType: handlerAgentId ? 'agent' : 'ai',
         handlerName,
         handlerAgentId,
         isNewLead: Boolean(c.is_new_customer),
+        transferredToAgentName: c.transfer_to_agent_name ?? undefined,
+        transferredAt: transferredOut ? formatConversationListTime(c.last_activity_at, timeZone) : undefined,
       };
     },
-    [agents, timeZone],
+    [agents, currentAgentId, timeZone],
   );
 
   const fetchConversationRowsFromApi = useCallback(async (): Promise<ConversationSummaryApi[]> => {
@@ -267,6 +283,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     url.searchParams.set('tenant_id', String(TENANT_ID));
     if (isAgentPortal && aid) {
       url.searchParams.set('agent_id', String(Number(aid)));
+      url.searchParams.set('include_transferred_out_for_agent_id', String(Number(aid)));
     }
     const res = await fetch(url.toString());
     if (!res.ok) return [];
@@ -473,6 +490,12 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
             ),
           };
         });
+        return;
+      }
+      if (msg.type === 'inbox_conversation_refresh') {
+        queueMicrotask(() => {
+          void refreshConversations();
+        });
       }
     });
   }, [subscribe, syncInboxReadState, timeZone, refreshConversations]);
@@ -637,9 +660,12 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         c.id === convId
           ? {
               ...c,
+              status: 'transferred',
               handlerType: 'agent',
               handlerAgentId: toAgentId,
               handlerName: toAgentName,
+              transferredToAgentName: toAgentName,
+              transferredAt: 'Just now',
               lastMessage: 'Conversation transferred.',
               lastActivityAt: 'Just now',
             }

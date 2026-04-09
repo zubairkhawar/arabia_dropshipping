@@ -70,6 +70,10 @@ class ConversationSummary(BaseModel):
     last_activity_at: Optional[datetime] = None
     unread_count: int = 0
     is_new_customer: bool = False
+    transfer_from_agent_id: Optional[int] = None
+    transfer_from_agent_name: Optional[str] = None
+    transfer_to_agent_id: Optional[int] = None
+    transfer_to_agent_name: Optional[str] = None
 
 
 class ConversationSearchResult(BaseModel):
@@ -150,6 +154,9 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
     meta = c.conversation_metadata if isinstance(c.conversation_metadata, dict) else {}
     bot_flow = meta.get("bot_flow") if isinstance(meta.get("bot_flow"), dict) else {}
     is_new_customer = str(bot_flow.get("customer_kind") or "").strip().lower() == "new"
+    transfer_meta = meta.get("last_transfer") if isinstance(meta.get("last_transfer"), dict) else {}
+    transfer_from_agent_id = transfer_meta.get("from_agent_id")
+    transfer_to_agent_id = transfer_meta.get("to_agent_id")
 
     return ConversationSummary(
         id=c.id,
@@ -165,6 +172,14 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
         last_activity_at=last_msg.created_at if last_msg else c.updated_at,
         unread_count=unread_count,
         is_new_customer=is_new_customer,
+        transfer_from_agent_id=transfer_from_agent_id if isinstance(transfer_from_agent_id, int) else None,
+        transfer_from_agent_name=transfer_meta.get("from_agent_name")
+        if isinstance(transfer_meta.get("from_agent_name"), str)
+        else None,
+        transfer_to_agent_id=transfer_to_agent_id if isinstance(transfer_to_agent_id, int) else None,
+        transfer_to_agent_name=transfer_meta.get("to_agent_name")
+        if isinstance(transfer_meta.get("to_agent_name"), str)
+        else None,
     )
 
 
@@ -389,7 +404,29 @@ def _parse_meta_whatsapp_inbound(payload: Dict[str, Any]) -> Optional[Dict[str, 
                     mid = au.get("id")
                     if not mid:
                         continue
-                    return {**base, "kind": "audio", "media_id": str(mid)}
+                    dur_raw = au.get("duration")
+                    duration_seconds = None
+                    if isinstance(dur_raw, (int, float)):
+                        duration_seconds = int(dur_raw)
+                    elif isinstance(dur_raw, str) and dur_raw.strip().isdigit():
+                        duration_seconds = int(dur_raw.strip())
+                    return {
+                        **base,
+                        "kind": "audio",
+                        "media_id": str(mid),
+                        "duration_seconds": duration_seconds,
+                    }
+                if mtype == "document":
+                    doc = msg.get("document") or {}
+                    mid = doc.get("id")
+                    if not mid:
+                        continue
+                    return {
+                        **base,
+                        "kind": "document",
+                        "media_id": str(mid),
+                        "filename": str(doc.get("filename") or "File"),
+                    }
                 if mtype == "reaction":
                     rxn = msg.get("reaction") or {}
                     target_id = rxn.get("message_id")
@@ -502,6 +539,7 @@ async def list_conversations(
     tenant_id: int,
     status_param: Optional[str] = None,
     agent_id: Optional[int] = None,
+    include_transferred_out_for_agent_id: Optional[int] = None,
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -516,10 +554,39 @@ async def list_conversations(
     )
     if status_param:
         query = query.filter(Conversation.status == status_param)
-    if agent_id is not None:
-        query = query.filter(Conversation.agent_id == agent_id)
 
-    conversations = query.offset(offset).limit(limit).all()
+    conversations: List[Conversation] = []
+    if agent_id is not None:
+        # Always include currently assigned conversations for this agent.
+        assigned_query = query.filter(Conversation.agent_id == agent_id)
+        assigned = assigned_query.offset(offset).limit(limit).all()
+        conversations.extend(assigned)
+        # Optionally include conversations this agent transferred out most recently.
+        if include_transferred_out_for_agent_id is not None:
+            transferred = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.agent_id != include_transferred_out_for_agent_id,
+                )
+                .order_by(desc(Conversation.updated_at))
+                .limit(limit * 3)
+                .all()
+            )
+            for c in transferred:
+                meta = c.conversation_metadata if isinstance(c.conversation_metadata, dict) else {}
+                tx = meta.get("last_transfer") if isinstance(meta.get("last_transfer"), dict) else {}
+                from_id = tx.get("from_agent_id")
+                if isinstance(from_id, int) and from_id == include_transferred_out_for_agent_id:
+                    conversations.append(c)
+    else:
+        conversations = query.offset(offset).limit(limit).all()
+
+    # De-duplicate + sort newest first.
+    dedup: Dict[int, Conversation] = {}
+    for c in conversations:
+        dedup[c.id] = c
+    conversations = sorted(dedup.values(), key=lambda x: x.updated_at or datetime.min, reverse=True)[:limit]
 
     # Eager-load relationships used in the summary (customer, messages)
     for conv in conversations:
@@ -901,6 +968,7 @@ async def send_message(
                                 wa_resp = await wa.send_audio_message(
                                     to_phone=str(phone),
                                     audio_url=audio_url,
+                                    mime_type=str(meta_to_store.get("mime_type") or ""),
                                 )
                                 msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
                                 if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
@@ -1388,8 +1456,24 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             if wa_dl.is_configured():
                 raw, mime = await wa_dl.download_media(inbound["media_id"])
                 msg_meta = store_inbound_whatsapp_media(raw, "audio", mime)
+                if isinstance(msg_meta, dict):
+                    d = inbound.get("duration_seconds")
+                    if isinstance(d, int) and d > 0:
+                        msg_meta["duration_seconds"] = d
         except Exception:
             logger.exception("Inbound WhatsApp audio download/R2 failed")
+    elif kind == "document":
+        text = (inbound.get("filename") or "File").strip() or "File"
+        try:
+            wa_dl = MetaWhatsAppClient()
+            if wa_dl.is_configured():
+                raw, mime = await wa_dl.download_media(inbound["media_id"])
+                msg_meta = store_inbound_whatsapp_media(raw, "audio", mime)
+                if isinstance(msg_meta, dict):
+                    msg_meta["type"] = "file"
+                    msg_meta["filename"] = str(inbound.get("filename") or "File")
+        except Exception:
+            logger.exception("Inbound WhatsApp document download/R2 failed")
     else:
         return {"status": "ignored"}
     wa_message_id = str(inbound.get("wa_message_id") or "").strip()
@@ -1434,22 +1518,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 created_at=datetime.utcnow(),
                 message_metadata=msg_meta,
             )
-            reply_ack = resolve_bot_template(detected_language, "agent_relay_ack")
-            ai_ack = Message(
-                conversation_id=conversation.id,
-                content=reply_ack,
-                sender_type="ai",
-                sender_id=None,
-                language=detected_language,
-                created_at=datetime.utcnow(),
-            )
             db.add(customer_msg)
-            db.add(ai_ack)
             conversation.updated_at = datetime.utcnow()
             db.add(conversation)
             db.commit()
             db.refresh(customer_msg)
-            db.refresh(ai_ack)
             ensure_receipt_for_customer_message(db, customer_msg)
             db.commit()
             await push_inbox_message(
@@ -1459,39 +1532,78 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 conversation.id,
                 _message_dict_for_ws(db, customer_msg),
             )
-            wa_response: Dict[str, Any] | None = None
-            client = MetaWhatsAppClient()
-            if reply_ack and client.is_configured():
-                try:
-                    wa_response = await client.send_text_message(to_phone=from_phone, text=reply_ack)
-                    ai_ack.wa_delivered_at = datetime.utcnow()
-                    msgs = wa_response.get("messages") if isinstance(wa_response, dict) else None
-                    if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
-                        out_wa_id = str(msgs[0].get("id") or "").strip()
-                        if out_wa_id:
-                            ai_meta = dict(ai_ack.message_metadata) if isinstance(ai_ack.message_metadata, dict) else {}
-                            ai_meta["wa_message_id"] = out_wa_id
-                            ai_ack.message_metadata = ai_meta
-                    db.add(ai_ack)
-                    db.commit()
-                    db.refresh(ai_ack)
-                except Exception:
-                    logger.exception(
-                        "WhatsApp send_text_message failed (human_agent ack conversation_id=%s)",
-                        conversation.id,
-                    )
-                    wa_response = {"error": "meta_send_failed"}
-            elif reply_ack and not client.is_configured():
-                wa_response = {"error": "meta_not_configured"}
             return {
                 "status": "ok",
                 "conversation_id": conversation.id,
                 "skipped": "human_agent",
-                "reply_text": reply_ack,
+                "reply_text": "",
                 "language": detected_language,
                 "escalate": False,
-                "meta_response": wa_response,
+                "meta_response": None,
             }
+
+    if kind in {"image", "audio", "document"}:
+        detected_language = await orchestrator.detect_language(text)
+        unsupported_text = (
+            "I can only handle text messages right now. "
+            "For images, files, or voice notes, please talk to support by choosing option 3."
+        )
+        customer_msg = Message(
+            conversation_id=conversation.id,
+            content=text,
+            sender_type="customer",
+            sender_id=None,
+            language=detected_language,
+            created_at=datetime.utcnow(),
+            message_metadata=msg_meta,
+        )
+        ai_msg = Message(
+            conversation_id=conversation.id,
+            content=unsupported_text,
+            sender_type="ai",
+            sender_id=None,
+            language=detected_language,
+            created_at=datetime.utcnow(),
+        )
+        db.add(customer_msg)
+        db.add(ai_msg)
+        conversation.updated_at = datetime.utcnow()
+        db.add(conversation)
+        db.commit()
+        db.refresh(customer_msg)
+        db.refresh(ai_msg)
+        ensure_receipt_for_customer_message(db, customer_msg)
+        db.commit()
+        if conversation.agent_id:
+            await push_inbox_message(
+                db,
+                tenant_id,
+                conversation.agent_id,
+                conversation.id,
+                _message_dict_for_ws(db, customer_msg),
+            )
+        wa_response: Dict[str, Any] | None = None
+        client = MetaWhatsAppClient()
+        if client.is_configured():
+            try:
+                wa_response = await client.send_text_message(to_phone=from_phone, text=unsupported_text)
+                ai_msg.wa_delivered_at = datetime.utcnow()
+                db.add(ai_msg)
+                db.commit()
+                db.refresh(ai_msg)
+            except Exception:
+                logger.exception("WhatsApp unsupported-media reply failed (conversation_id=%s)", conversation.id)
+                wa_response = {"error": "meta_send_failed"}
+        else:
+            wa_response = {"error": "meta_not_configured"}
+        return {
+            "status": "ok",
+            "conversation_id": conversation.id,
+            "reply_text": unsupported_text,
+            "language": detected_language,
+            "escalate": False,
+            "meta_response": wa_response,
+        }
 
     flow = await process_customer_bot_message(
         db=db,
