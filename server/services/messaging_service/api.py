@@ -68,6 +68,7 @@ class ConversationSummary(BaseModel):
     last_message: Optional[str] = None
     last_activity_at: Optional[datetime] = None
     unread_count: int = 0
+    is_new_customer: bool = False
 
 
 class ConversationSearchResult(BaseModel):
@@ -108,6 +109,7 @@ class MessageOut(BaseModel):
     reply_to_message_id: Optional[int] = None
     edited_at: Optional[datetime] = None
     message_metadata: Optional[Dict[str, Any]] = None
+    status: Optional[Dict[str, bool]] = None
 
 
 class MessageEditIn(BaseModel):
@@ -137,6 +139,10 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
     if c.customer and getattr(c.customer, "name", None):
         customer_name = c.customer.name
 
+    meta = c.conversation_metadata if isinstance(c.conversation_metadata, dict) else {}
+    bot_flow = meta.get("bot_flow") if isinstance(meta.get("bot_flow"), dict) else {}
+    is_new_customer = str(bot_flow.get("customer_kind") or "").strip().lower() == "new"
+
     return ConversationSummary(
         id=c.id,
         tenant_id=c.tenant_id,
@@ -149,6 +155,7 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
         last_message=last_msg.content if last_msg else None,
         last_activity_at=last_msg.created_at if last_msg else c.updated_at,
         unread_count=unread_count,
+        is_new_customer=is_new_customer,
     )
 
 
@@ -188,7 +195,8 @@ def _inbox_message_api_dict(
     content = "[Message deleted]" if deleted else m.content
     if m.sender_type == "agent":
         delivered = m.wa_delivered_at is not None
-        read = False
+        # Meta read status is not yet persisted; use delivered as a temporary read proxy.
+        read = delivered
     else:
         delivered = receipt.delivered_at is not None if receipt else False
         read = receipt.read_at is not None if receipt else False
@@ -685,6 +693,14 @@ async def send_message(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found",
         )
+    if (
+        message.sender_type == "agent"
+        and str(conversation.status or "").lower() in {"closed", "resolved"}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conversation is closed. Reopen it before sending messages.",
+        )
 
     sender_id: Optional[int] = None
     meta_to_store: Optional[Dict[str, Any]] = None
@@ -796,6 +812,12 @@ async def send_message(
         reply_to_message_id=msg.reply_to_message_id,
         edited_at=msg.edited_at,
         message_metadata=enrich_metadata_for_api(msg.message_metadata),
+        status={
+            "sent": True,
+            "delivered": bool(msg.wa_delivered_at) if msg.sender_type in ("agent", "ai") else False,
+            # Meta "read" webhook is not yet mapped in DB; treat delivered as read fallback for outbound UI.
+            "read": bool(msg.wa_delivered_at) if msg.sender_type in ("agent", "ai") else False,
+        },
     )
 
 
@@ -841,7 +863,7 @@ async def send_conversation_to_ai(
             status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
         )
     conversation.agent_id = None
-    conversation.status = "active"
+    conversation.status = "closed"
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)
     db.commit()

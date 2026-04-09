@@ -107,6 +107,7 @@ interface ConversationSummaryApi {
   status: string;
   agent_id?: number | null;
   unread_count?: number;
+  is_new_customer?: boolean;
 }
 
 interface ConversationDetailsApi {
@@ -233,7 +234,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         handlerType: handlerAgentId ? 'agent' : 'ai',
         handlerName,
         handlerAgentId,
-        isNewLead: !handlerAgentId,
+        isNewLead: Boolean(c.is_new_customer),
       };
     },
     [agents, timeZone],
@@ -639,17 +640,33 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
   }, []);
 
   const sendConversationToAI = useCallback((convId: number) => {
+    const now = new Date();
+    const closedAt = `${formatTime12hInZone(now, timeZone)}, ${now.toLocaleDateString('en-US', {
+      timeZone,
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })}`;
     setConversations((prev) =>
       prev.map((c) =>
         c.id === convId
-          ? { ...c, handlerType: 'ai', handlerName: undefined, handlerAgentId: undefined, lastActivityAt: 'Just now' }
+          ? {
+              ...c,
+              handlerType: 'ai',
+              handlerName: undefined,
+              handlerAgentId: undefined,
+              status: 'resolved',
+              closedAt,
+              unread: 0,
+              lastActivityAt: 'Just now',
+            }
           : c,
       ),
     );
     void fetch(`${API_BASE}/api/messaging/conversations/${convId}/send-to-ai`, {
       method: 'POST',
     });
-  }, []);
+  }, [timeZone]);
 
   const getMessages = useCallback((convId: number) => messagesByConvId[convId] ?? [], [messagesByConvId]);
 
@@ -701,6 +718,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           reply_to_message_id?: number | null;
           edited_at?: string | null;
           message_metadata?: Record<string, unknown> | null;
+          status?: { sent: boolean; delivered: boolean; read: boolean };
         };
         const serverAtt = inboxMetaToAttachment(saved.message_metadata);
         setMessagesByConvId((prev) => {
@@ -714,7 +732,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
             sentAt: saved.created_at,
             replyToMessageId: saved.reply_to_message_id ?? next[idx].replyToMessageId,
             editedAt: saved.edited_at ?? next[idx].editedAt,
-            messageStatus: { sent: true, delivered: false, read: false },
+            messageStatus: saved.status ?? { sent: true, delivered: true, read: true },
             messageMetadata: saved.message_metadata ?? next[idx].messageMetadata,
             attachment: serverAtt ?? next[idx].attachment,
           };

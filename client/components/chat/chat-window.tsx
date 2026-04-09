@@ -467,6 +467,9 @@ export function ChatWindow({
       ? inboxConv.getMessages(inboxConv.selectedId).length
       : 0;
   const hasSelectedConversation = !!selectedConv;
+  const inboxConversationClosed =
+    Boolean(isInboxPage && !isInternalChat && selectedConv?.status === 'resolved');
+  const readOnlyMode = readOnly || inboxConversationClosed;
   const headerTitle = isTeamChannel && teamName
     ? `# Team Channel • ${teamName}`
     : isInboxPage
@@ -2489,6 +2492,7 @@ export function ChatWindow({
   };
 
   const sendMessage = async () => {
+    if (inboxConversationClosed) return;
     const text = inputValue.trim();
     const hasContent = text.length > 0 || pendingAttachment;
     if (!hasContent) return;
@@ -3188,7 +3192,12 @@ export function ChatWindow({
                   <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-border rounded-lg shadow-xl z-20 py-1">
                     <button
                       type="button"
+                      disabled={inboxConversationClosed}
                       onClick={() => {
+                        if (inboxConversationClosed) {
+                          closeMenus();
+                          return;
+                        }
                         const content = 'Conversation sent back to AI bot.';
                         if (inboxConv?.selectedId != null) {
                           const now = new Date();
@@ -3202,18 +3211,17 @@ export function ChatWindow({
                           };
                           inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
                           inboxConv.sendConversationToAI(inboxConv.selectedId);
-                          setMessages((prev) => [...prev, systemMsg]);
                         } else {
                           addSystemNote(content);
                         }
                         closeMenus();
                       }}
-                      className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary"
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Bot className="w-4 h-4" />
                       Send back to AI
                     </button>
-                    {showTransferControls && canTransferConversations && hasSelectedConversation && (
+                    {showTransferControls && canTransferConversations && hasSelectedConversation && !inboxConversationClosed && (
                       <button
                         type="button"
                         onClick={() => {
@@ -3231,7 +3239,12 @@ export function ChatWindow({
                     )}
                     <button
                       type="button"
+                      disabled={inboxConversationClosed}
                       onClick={() => {
+                        if (inboxConversationClosed) {
+                          closeMenus();
+                          return;
+                        }
                         if (hasSelectedConversation && inboxConv?.selectedId != null) {
                           const now = new Date();
                           const systemMsg: Message = {
@@ -3243,14 +3256,13 @@ export function ChatWindow({
                             sentAt: now.toISOString(),
                           };
                           inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
-                          setMessages((prev) => [...prev, systemMsg]);
                           inboxConv.closeConversation(inboxConv.selectedId);
                         } else {
                           addSystemNote('Conversation closed by agent.');
                         }
                         closeMenus();
                       }}
-                      className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-status-error"
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-status-error disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <AlertCircle className="w-4 h-4" />
                       Close chat
@@ -3445,6 +3457,13 @@ export function ChatWindow({
         ref={scrollContainerRef}
         className="chat-messages-scroll chat-wallpaper flex-1 overflow-y-auto p-6 space-y-4 relative"
       >
+        {inboxConversationClosed && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-white/45 backdrop-blur-[1px]">
+            <div className="rounded-full border border-black/10 bg-white/90 px-4 py-2 text-sm font-medium text-text-secondary shadow-sm">
+              Conversation closed. Reopen to send messages or transfer.
+            </div>
+          </div>
+        )}
         {showChatThreadSkeleton && (
           <div className="space-y-4 max-w-2xl mx-auto py-2" aria-busy aria-label="Loading messages">
             {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -4421,7 +4440,7 @@ export function ChatWindow({
       {/* Input Area */}
       <div className="flex-shrink-0 border-t border-border bg-white">
         {/* Reply bar when active (hidden in read-only) */}
-        {!readOnly && replyingTo && (
+        {!readOnlyMode && replyingTo && (
           <div className="flex items-center justify-between gap-3 px-4 py-2 bg-panel border-b border-border">
             <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold text-primary">Replying to {replyingTo.senderName}</p>
@@ -4440,7 +4459,7 @@ export function ChatWindow({
           </div>
         )}
 
-        {!readOnly && voiceReviewAttachment && isInternalChat && (
+        {!readOnlyMode && voiceReviewAttachment && isInternalChat && (
           <div className="px-4 py-3 bg-panel border-b border-border flex flex-wrap items-center gap-3">
             <Mic className="w-5 h-5 text-primary shrink-0" />
             <div className="flex-1 min-w-0">
@@ -4475,7 +4494,7 @@ export function ChatWindow({
         )}
         
         {/* Pending attachment preview (hidden in read-only) */}
-        {!readOnly && pendingAttachment && (
+        {!readOnlyMode && pendingAttachment && (
           <div className="px-4 py-2 bg-panel border-b border-border flex items-center justify-between gap-2">
             <span className="text-xs text-text-secondary truncate">
               {pendingAttachment.type === 'photo' && (
@@ -4516,7 +4535,7 @@ export function ChatWindow({
         )}
 
         {/* Input row - fixed height to align bottom separator with 2nd bar (80px) */}
-        {(!readOnly || showBroadcastInput) && (
+        {(!readOnlyMode || showBroadcastInput) && (
           <div className="flex items-center gap-2 px-4 h-[80px]">
             {!showBroadcastInput && (
               <div className="relative flex-shrink-0">
