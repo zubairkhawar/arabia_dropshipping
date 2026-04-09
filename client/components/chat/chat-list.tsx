@@ -142,33 +142,23 @@ export function ChatList() {
   }, [pathname]);
 
   const agents: AgentAvatar[] = useMemo(() => {
-    const uniqueAgents = new Map<string, AgentAvatar>();
-    conversations.forEach((conv) => {
-      if (conv.handlerType === 'agent' && conv.handlerName && conv.handlerAgentId) {
-        if (currentAgentId && conv.handlerAgentId === currentAgentId) {
-          return;
-        }
-        const knownAgent = allAgents.find((a) => a.id === conv.handlerAgentId);
-        const displayName = knownAgent?.name || conv.handlerName;
-        if (!uniqueAgents.has(conv.handlerAgentId)) {
-          uniqueAgents.set(conv.handlerAgentId, {
-            id: conv.handlerAgentId,
-            agentId: conv.handlerAgentId,
-            name: displayName,
-            initials: displayName
-              .split(' ')
-              .map((p) => p[0])
-              .join('')
-              .slice(0, 2)
-              .toUpperCase(),
-            online: knownAgent ? knownAgent.status === 'online' || knownAgent.status === 'busy' : conv.status === 'active',
-            avatarUrl: knownAgent?.avatarUrl ?? null,
-          });
-        }
-      }
-    });
-    return Array.from(uniqueAgents.values());
-  }, [conversations, allAgents, currentAgentId]);
+    return allAgents
+      .filter((a) => !currentAgentId || a.id !== currentAgentId)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+      .map((a) => ({
+        id: a.id,
+        agentId: a.id,
+        name: a.name,
+        initials: a.name
+          .split(' ')
+          .map((p) => p[0])
+          .join('')
+          .slice(0, 2)
+          .toUpperCase(),
+        online: a.status === 'online' || a.status === 'busy',
+        avatarUrl: a.avatarUrl ?? null,
+      }));
+  }, [allAgents, currentAgentId]);
 
   const filteredConversations = useMemo(() => {
     let list = conversations;
@@ -388,7 +378,7 @@ export function ChatList() {
                 ))}
               </div>
             ) : null}
-            {!(isAgentInbox && inboxConv?.isLoading) && liveConversations.length > 0 && (
+            {!(isAgentInbox && inboxConv?.isLoading) && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -410,7 +400,7 @@ export function ChatList() {
                   </span>
                 </button>
                 {liveOpen &&
-                  liveConversations.map((conv) => {
+                  (liveConversations.length > 0 ? liveConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
                     const isReopened = !!(conv as { reopenedAt?: string }).reopenedAt;
                     const showNewLead = isAgentInbox && conv.status === 'active' && conv.isNewLead && !isReopened;
@@ -489,11 +479,13 @@ export function ChatList() {
                         </p>
                       </button>
                     );
-                  })}
+                  }) : (
+                    <div className="px-2 py-2 text-[11px] text-text-muted">No live conversations</div>
+                  ))}
               </div>
             )}
 
-            {!(isAgentInbox && inboxConv?.isLoading) && closedConversations.length > 0 && (
+            {!(isAgentInbox && inboxConv?.isLoading) && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -512,7 +504,7 @@ export function ChatList() {
                   </span>
                 </button>
                 {closedOpen &&
-                  closedConversations.map((conv) => {
+                  (closedConversations.length > 0 ? closedConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
                     return (
                       <button
@@ -568,11 +560,13 @@ export function ChatList() {
                         </p>
                       </button>
                     );
-                  })}
+                  }) : (
+                    <div className="px-2 py-2 text-[11px] text-text-muted">No closed conversations</div>
+                  ))}
               </div>
             )}
 
-            {!(isAgentInbox && inboxConv?.isLoading) && transferredConversations.length > 0 && (
+            {!(isAgentInbox && inboxConv?.isLoading) && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -591,7 +585,7 @@ export function ChatList() {
                   </span>
                 </button>
                 {transferredOpen &&
-                  transferredConversations.map((conv) => {
+                  (transferredConversations.length > 0 ? transferredConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
                     return (
                       <button
@@ -634,7 +628,9 @@ export function ChatList() {
                         </p>
                       </button>
                     );
-                  })}
+                  }) : (
+                    <div className="px-2 py-2 text-[11px] text-text-muted">No transferred conversations</div>
+                  ))}
               </div>
             )}
 

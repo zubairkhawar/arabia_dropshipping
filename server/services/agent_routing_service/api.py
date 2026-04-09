@@ -512,6 +512,20 @@ async def transfer_conversation(
             prev_agent_id,
             {"type": "inbox_conversation_refresh", "conversation_id": conversation.id},
         )
+    # Backward-compatible transfer event for clients listening specifically for transfer actions.
+    await push_inbox_sync_event(
+        db,
+        tid,
+        agent.id,
+        {"type": "conversation_transferred", "conversation_id": conversation.id},
+    )
+    if prev_agent_id is not None and prev_agent_id != agent.id:
+        await push_inbox_sync_event(
+            db,
+            tid,
+            prev_agent_id,
+            {"type": "conversation_transferred", "conversation_id": conversation.id},
+        )
 
     # Notify customer on WhatsApp which agent is now handling the chat.
     if (conversation.channel or "").lower() == "whatsapp":

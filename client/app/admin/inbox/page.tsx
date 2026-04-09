@@ -52,12 +52,12 @@ function AdminInboxContent() {
   const { contextCollapsed, setContextCollapsed } = useInboxPanels()!;
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0 overflow-hidden">
       <div className="hidden md:block w-chatlist-tablet lg:w-chatlist-laptop xl:w-chatlist-desktop 2xl:w-chatlist-ultrawide border-r border-border bg-panel shrink-0">
         <ChatList />
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
         <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-white">
           <div className="flex flex-col">
             <span className="text-xs font-semibold text-text-primary">Monitoring</span>
@@ -82,9 +82,7 @@ function AdminInboxContent() {
             <PanelRightOpen className="h-5 w-5" />
           </button>
         </div>
-      ) : (
-        <ContextPanel />
-      )}
+      ) : <ContextPanel />}
     </div>
   );
 }

@@ -496,6 +496,12 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         queueMicrotask(() => {
           void refreshConversations();
         });
+        return;
+      }
+      if (msg.type === 'conversation_transferred') {
+        queueMicrotask(() => {
+          void refreshConversations();
+        });
       }
     });
   }, [subscribe, syncInboxReadState, timeZone, refreshConversations]);

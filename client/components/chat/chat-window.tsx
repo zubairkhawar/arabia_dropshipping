@@ -461,7 +461,10 @@ export function ChatWindow({
       : subtitle;
 
   useEffect(() => {
-    if (!isInboxWithSelection || isInternalChat) return;
+    if (!isInboxWithSelection || isInternalChat) {
+      if (isInboxPage && !isInternalChat) setMessages([]);
+      return;
+    }
     const convId = inboxConv!.selectedId!;
     const stored = inboxConv.getMessages(convId);
     setMessages((prev) => {

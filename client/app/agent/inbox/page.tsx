@@ -17,7 +17,7 @@ function AgentInboxContent() {
     Boolean(currentAgentId) && me !== null ? me.canTransferConversations !== false : false;
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0 overflow-hidden">
       {/* Left: one panel — agent avatars + chat list OR collapsed controls (single border) */}
       {chatListCollapsed ? (
         <div className="relative isolate hidden md:flex w-9 shrink-0 flex-col items-center gap-2 overflow-visible bg-panel px-0.5 py-3 after:pointer-events-none after:absolute after:inset-y-0 after:right-[16px] after:z-20 after:w-px after:bg-border">
@@ -53,7 +53,7 @@ function AgentInboxContent() {
       )}
 
       {/* Middle panel: chat window (always visible) */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
         <ChatWindow showTransferControls canTransferConversations={canTransfer} />
       </div>
 
@@ -70,7 +70,7 @@ function AgentInboxContent() {
           </button>
         </div>
       ) : (
-        <div className="hidden lg:block w-context-laptop xl:w-context-desktop 2xl:w-context-ultrawide border-l border-border bg-panel shrink-0">
+        <div className="hidden lg:block w-context-laptop xl:w-context-desktop 2xl:w-context-ultrawide border-l border-border bg-panel shrink-0 min-h-0 overflow-hidden">
           <ContextPanel />
         </div>
       )}

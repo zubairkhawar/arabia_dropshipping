@@ -147,6 +147,33 @@ def _looks_like_order_status_question(text: str) -> bool:
     t = (text or "").strip().lower()
     if len(t) < 5:
         return False
+    info_markers = (
+        "what is",
+        "tell me about",
+        "give me information",
+        "information about",
+        "about dropship",
+        "dropship arabia",
+        "who are you",
+        "services",
+    )
+    order_markers_strict = (
+        "order",
+        "status",
+        "track",
+        "tracking",
+        "delivery",
+        "shipment",
+        "ship",
+        "dispatch",
+        "parcel",
+        "package",
+        "shipped",
+        "order id",
+    )
+    # FAQ/info queries should never route into order flow unless they clearly include order intent.
+    if any(m in t for m in info_markers) and not any(k in t for k in order_markers_strict):
+        return False
     phrases = (
         "order",
         "status",
@@ -162,11 +189,6 @@ def _looks_like_order_status_question(text: str) -> bool:
         "order id",
         "order ka",
         "order ki",
-        "btao",
-        "batao",
-        "bata",
-        "pata",
-        "kahan",
         "kab aayega",
         "kab milega",
         "shipped",
