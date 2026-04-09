@@ -4700,6 +4700,7 @@ export function ChatWindow({
             </div>
             
             {!showBroadcastInput &&
+              !inboxCustomerVoiceDisabled &&
               (isRecording ? (
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <button
