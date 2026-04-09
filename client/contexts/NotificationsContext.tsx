@@ -51,6 +51,7 @@ interface NotificationsContextType {
   addNotification: (n: Omit<AgentNotification, 'id' | 'createdAt' | 'read'>) => void;
   markAsRead: (id: string) => void;
   markAllAsRead: () => void;
+  clearAllNotifications: () => void;
   getNotificationsForCurrentAgent: () => AgentNotification[];
 }
 
@@ -215,6 +216,17 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     });
   }, [currentAgentId]);
 
+  const clearAllNotifications = useCallback(() => {
+    if (!currentAgentId) return;
+    setNotifications([]);
+    void fetch(`${API_BASE}/api/notifications?tenant_id=${TENANT_ID}&agent_id=${Number(currentAgentId)}`, {
+      method: 'DELETE',
+    }).catch(() => {
+      // If delete fails, reload the list to keep UI consistent with server.
+      void refreshNotifications();
+    });
+  }, [currentAgentId, refreshNotifications]);
+
   return (
     <NotificationsContext.Provider
       value={{
@@ -224,6 +236,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         addNotification,
         markAsRead,
         markAllAsRead,
+        clearAllNotifications,
         getNotificationsForCurrentAgent,
       }}
     >
@@ -242,6 +255,7 @@ export function useNotifications() {
       addNotification: (_: Omit<AgentNotification, 'id' | 'createdAt' | 'read'>) => {},
       markAsRead: (_: string) => {},
       markAllAsRead: () => {},
+      clearAllNotifications: () => {},
       getNotificationsForCurrentAgent: () => [] as AgentNotification[],
     };
   }

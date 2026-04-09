@@ -117,6 +117,10 @@ class MessageEditIn(BaseModel):
     content: str
 
 
+class MessageReactionIn(BaseModel):
+    emoji: str
+
+
 class ConversationStatusUpdate(BaseModel):
     status: str  # active | closed | escalated
 
@@ -230,6 +234,65 @@ def _inbox_message_api_dict(
     return out
 
 
+def _extract_reactions_from_meta(meta: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(meta, dict):
+        return []
+    rows = meta.get("reactions")
+    if not isinstance(rows, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        emoji = r.get("emoji")
+        user_id = r.get("userId")
+        user_name = r.get("userName")
+        reacted_at = r.get("reactedAt")
+        if not isinstance(emoji, str) or not emoji.strip():
+            continue
+        if not isinstance(user_id, str) or not user_id.strip():
+            continue
+        if not isinstance(user_name, str) or not user_name.strip():
+            continue
+        if not isinstance(reacted_at, str) or not reacted_at.strip():
+            continue
+        out.append(
+            {
+                "emoji": emoji.strip(),
+                "userId": user_id.strip(),
+                "userName": user_name.strip(),
+                "reactedAt": reacted_at.strip(),
+            }
+        )
+    return out
+
+
+def _upsert_message_reaction(
+    meta: Optional[Dict[str, Any]],
+    *,
+    user_id: str,
+    user_name: str,
+    emoji: str,
+) -> Dict[str, Any]:
+    next_meta: Dict[str, Any] = dict(meta) if isinstance(meta, dict) else {}
+    reactions = _extract_reactions_from_meta(next_meta)
+    reactions = [r for r in reactions if str(r.get("userId")) != user_id]
+    if emoji:
+        reactions.append(
+            {
+                "emoji": emoji,
+                "userId": user_id,
+                "userName": user_name,
+                "reactedAt": datetime.utcnow().isoformat(),
+            }
+        )
+    if reactions:
+        next_meta["reactions"] = reactions
+    elif "reactions" in next_meta:
+        next_meta.pop("reactions", None)
+    return next_meta
+
+
 def _serialize_inbox_messages(
     db: Session,
     rows: List[Message],
@@ -327,6 +390,20 @@ def _parse_meta_whatsapp_inbound(payload: Dict[str, Any]) -> Optional[Dict[str, 
                     if not mid:
                         continue
                     return {**base, "kind": "audio", "media_id": str(mid)}
+                if mtype == "reaction":
+                    rxn = msg.get("reaction") or {}
+                    target_id = rxn.get("message_id")
+                    emoji = rxn.get("emoji")
+                    if not isinstance(target_id, str) or not target_id.strip():
+                        continue
+                    if not isinstance(emoji, str):
+                        emoji = ""
+                    return {
+                        **base,
+                        "kind": "reaction",
+                        "target_wa_message_id": target_id.strip(),
+                        "emoji": emoji.strip(),
+                    }
                 if mtype == "sticker":
                     st = msg.get("sticker") or {}
                     mid = st.get("id")
@@ -792,22 +869,89 @@ async def send_message(
                     image_url = str(meta_api.get("media_url") or "").strip()
                     caption = "" if content_stripped == "Image" else content_stripped
                     if image_url:
-                        await wa.send_image_message(
+                        wa_resp = await wa.send_image_message(
                             to_phone=str(phone),
                             image_url=image_url,
                             caption=caption,
                         )
+                        msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
+                        if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                            out_wa_id = str(msgs[0].get("id") or "").strip()
+                            if out_wa_id:
+                                meta_next = dict(msg.message_metadata) if isinstance(msg.message_metadata, dict) else {}
+                                meta_next["wa_message_id"] = out_wa_id
+                                msg.message_metadata = meta_next
                     else:
                         line = caption or "[Image]"
-                        await wa.send_text_message(to_phone=str(phone), text=line[:4096])
+                        wa_resp = await wa.send_text_message(to_phone=str(phone), text=line[:4096])
+                        msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
+                        if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                            out_wa_id = str(msgs[0].get("id") or "").strip()
+                            if out_wa_id:
+                                meta_next = dict(msg.message_metadata) if isinstance(msg.message_metadata, dict) else {}
+                                meta_next["wa_message_id"] = out_wa_id
+                                msg.message_metadata = meta_next
                 else:
                     line = content_stripped
                     if has_media:
                         if meta_to_store and meta_to_store.get("type") == "voice":
-                            line = content_stripped if content_stripped != "Voice message" else "[Voice message — view in support portal]"
+                            meta_api = enrich_metadata_for_api(meta_to_store) or {}
+                            audio_url = str(meta_api.get("media_url") or "").strip()
+                            if audio_url:
+                                wa_resp = await wa.send_audio_message(
+                                    to_phone=str(phone),
+                                    audio_url=audio_url,
+                                )
+                                msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
+                                if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                                    out_wa_id = str(msgs[0].get("id") or "").strip()
+                                    if out_wa_id:
+                                        meta_next = dict(msg.message_metadata) if isinstance(msg.message_metadata, dict) else {}
+                                        meta_next["wa_message_id"] = out_wa_id
+                                        msg.message_metadata = meta_next
+                                msg.wa_delivered_at = datetime.utcnow()
+                                db.add(msg)
+                                db.commit()
+                                db.refresh(msg)
+                                if conversation.agent_id:
+                                    await push_inbox_sync_event(
+                                        db,
+                                        conversation.tenant_id,
+                                        conversation.agent_id,
+                                        {
+                                            "type": "inbox_message_updated",
+                                            "conversation_id": conversation.id,
+                                            "message": _message_dict_for_ws(db, msg),
+                                        },
+                                    )
+                                return MessageOut(
+                                    id=msg.id,
+                                    conversation_id=msg.conversation_id,
+                                    content=msg.content,
+                                    sender_type=msg.sender_type,
+                                    sender_id=msg.sender_id,
+                                    language=msg.language,
+                                    created_at=msg.created_at,
+                                    reply_to_message_id=msg.reply_to_message_id,
+                                    edited_at=msg.edited_at,
+                                    message_metadata=enrich_metadata_for_api(msg.message_metadata),
+                                    status={
+                                        "sent": True,
+                                        "delivered": bool(msg.wa_delivered_at),
+                                        "read": bool(msg.wa_delivered_at),
+                                    },
+                                )
+                            line = content_stripped if content_stripped != "Voice message" else "Voice message"
                         elif meta_to_store and meta_to_store.get("type") == "file":
                             line = content_stripped
-                    await wa.send_text_message(to_phone=str(phone), text=line[:4096])
+                    wa_resp = await wa.send_text_message(to_phone=str(phone), text=line[:4096])
+                    msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
+                    if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                        out_wa_id = str(msgs[0].get("id") or "").strip()
+                        if out_wa_id:
+                            meta_next = dict(msg.message_metadata) if isinstance(msg.message_metadata, dict) else {}
+                            meta_next["wa_message_id"] = out_wa_id
+                            msg.message_metadata = meta_next
                 msg.wa_delivered_at = datetime.utcnow()
                 db.add(msg)
                 db.commit()
@@ -961,6 +1105,87 @@ async def patch_inbox_message(
     )
 
 
+@router.post("/messages/{message_id}/reaction", response_model=MessageOut)
+async def set_inbox_message_reaction(
+    message_id: int,
+    payload: MessageReactionIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    m = db.query(Message).filter(Message.id == message_id).first()
+    if not m:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    conv = db.query(Conversation).filter(Conversation.id == m.conversation_id).first()
+    if not conv or conv.tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    if m.deleted_for_everyone_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message was deleted")
+    agent = (
+        db.query(Agent)
+        .filter(Agent.user_id == current_user.id, Agent.tenant_id == conv.tenant_id)
+        .first()
+    )
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not an agent")
+    emoji = (payload.emoji or "").strip()
+    m.message_metadata = _upsert_message_reaction(
+        m.message_metadata,
+        user_id=str(agent.id),
+        user_name=(agent.name or "Agent").strip(),
+        emoji=emoji,
+    )
+    db.add(m)
+    db.commit()
+    db.refresh(m)
+
+    if (conv.channel or "").lower() == "whatsapp":
+        customer = db.query(Customer).filter(Customer.id == conv.customer_id).first()
+        phone = customer.phone if customer else None
+        wa = MetaWhatsAppClient()
+        target_wa_message_id = None
+        if isinstance(m.message_metadata, dict):
+            raw_id = m.message_metadata.get("wa_message_id")
+            if isinstance(raw_id, str):
+                target_wa_message_id = raw_id.strip()
+        if phone and target_wa_message_id and wa.is_configured():
+            try:
+                await wa.send_reaction_message(
+                    to_phone=str(phone),
+                    target_message_id=target_wa_message_id,
+                    emoji=emoji,
+                )
+            except Exception:
+                logger.exception(
+                    "WhatsApp reaction send failed conversation_id=%s message_id=%s",
+                    conv.id,
+                    m.id,
+                )
+
+    if conv.agent_id:
+        await push_inbox_sync_event(
+            db,
+            conv.tenant_id,
+            conv.agent_id,
+            {
+                "type": "inbox_message_updated",
+                "conversation_id": conv.id,
+                "message": _message_dict_for_ws(db, m),
+            },
+        )
+    return MessageOut(
+        id=m.id,
+        conversation_id=m.conversation_id,
+        content=m.content,
+        sender_type=m.sender_type,
+        sender_id=m.sender_id,
+        language=m.language,
+        created_at=m.created_at,
+        reply_to_message_id=m.reply_to_message_id,
+        edited_at=m.edited_at,
+        message_metadata=enrich_metadata_for_api(m.message_metadata),
+    )
+
+
 @router.delete("/messages/{message_id}/for-me", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_inbox_for_me(
     message_id: int,
@@ -1085,6 +1310,61 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     from_phone = inbound["from_phone"]
     if not from_phone:
         return {"status": "ignored"}
+    if inbound.get("kind") == "reaction":
+        tenant_id = 1
+        store = _get_or_create_default_store(db, tenant_id=tenant_id)
+        customer = _get_or_create_customer_by_phone(
+            db,
+            tenant_id=tenant_id,
+            store_id=store.id,
+            phone=from_phone,
+            name=inbound.get("contact_name"),
+        )
+        conversation = _get_or_create_active_whatsapp_conversation(
+            db,
+            tenant_id=tenant_id,
+            store_id=store.id,
+            customer_id=customer.id,
+        )
+        target_wa_message_id = str(inbound.get("target_wa_message_id") or "").strip()
+        if not target_wa_message_id:
+            return {"status": "ignored"}
+        rows = (
+            db.query(Message)
+            .filter(Message.conversation_id == conversation.id)
+            .order_by(desc(Message.created_at))
+            .all()
+        )
+        target_msg = None
+        for row in rows:
+            meta = row.message_metadata if isinstance(row.message_metadata, dict) else {}
+            if str(meta.get("wa_message_id") or "").strip() == target_wa_message_id:
+                target_msg = row
+                break
+        if not target_msg:
+            return {"status": "ok", "conversation_id": conversation.id, "ignored": "target_not_found"}
+        customer_label = customer.name or "Customer"
+        target_msg.message_metadata = _upsert_message_reaction(
+            target_msg.message_metadata,
+            user_id=f"wa:{from_phone}",
+            user_name=customer_label,
+            emoji=str(inbound.get("emoji") or "").strip(),
+        )
+        db.add(target_msg)
+        db.commit()
+        db.refresh(target_msg)
+        if conversation.agent_id:
+            await push_inbox_sync_event(
+                db,
+                tenant_id,
+                conversation.agent_id,
+                {
+                    "type": "inbox_message_updated",
+                    "conversation_id": conversation.id,
+                    "message": _message_dict_for_ws(db, target_msg),
+                },
+            )
+        return {"status": "ok", "conversation_id": conversation.id, "kind": "reaction"}
 
     msg_meta: Optional[Dict[str, Any]] = None
     kind = inbound.get("kind")
@@ -1112,6 +1392,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             logger.exception("Inbound WhatsApp audio download/R2 failed")
     else:
         return {"status": "ignored"}
+    wa_message_id = str(inbound.get("wa_message_id") or "").strip()
+    if wa_message_id:
+        base_meta = dict(msg_meta) if isinstance(msg_meta, dict) else {}
+        base_meta["wa_message_id"] = wa_message_id
+        msg_meta = base_meta
 
     tenant_id = 1
     store = _get_or_create_default_store(db, tenant_id=tenant_id)
@@ -1180,6 +1465,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 try:
                     wa_response = await client.send_text_message(to_phone=from_phone, text=reply_ack)
                     ai_ack.wa_delivered_at = datetime.utcnow()
+                    msgs = wa_response.get("messages") if isinstance(wa_response, dict) else None
+                    if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                        out_wa_id = str(msgs[0].get("id") or "").strip()
+                        if out_wa_id:
+                            ai_meta = dict(ai_ack.message_metadata) if isinstance(ai_ack.message_metadata, dict) else {}
+                            ai_meta["wa_message_id"] = out_wa_id
+                            ai_ack.message_metadata = ai_meta
                     db.add(ai_ack)
                     db.commit()
                     db.refresh(ai_ack)
@@ -1355,6 +1647,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                     conversation.id,
                 )
                 ai_msg.wa_delivered_at = datetime.utcnow()
+                msgs = wa_response.get("messages") if isinstance(wa_response, dict) else None
+                if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                    out_wa_id = str(msgs[0].get("id") or "").strip()
+                    if out_wa_id:
+                        ai_meta = dict(ai_msg.message_metadata) if isinstance(ai_msg.message_metadata, dict) else {}
+                        ai_meta["wa_message_id"] = out_wa_id
+                        ai_msg.message_metadata = ai_meta
                 db.add(ai_msg)
                 db.commit()
                 db.refresh(ai_msg)

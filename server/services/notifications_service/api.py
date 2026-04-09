@@ -130,3 +130,24 @@ async def mark_all_read(
     db.commit()
     return {"updated": updated}
 
+
+@router.delete("")
+async def clear_notifications(
+    tenant_id: int,
+    agent_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Delete all notifications for the current agent.
+    """
+    deleted = (
+        db.query(Notification)
+        .filter(
+            Notification.tenant_id == tenant_id,
+            Notification.agent_id == agent_id,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": int(deleted or 0)}
+

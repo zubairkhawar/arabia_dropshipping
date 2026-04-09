@@ -105,6 +105,68 @@ class MetaWhatsAppClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def send_audio_message(
+        self,
+        to_phone: str,
+        audio_url: str,
+    ) -> Dict[str, Any]:
+        if not self.is_configured():
+            raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
+        if not to_phone or not audio_url:
+            raise ValueError("to_phone and audio_url are required")
+        url = self._messages_url()
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "audio",
+            "audio": {
+                "link": audio_url,
+            },
+        }
+        headers = self._headers()
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta WhatsApp audio API HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def send_reaction_message(
+        self,
+        to_phone: str,
+        target_message_id: str,
+        emoji: str,
+    ) -> Dict[str, Any]:
+        if not self.is_configured():
+            raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
+        if not to_phone or not target_message_id:
+            raise ValueError("to_phone and target_message_id are required")
+        url = self._messages_url()
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "reaction",
+            "reaction": {
+                "message_id": target_message_id,
+                "emoji": emoji or "",
+            },
+        }
+        headers = self._headers()
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta WhatsApp reaction API HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+            resp.raise_for_status()
+            return resp.json()
+
     async def download_media(self, media_id: str) -> tuple[bytes, Optional[str]]:
         """
         Fetch WhatsApp media bytes via Graph API (media URL is short-lived).

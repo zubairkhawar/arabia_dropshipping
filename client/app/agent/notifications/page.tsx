@@ -53,7 +53,8 @@ function NotificationIcon({ type }: { type: AgentNotification['type'] }) {
 
 export default function AgentNotificationsPage() {
   const { timeZone } = useTenantTimezone();
-  const { getNotificationsForCurrentAgent, markAsRead, markAllAsRead } = useNotifications();
+  const { getNotificationsForCurrentAgent, markAsRead, markAllAsRead, clearAllNotifications } =
+    useNotifications();
   const list = getNotificationsForCurrentAgent();
 
   const formatTime = (iso: string) => {
@@ -80,15 +81,30 @@ export default function AgentNotificationsPage() {
             <h1 className="text-xl font-semibold text-text-primary">Notifications</h1>
           </div>
         </div>
-        {list.some((n) => !n.read) && (
-          <button
-            type="button"
-            onClick={markAllAsRead}
-            className="text-sm font-medium text-primary hover:underline"
-          >
-            Mark all as read
-          </button>
-        )}
+        <div className="flex items-center gap-4">
+          {list.some((n) => !n.read) && (
+            <button
+              type="button"
+              onClick={markAllAsRead}
+              className="text-sm font-medium text-primary hover:underline"
+            >
+              Mark all as read
+            </button>
+          )}
+          {list.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('Clear all notifications? This will permanently delete them.')) {
+                  clearAllNotifications();
+                }
+              }}
+              className="text-sm font-medium text-red-600 hover:underline"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto">
         {list.length === 0 ? (

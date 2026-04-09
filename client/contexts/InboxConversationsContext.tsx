@@ -49,6 +49,7 @@ export interface InboxMessage {
   /** Stored server-side (object_key, type); omit media_url — API adds signed URL when loading. */
   messageMetadata?: Record<string, unknown> | null;
   attachment?: { type: 'photo' | 'voice' | 'file'; name: string; url: string; durationSeconds?: number };
+  reactions?: Array<{ emoji: string; userId: string; userName: string; reactedAt: string }>;
   [key: string]: unknown;
 }
 
@@ -163,6 +164,21 @@ function apiMessageToInbox(
     attachment = { type: 'voice', name: 'Voice', url: content };
     content = '';
   }
+  const meta = (m.message_metadata ?? undefined) as Record<string, unknown> | undefined;
+  const reactionsRaw = meta?.reactions;
+  const reactions = Array.isArray(reactionsRaw)
+    ? reactionsRaw.filter(
+        (r): r is { emoji: string; userId: string; userName: string; reactedAt: string } =>
+          Boolean(
+            r &&
+              typeof r === 'object' &&
+              typeof (r as { emoji?: unknown }).emoji === 'string' &&
+              typeof (r as { userId?: unknown }).userId === 'string' &&
+              typeof (r as { userName?: unknown }).userName === 'string' &&
+              typeof (r as { reactedAt?: unknown }).reactedAt === 'string',
+          ),
+      )
+    : undefined;
   return {
     id: m.id,
     content,
@@ -176,6 +192,7 @@ function apiMessageToInbox(
     messageStatus: m.status,
     messageMetadata: m.message_metadata ?? undefined,
     attachment,
+    reactions,
     replyTo: rp
       ? {
           id: rp.id,

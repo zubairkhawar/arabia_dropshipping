@@ -478,7 +478,7 @@ export function ChatWindow({
           messageStatus: im.messageStatus,
           sendFailed: im.sendFailed,
           attachment: im.attachment,
-          reactions: prevById.get(im.id)?.reactions,
+          reactions: im.reactions ?? prevById.get(im.id)?.reactions,
         }),
       );
     });
@@ -1463,6 +1463,45 @@ export function ChatWindow({
     }
   };
 
+  const persistInboxReaction = async (messageId: number, emoji: string) => {
+    if (!isInboxPage || isInternalChat) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/messaging/messages/${messageId}/reaction`, {
+        method: 'POST',
+        headers: teamChannelJsonHeaders(),
+        body: JSON.stringify({ emoji }),
+      });
+      if (!res.ok) throw new Error(`reaction patch failed: ${res.status}`);
+      const row = (await res.json()) as {
+        id: number;
+        message_metadata?: Record<string, unknown> | null;
+      };
+      const meta = row.message_metadata ?? undefined;
+      const reactionsRaw = meta && typeof meta === 'object' ? (meta as { reactions?: unknown }).reactions : undefined;
+      const reactions = Array.isArray(reactionsRaw)
+        ? reactionsRaw.filter(
+            (r): r is MessageReaction =>
+              Boolean(
+                r &&
+                  typeof r === 'object' &&
+                  typeof (r as MessageReaction).emoji === 'string' &&
+                  typeof (r as MessageReaction).userId === 'string' &&
+                  typeof (r as MessageReaction).userName === 'string' &&
+                  typeof (r as MessageReaction).reactedAt === 'string',
+              ),
+          )
+        : undefined;
+      if (reactions || emoji === '') {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === row.id ? { ...m, reactions: reactions && reactions.length ? reactions : undefined } : m)),
+        );
+        writeReactionCache(row.id, reactions && reactions.length ? reactions : undefined);
+      }
+    } catch {
+      // Keep optimistic local reaction if server sync fails.
+    }
+  };
+
   const getMessageStyle = (message: Message, outgoing: boolean) => {
     if (outgoing) {
       return 'bg-[#d9fdd3] text-[#111b21] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]';
@@ -1585,6 +1624,10 @@ export function ChatWindow({
     writeReactionCache(id, updated.reactions);
     void persistTeamMessagePayload(updated);
     void persistDmMessagePayload(updated);
+    if (isInboxPage && !isInternalChat) {
+      const myNext = updated.reactions?.find((r) => r.userId === reactionActorId)?.emoji ?? '';
+      void persistInboxReaction(id, myNext);
+    }
     setActiveReactionPickerId(null);
     setActiveMessageMenuId(null);
   };
