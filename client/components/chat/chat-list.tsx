@@ -123,13 +123,14 @@ export function ChatList() {
   const setSelectedId = inboxConv ? inboxConv.setSelectedId : setLocalSelectedId;
 
   const view: 'all' | 'live' | 'closed' = useMemo(() => {
-    // Admin inbox should always show all buckets (Live / Closed / Transferred)
-    // regardless of route, so operators can monitor full flow in one place.
-    if (pathname?.startsWith('/admin/inbox')) return 'all';
     if (pathname?.startsWith('/admin/inbox/live')) return 'live';
     if (pathname?.startsWith('/admin/inbox/closed')) return 'closed';
     return 'all';
   }, [pathname]);
+  const isAdminInbox = pathname?.startsWith('/admin/inbox');
+  const isAdminLivePage = pathname?.startsWith('/admin/inbox/live');
+  const isAdminClosedPage = pathname?.startsWith('/admin/inbox/closed');
+  const isAdminAllPage = Boolean(isAdminInbox && !isAdminLivePage && !isAdminClosedPage);
 
   const filteredConversations = useMemo(() => {
     let list = conversations;
@@ -290,14 +291,14 @@ export function ChatList() {
                 ))}
               </div>
             ) : null}
-            {isAgentInbox && !(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
+            {(isAgentInbox || isAdminAllPage) && !(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
               <div className="space-y-1">
                 <button
                   type="button"
                   className="w-full px-1 py-1 flex items-center justify-between hover:bg-panel rounded"
                   onClick={() => setLiveOpen((open) => !open)}
                 >
-                  <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">
+                    <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">
                     Live Conversations
                   </span>
                   <span className="flex items-center gap-1">
@@ -395,7 +396,7 @@ export function ChatList() {
               </div>
             )}
 
-            {!(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
+            {(isAgentInbox || isAdminAllPage) && !(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -474,7 +475,7 @@ export function ChatList() {
               </div>
             )}
 
-            {!(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
+            {isAgentInbox && !(isAgentInbox && inboxConv?.isLoading) && hasAnyInboxConversation && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -537,6 +538,76 @@ export function ChatList() {
                       </button>
                     );
                   })}
+              </div>
+            )}
+
+            {!isAgentInbox && isAdminLivePage && !(isAgentInbox && inboxConv?.isLoading) && (
+              <div className="space-y-1">
+                {liveConversations.map((conv) => {
+                  const isSelected = selectedId === conv.id;
+                  return (
+                    <button
+                      key={conv.id}
+                      type="button"
+                      onClick={() => setSelectedId(conv.id)}
+                      className={`w-full text-left p-3 rounded-lg cursor-pointer transition-colors ${
+                        isSelected ? 'bg-primary text-white' : 'bg-white hover:bg-panel border border-border'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <span className={`text-sm font-medium truncate flex-1 min-w-0 ${isSelected ? 'text-white' : 'text-text-primary'}`}>
+                          {conv.customerName}
+                        </span>
+                        <span className={`text-xs flex-shrink-0 ${isSelected ? 'text-white/80' : 'text-text-muted'}`}>
+                          {conv.lastActivityAt}
+                        </span>
+                      </div>
+                      {conv.customerPhone && (
+                        <p className={`text-[11px] truncate mb-0.5 ${isSelected ? 'text-white/85' : 'text-text-muted'}`}>
+                          {conv.customerPhone}
+                        </p>
+                      )}
+                      <p className={`text-xs truncate ${isSelected ? 'text-white/90' : 'text-text-secondary'}`}>
+                        {conv.lastMessage}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {!isAgentInbox && isAdminClosedPage && !(isAgentInbox && inboxConv?.isLoading) && (
+              <div className="space-y-1">
+                {closedConversations.map((conv) => {
+                  const isSelected = selectedId === conv.id;
+                  return (
+                    <button
+                      key={conv.id}
+                      type="button"
+                      onClick={() => setSelectedId(conv.id)}
+                      className={`w-full text-left p-3 rounded-lg cursor-pointer transition-colors ${
+                        isSelected ? 'bg-primary text-white' : 'bg-white hover:bg-panel border border-border'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <span className={`text-sm font-medium truncate flex-1 min-w-0 ${isSelected ? 'text-white' : 'text-text-primary'}`}>
+                          {conv.customerName}
+                        </span>
+                        <span className={`text-xs flex-shrink-0 ${isSelected ? 'text-white/80' : 'text-text-muted'}`}>
+                          {conv.closedAt ?? conv.lastActivityAt}
+                        </span>
+                      </div>
+                      {conv.customerPhone && (
+                        <p className={`text-[11px] truncate mb-0.5 ${isSelected ? 'text-white/85' : 'text-text-muted'}`}>
+                          {conv.customerPhone}
+                        </p>
+                      )}
+                      <p className={`text-xs truncate ${isSelected ? 'text-white/90' : 'text-text-secondary'}`}>
+                        {conv.lastMessage}
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
             )}
 
