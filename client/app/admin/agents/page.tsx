@@ -347,7 +347,7 @@ export default function AdminAgents() {
         </div>
 
         {!listCollapsed && (
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto admin-no-scrollbar">
             {agents.length === 0 ? (
               <p className="px-4 py-6 text-xs text-text-muted">
                 No agents yet. Click “Add” to create an account.

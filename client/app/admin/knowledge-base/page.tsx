@@ -590,7 +590,7 @@ export default function AdminKnowledgeBase() {
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto overflow-y-visible -mx-4 sm:mx-0">
+            <div className="overflow-x-auto overflow-y-visible -mx-4 sm:mx-0 admin-no-scrollbar">
               <table className="min-w-full text-xs border-t border-border">
                 <thead>
                   <tr className="bg-panel text-text-muted">

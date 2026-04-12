@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import { Eye, EyeOff } from 'lucide-react';
 import {
   AGENT_PORTAL_PREFERS_OFFLINE_KEY,
   clearAuthAgentId,
@@ -21,6 +22,7 @@ export default function LoginPage() {
   const [submittingForgot, setSubmittingForgot] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [submittingLogin, setSubmittingLogin] = useState(false);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,14 +197,29 @@ export default function LoginPage() {
                       <label className="block text-sm font-medium text-text-primary mb-2">
                         Password
                       </label>
-                      <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                        placeholder="Enter your password"
-                        required
-                      />
+                      <div className="relative">
+                        <input
+                          type={showLoginPassword ? 'text' : 'password'}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          className="w-full pl-4 pr-11 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                          placeholder="Enter your password"
+                          required
+                          autoComplete="current-password"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowLoginPassword((v) => !v)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-panel transition-colors"
+                          aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showLoginPassword ? (
+                            <EyeOff className="w-4 h-4" aria-hidden />
+                          ) : (
+                            <Eye className="w-4 h-4" aria-hidden />
+                          )}
+                        </button>
+                      </div>
                     </div>
                     <button
                       type="submit"

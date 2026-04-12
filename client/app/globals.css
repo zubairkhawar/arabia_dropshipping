@@ -75,6 +75,18 @@ a {
   height: 0;
 }
 
+/* Admin pages: keep scroll, hide scrollbar chrome (agents, settings, knowledge base). */
+.admin-no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.admin-no-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 /* WhatsApp-style chat wallpaper (subtle texture + doodle tone) */
 .chat-wallpaper {
   background-color: #efeae2;

@@ -59,7 +59,7 @@ function loadLogoDataUrl(): Promise<string> {
 }
 
 function formatSession(s: DaySession): string {
-  return `${formatTimeFromMinutes(s.startMinutes)} – ${formatTimeFromMinutes(s.endMinutes)} (${formatDurationMinutes(s.endMinutes - s.startMinutes)})`;
+  return `${formatTimeFromMinutes(s.startMinutes)} – ${formatTimeFromMinutes(s.endMinutes)} (${formatDurationMinutes(s.durationMinutes)})`;
 }
 
 function formatDayShort(d: Date, timeZone: string): string {
@@ -182,7 +182,7 @@ export function buildSingleAgentPdf(options: SingleAgentReportOptions): Promise<
 
     const headers = ['Date', 'Day', 'Total hours', 'Activity (sessions)'];
     const body = dayData.map((d) => {
-      const totalM = d.sessions.reduce((s, x) => s + (x.endMinutes - x.startMinutes), 0);
+      const totalM = d.sessions.reduce((s, x) => s + x.durationMinutes, 0);
       const activity =
         d.sessions.length === 0
           ? '—'

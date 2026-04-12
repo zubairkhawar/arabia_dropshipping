@@ -11,7 +11,7 @@ import { buildAllAgentsPdf } from '@/lib/attendance-pdf';
 import type { OnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useSoundAlerts } from '@/contexts/SoundAlertsContext';
 import { AgentScheduleSettings } from '@/components/admin/agent-schedule-settings';
-import { dateKeyInTimeZone, clockMinutesInTimeZone } from '@/lib/tenant-time';
+import { dateKeyInTimeZone, clockMinutesInTimeZone, parseBackendUtcDate } from '@/lib/tenant-time';
 import {
   BroadcastsPanel,
   BroadcastDeleteModal,
@@ -463,19 +463,24 @@ export default function AdminSettings() {
             sessions: Array<{ start_at: string; end_at: string | null }>;
           }>;
         };
-        const bucket = new Map<string, { minutes: number; sessions: Array<{ startMinutes: number; endMinutes: number }> }>();
+        const bucket = new Map<
+          string,
+          { minutes: number; sessions: Array<{ startMinutes: number; endMinutes: number; durationMinutes: number }> }
+        >();
         for (const day of data.days || []) {
           const key = String(day.date || '');
           if (!key) continue;
           const row = bucket.get(key) || { minutes: 0, sessions: [] };
           for (const s of day.sessions || []) {
-            const st = new Date(s.start_at);
-            const en = new Date(s.end_at || new Date().toISOString());
+            const st = parseBackendUtcDate(s.start_at);
+            if (!st) continue;
+            const en = parseBackendUtcDate(s.end_at) ?? new Date();
             const delta = Math.max(0, Math.floor((en.getTime() - st.getTime()) / 60000));
             row.minutes += delta;
             row.sessions.push({
               startMinutes: clockMinutesInTimeZone(st, timeZone),
               endMinutes: clockMinutesInTimeZone(en, timeZone),
+              durationMinutes: delta,
             });
           }
           bucket.set(key, row);
@@ -805,7 +810,7 @@ export default function AdminSettings() {
             </div>
           </form>
 
-          <div className="max-h-[min(70vh,900px)] overflow-y-auto pr-1">
+          <div className="max-h-[min(70vh,900px)] overflow-y-auto pr-1 admin-no-scrollbar">
             <BroadcastsPanel
               broadcasts={broadcasts}
               loading={broadcastsLoading}

@@ -12,7 +12,12 @@ import {
 const DAYS_PER_WEEK = 7;
 const CELL_BASE = 'rounded-sm';
 
-export type DaySession = { startMinutes: number; endMinutes: number };
+export type DaySession = {
+  startMinutes: number;
+  endMinutes: number;
+  /** Wall-clock span from real timestamps (handles sessions past midnight). */
+  durationMinutes: number;
+};
 
 export type DayAttendance = {
   date: Date;
@@ -56,8 +61,9 @@ export function formatTimeFromMinutes(m: number): string {
 }
 
 export function formatDurationMinutes(totalMinutes: number): string {
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
+  const safe = Math.max(0, Math.floor(totalMinutes));
+  const h = Math.floor(safe / 60);
+  const m = safe % 60;
   if (h === 0) return `${m}m`;
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
@@ -127,7 +133,7 @@ export function useAgentAttendanceData(
             const endMinutes = clockMinutesInTimeZone(en, timeZone);
             const delta = Math.max(0, Math.floor((en.getTime() - st.getTime()) / 60000));
             existing.minutes += delta;
-            existing.sessions.push({ startMinutes, endMinutes });
+            existing.sessions.push({ startMinutes, endMinutes, durationMinutes: delta });
           }
           localBucket.set(key, existing);
         }
@@ -222,7 +228,7 @@ export function AgentActivityBar({
       if (d.sessions.length === 0) return `${formatDate(d.date, timeZone)} · No time logged`;
       const first = d.sessions[0];
       const last = d.sessions[d.sessions.length - 1];
-      const totalM = d.sessions.reduce((s, x) => s + (x.endMinutes - x.startMinutes), 0);
+      const totalM = d.sessions.reduce((s, x) => s + x.durationMinutes, 0);
       return `${formatDate(d.date, timeZone)} — Online for ${formatDurationMinutes(totalM)} (${formatTimeFromMinutes(first.startMinutes)} – ${formatTimeFromMinutes(last.endMinutes)})`;
     },
     [isOffDay, timeZone],
@@ -291,15 +297,32 @@ export function AgentActivityBar({
               <span className="text-[10px] text-text-muted w-8">0h</span>
               <div className="flex-1 h-8 bg-[#ebedf0] rounded relative overflow-hidden flex">
                 {selectedDay.sessions.map((s, i) => {
+                  const tip = `${formatTimeFromMinutes(s.startMinutes)} – ${formatTimeFromMinutes(s.endMinutes)} (${formatDurationMinutes(s.durationMinutes)})`;
+                  const crossesMidnight =
+                    s.durationMinutes > 0 && s.endMinutes < s.startMinutes;
+                  if (crossesMidnight) {
+                    const w1 = ((1440 - s.startMinutes) / 1440) * 100;
+                    const w2 = (s.endMinutes / 1440) * 100;
+                    return (
+                      <span key={i} className="contents" title={tip}>
+                        <div
+                          className="absolute h-full bg-red-500 hover:bg-red-600 transition-colors rounded-sm min-w-[4px]"
+                          style={{ left: `${(s.startMinutes / 1440) * 100}%`, width: `${w1}%` }}
+                        />
+                        <div
+                          className="absolute h-full bg-red-500 hover:bg-red-600 transition-colors rounded-sm min-w-[4px]"
+                          style={{ left: '0%', width: `${w2}%` }}
+                        />
+                      </span>
+                    );
+                  }
                   const left = (s.startMinutes / 1440) * 100;
-                  const width = ((s.endMinutes - s.startMinutes) / 1440) * 100;
-                  const duration = s.endMinutes - s.startMinutes;
-                  const tip = `${formatTimeFromMinutes(s.startMinutes)} – ${formatTimeFromMinutes(s.endMinutes)} (${formatDurationMinutes(duration)})`;
+                  const width = (s.durationMinutes / 1440) * 100;
                   return (
                     <div
                       key={i}
                       className="absolute h-full bg-red-500 hover:bg-red-600 transition-colors rounded-sm min-w-[4px]"
-                      style={{ left: `${left}%`, width: `${width}%` }}
+                      style={{ left: `${left}%`, width: `${Math.max(width, 0.35)}%` }}
                       title={tip}
                     />
                   );
@@ -336,7 +359,7 @@ export function AgentActivityBar({
                         {formatTimeFromMinutes(s.endMinutes)}
                       </td>
                       <td className="py-2 px-3 text-text-primary">
-                        {formatDurationMinutes(s.endMinutes - s.startMinutes)}
+                        {formatDurationMinutes(s.durationMinutes)}
                       </td>
                     </tr>
                   ))
