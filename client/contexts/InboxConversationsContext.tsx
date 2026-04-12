@@ -69,7 +69,8 @@ interface InboxConversationsContextType {
     convId: number,
     toAgentId: string,
     toAgentName: string,
-    description?: string,
+    /** Same copy as the inbox system message; sent to WhatsApp as `customer_message`. */
+    customerMessage?: string,
   ) => void;
   sendConversationToAI: (convId: number) => void;
   getMessages: (convId: number) => InboxMessage[];
@@ -671,7 +672,8 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     [timeZone],
   );
 
-  const transferConversation = useCallback((convId: number, toAgentId: string, toAgentName: string) => {
+  const transferConversation = useCallback(
+    (convId: number, toAgentId: string, toAgentName: string, customerMessage?: string) => {
     setConversations((prev) =>
       prev.map((c) =>
         c.id === convId
@@ -692,15 +694,19 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers.Authorization = `Bearer ${token}`;
+    const trimmed = customerMessage?.trim();
     void fetch(`${API_BASE}/api/routing/transfer`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         conversation_id: convId,
         target_agent_id: Number(toAgentId),
+        ...(trimmed ? { customer_message: trimmed } : {}),
       }),
     });
-  }, []);
+  },
+    [],
+  );
 
   const sendConversationToAI = useCallback((convId: number) => {
     const now = new Date();

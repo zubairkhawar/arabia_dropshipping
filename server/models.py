@@ -46,6 +46,19 @@ class User(Base):
     tenant = relationship("Tenant", back_populates="users")
 
 
+class PasswordReset(Base):
+    """One-time tokens for password reset emails (agents and admins share `users`)."""
+
+    __tablename__ = "password_resets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token = Column(String(128), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    used = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 # Store Models
 class Store(Base):
     __tablename__ = "stores"

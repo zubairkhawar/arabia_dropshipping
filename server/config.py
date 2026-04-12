@@ -54,7 +54,14 @@ class Settings(BaseSettings):
     frontend_base_url: str = "http://localhost:3000"
     admin_email: Optional[str] = None
     admin_password: Optional[str] = None
-    
+
+    # Gmail (or other) SMTP for password reset and transactional mail
+    smtp_host: Optional[str] = None
+    smtp_port: int = 587
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from_email: Optional[str] = None
+
     class Config:
         env_file = ".env"
         case_sensitive = False

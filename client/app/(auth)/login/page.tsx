@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
 import {
   AGENT_PORTAL_PREFERS_OFFLINE_KEY,
@@ -16,10 +17,6 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [showForgot, setShowForgot] = useState(false);
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotMessage, setForgotMessage] = useState<string | null>(null);
-  const [submittingForgot, setSubmittingForgot] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [submittingLogin, setSubmittingLogin] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
@@ -89,30 +86,6 @@ export default function LoginPage() {
     }
   };
 
-  const handleForgot = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setForgotMessage(null);
-    setSubmittingForgot(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail.trim() }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || 'Unable to start password reset.');
-      }
-      setForgotMessage(
-        'If an account exists for this email, a reset link has been sent.',
-      );
-    } catch (err: any) {
-      setForgotMessage(err.message || 'Unable to start password reset.');
-    } finally {
-      setSubmittingForgot(false);
-    }
-  };
-
   return (
     <div className="min-h-screen flex bg-background">
       {/* Left side: brand panel */}
@@ -148,7 +121,7 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Right side: login / forgot password */}
+      {/* Right side: login */}
       <div className="flex-1 flex flex-col px-6 py-6">
         {/* Mobile logo */}
         <div className="flex items-center gap-3 mb-8 lg:hidden">
@@ -170,128 +143,73 @@ export default function LoginPage() {
 
         <div className="flex-1 flex items-center justify-center">
           <div className="w-full max-w-md">
-            {!showForgot ? (
-              <>
-                <div className="mb-8 lg:mb-10">
-                  <h2 className="text-2xl font-bold text-text-primary">Sign in</h2>
-                  <p className="text-sm text-text-secondary mt-1">
-                    Use your Arabia credentials to access the workspace.
-                  </p>
-                </div>
-                <div className="bg-sidebar rounded-xl p-6 shadow-sm border border-border">
-                  <form className="space-y-4" onSubmit={handleSubmit}>
-                    <div>
-                      <label className="block text-sm font-medium text-text-primary mb-2">
-                        Email
-                      </label>
+            <>
+              <div className="mb-8 lg:mb-10">
+                <h2 className="text-2xl font-bold text-text-primary">Sign in</h2>
+                <p className="text-sm text-text-secondary mt-1">
+                  Use your Arabia credentials to access the workspace.
+                </p>
+              </div>
+              <div className="bg-sidebar rounded-xl p-6 shadow-sm border border-border">
+                <form className="space-y-4" onSubmit={handleSubmit}>
+                  <div>
+                    <label className="block text-sm font-medium text-text-primary mb-2">
+                      Email
+                    </label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                      placeholder="you@example.com"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-text-primary mb-2">
+                      Password
+                    </label>
+                    <div className="relative">
                       <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                        placeholder="you@example.com"
+                        type={showLoginPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full pl-4 pr-11 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                        placeholder="Enter your password"
                         required
+                        autoComplete="current-password"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowLoginPassword((v) => !v)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-panel transition-colors"
+                        aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showLoginPassword ? (
+                          <EyeOff className="w-4 h-4" aria-hidden />
+                        ) : (
+                          <Eye className="w-4 h-4" aria-hidden />
+                        )}
+                      </button>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-text-primary mb-2">
-                        Password
-                      </label>
-                      <div className="relative">
-                        <input
-                          type={showLoginPassword ? 'text' : 'password'}
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          className="w-full pl-4 pr-11 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                          placeholder="Enter your password"
-                          required
-                          autoComplete="current-password"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowLoginPassword((v) => !v)}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-panel transition-colors"
-                          aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
-                        >
-                          {showLoginPassword ? (
-                            <EyeOff className="w-4 h-4" aria-hidden />
-                          ) : (
-                            <Eye className="w-4 h-4" aria-hidden />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={submittingLogin}
-                      className="w-full bg-primary text-white py-2.5 px-4 rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium"
-                    >
-                      {submittingLogin ? 'Signing in...' : 'Sign In'}
-                    </button>
-                    {loginError && (
-                      <p className="text-xs text-status-error">{loginError}</p>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowForgot(true);
-                        setForgotEmail(email);
-                      }}
-                      className="w-full text-xs text-primary mt-3 hover:underline text-center"
-                    >
-                      Forgot password?
-                    </button>
-                  </form>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="mb-8 lg:mb-10">
-                  <h2 className="text-2xl font-bold text-text-primary">
-                    Reset your password
-                  </h2>
-                  <p className="text-sm text-text-secondary mt-1">
-                    Enter your email and we&apos;ll send you a reset link.
-                  </p>
-                </div>
-                <div className="bg-sidebar rounded-xl p-6 shadow-sm border border-border">
-                  <form className="space-y-4" onSubmit={handleForgot}>
-                    <div>
-                      <label className="block text-sm font-medium text-text-primary mb-2">
-                        Email
-                      </label>
-                      <input
-                        type="email"
-                        value={forgotEmail}
-                        onChange={(e) => setForgotEmail(e.target.value)}
-                        className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                        placeholder="you@example.com"
-                        required
-                      />
-                    </div>
-                    {forgotMessage && (
-                      <p className="text-xs text-text-secondary bg-panel border border-border rounded-md px-3 py-2">
-                        {forgotMessage}
-                      </p>
-                    )}
-                    <button
-                      type="submit"
-                      disabled={submittingForgot}
-                      className="w-full bg-primary text-white py-2.5 px-4 rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium disabled:opacity-60"
-                    >
-                      {submittingForgot ? 'Sending…' : 'Send reset link'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowForgot(false)}
-                      className="w-full text-xs text-primary mt-3 hover:underline text-center"
-                    >
-                      Back to sign in
-                    </button>
-                  </form>
-                </div>
-              </>
-            )}
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={submittingLogin}
+                    className="w-full bg-primary text-white py-2.5 px-4 rounded-lg hover:bg-primary-dark transition-colors text-sm font-medium"
+                  >
+                    {submittingLogin ? 'Signing in...' : 'Sign In'}
+                  </button>
+                  {loginError && <p className="text-xs text-status-error">{loginError}</p>}
+                  <Link
+                    href="/forgot-password"
+                    className="block w-full text-xs text-primary mt-3 hover:underline text-center"
+                  >
+                    Forgot password?
+                  </Link>
+                </form>
+              </div>
+            </>
           </div>
         </div>
       </div>

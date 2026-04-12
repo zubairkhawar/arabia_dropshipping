@@ -69,6 +69,11 @@ class TransferRequest(BaseModel):
     conversation_id: int
     target_agent_id: Optional[int] = None
     target_team: Optional[str] = None
+    customer_message: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description="Same text as the inbox transfer notice; sent to WhatsApp when channel is WhatsApp.",
+    )
 
 
 def _datetime_utc_iso_z(v: Optional[datetime]) -> Optional[str]:
@@ -557,16 +562,17 @@ async def transfer_conversation(
             {"type": "conversation_transferred", "conversation_id": conversation.id},
         )
 
-    # Notify customer on WhatsApp which agent is now handling the chat.
+    # Notify customer on WhatsApp (same wording as inbox system line when provided).
     if (conversation.channel or "").lower() == "whatsapp":
         customer = db.query(Customer).filter(Customer.id == conversation.customer_id).first()
         phone = customer.phone if customer else None
         wa = MetaWhatsAppClient()
         if phone and wa.is_configured():
-            transfer_note = (
-                f"Your chat has been transferred by {caller_agent_name}. "
-                f"{(agent.name or 'An agent').strip()} will assist you now."
-            )
+            to_name = (agent.name or f"Agent {agent.id}").strip()
+            if payload.customer_message and payload.customer_message.strip():
+                transfer_note = payload.customer_message.strip()
+            else:
+                transfer_note = f"Conversation transferred to {to_name} by {caller_agent_name}."
             try:
                 await wa.send_text_message(to_phone=str(phone), text=transfer_note[:4096])
             except Exception:

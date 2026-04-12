@@ -3447,7 +3447,7 @@ export function ChatWindow({
                       };
                       inboxConv.appendMessage(convId, systemMsg as InboxMessage);
                       setMessages((prev) => [...prev, systemMsg]);
-                      inboxConv.transferConversation(convId, transferTargetId, transferTargetName);
+                      inboxConv.transferConversation(convId, transferTargetId, transferTargetName, noteText);
                       notifications.addNotification({
                         type: 'chat_transfer',
                         message: `You were transferred a chat by ${agentFullName}`,

@@ -1,15 +1,20 @@
+import html
+import logging
+import secrets
 from datetime import datetime, timedelta
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db
-from models import Tenant
+from models import PasswordReset, Tenant
 from services.auth_service.models import User
 from services.auth_service.schemas import (
     ForgotPasswordRequest,
@@ -18,12 +23,16 @@ from services.auth_service.schemas import (
     TokenData,
     UserCreate,
     UserResponse,
+    VerifyResetTokenResponse,
 )
 from services.auth_service.services import (
-    get_password_hash,
     create_access_token,
+    get_password_hash,
     verify_password,
 )
+from services.email_service import send_html_email
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -230,67 +239,137 @@ async def logout():
     return {"message": "Logged out"}
 
 
+def _frontend_base_url() -> str:
+    return (settings.frontend_base_url or "").strip().rstrip("/")
+
+
+def _reset_email_html(reset_url: str, display_email: str) -> str:
+    safe_url = html.escape(reset_url, quote=True)
+    safe_email = html.escape(display_email, quote=True)
+    return f"""<!DOCTYPE html>
+<html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#0f172a;">
+  <p>We received a request to reset the password for <strong>{safe_email}</strong>.</p>
+  <p><a href="{safe_url}" style="display:inline-block;margin:12px 0;padding:10px 18px;background:#dc2626;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;">Reset password</a></p>
+  <p style="font-size:13px;color:#64748b;">This link expires in one hour. If you did not request this, you can ignore this email.</p>
+  <p style="font-size:12px;color:#94a3b8;word-break:break-all;">{safe_url}</p>
+</body></html>"""
+
+
 @router.post("/forgot-password")
 async def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
     """
-    Start password reset flow.
-    - Looks up user by email
-    - Creates a short-lived JWT reset token
-    - Sends an email with a reset link (stubbed for now)
+    Start password reset: store URL-safe token (1 hour), email reset link.
+    Always returns the same message (no email enumeration).
     """
-    user: User | None = db.query(User).filter(User.email == payload.email).first()
-
-    # Always return 200 to avoid leaking whether user exists
-    if not user:
-        return {
-            "message": "If an account exists for this email, a reset link has been sent."
-        }
-
-    reset_token = create_access_token(
-        {"sub": user.email, "scope": "password_reset"},
-        expires_delta=timedelta(minutes=30),
-    )
-    reset_url = f"{settings.frontend_base_url}/reset-password?token={reset_token}"
-
-    # TODO: integrate with AWS SES or your email provider.
-    # For now this is just a placeholder so you can see the URL in logs.
-    print(f"[forgot-password] Reset URL for {user.email}: {reset_url}")
-
-    return {
+    generic = {
         "message": "If an account exists for this email, a reset link has been sent."
     }
+
+    email_norm = str(payload.email).strip().lower()
+    user: User | None = (
+        db.query(User).filter(func.lower(User.email) == email_norm).first()
+    )
+
+    if not user or not user.is_active:
+        return generic
+
+    db.query(PasswordReset).filter(
+        PasswordReset.user_id == user.id,
+        PasswordReset.used.is_(False),
+    ).update({"used": True}, synchronize_session=False)
+
+    raw_token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(hours=1)
+    row = PasswordReset(
+        user_id=user.id,
+        token=raw_token,
+        expires_at=expires_at,
+        used=False,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+
+    base = _frontend_base_url()
+    token_q = quote(raw_token, safe="")
+    reset_url = f"{base}/reset-password?token={token_q}"
+
+    ok, err = send_html_email(
+        to_email=user.email,
+        subject="Reset your Dropship Arabia password",
+        html_content=_reset_email_html(reset_url, user.email),
+    )
+    if ok:
+        logger.info("Password reset email sent to %s", user.email)
+    else:
+        logger.warning("Password reset email failed for %s: %s", user.email, err)
+        logger.info("Password reset URL (dev fallback) for %s: %s", user.email, reset_url)
+
+    return generic
+
+
+@router.get("/verify-reset-token", response_model=VerifyResetTokenResponse)
+async def verify_reset_token(
+    token: str = Query("", min_length=1),
+    db: Session = Depends(get_db),
+):
+    """Validate a password-reset token before showing the new-password form."""
+    row: PasswordReset | None = (
+        db.query(PasswordReset).filter(PasswordReset.token == token.strip()).first()
+    )
+    now = datetime.utcnow()
+    if not row or row.used or row.expires_at <= now:
+        return VerifyResetTokenResponse(
+            valid=False,
+            message="This reset link is invalid or has expired. Please request a new one.",
+        )
+
+    user: User | None = db.query(User).filter(User.id == row.user_id).first()
+    if not user or not user.is_active:
+        return VerifyResetTokenResponse(
+            valid=False,
+            message="This reset link is invalid or has expired. Please request a new one.",
+        )
+
+    return VerifyResetTokenResponse(valid=True, email=user.email)
 
 
 @router.post("/reset-password")
 async def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
     """
-    Complete password reset flow using token and new password.
+    Complete password reset using DB token and new password (min 8 characters).
     """
-    try:
-        data = jwt.decode(
-            payload.token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+    token = (payload.token or "").strip()
+    new_password = payload.new_password or ""
+
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters.",
         )
-        if data.get("scope") != "password_reset":
-            raise JWTError("Invalid scope")
-        email: str = data.get("sub")
-        if not email:
-            raise JWTError("Missing subject")
-    except JWTError:
+
+    row: PasswordReset | None = (
+        db.query(PasswordReset).filter(PasswordReset.token == token).first()
+    )
+    now = datetime.utcnow()
+    if not row or row.used or row.expires_at <= now:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired reset token.",
         )
 
-    user: User | None = db.query(User).filter(User.email == email).first()
-    if not user:
+    user: User | None = db.query(User).filter(User.id == row.user_id).first()
+    if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid reset token.",
+            detail="Invalid or expired reset token.",
         )
 
-    user.hashed_password = get_password_hash(payload.new_password)
+    user.hashed_password = get_password_hash(new_password)
     user.updated_at = datetime.utcnow()
+    row.used = True
     db.add(user)
+    db.add(row)
     db.commit()
 
     return {"message": "Password has been reset successfully."}
