@@ -6,6 +6,7 @@ import {
   DEFAULT_TENANT_TIMEZONE,
   clockMinutesInTimeZone,
   weekdayInTimeZone,
+  parseBackendUtcDate,
 } from '@/lib/tenant-time';
 
 const DAYS_PER_WEEK = 7;
@@ -119,8 +120,9 @@ export function useAgentAttendanceData(
           if (!key) continue;
           const existing = localBucket.get(key) || { minutes: 0, sessions: [] };
           for (const s of day.sessions || []) {
-            const st = new Date(s.start_at);
-            const en = new Date(s.end_at || new Date().toISOString());
+            const st = parseBackendUtcDate(s.start_at);
+            if (!st) continue;
+            const en = parseBackendUtcDate(s.end_at) ?? new Date();
             const startMinutes = clockMinutesInTimeZone(st, timeZone);
             const endMinutes = clockMinutesInTimeZone(en, timeZone);
             const delta = Math.max(0, Math.floor((en.getTime() - st.getTime()) / 60000));

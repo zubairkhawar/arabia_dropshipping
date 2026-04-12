@@ -2,6 +2,26 @@
 
 export const DEFAULT_TENANT_TIMEZONE = 'Asia/Karachi';
 
+/**
+ * Parse API datetime strings stored as naive UTC in Postgres.
+ * JSON often serializes without `Z`; ECMAScript then treats that as *local* wall time, which
+ * shifts attendance and other labels by the browser offset vs UTC.
+ */
+export function parseBackendUtcDate(iso: string | null | undefined): Date | null {
+  if (iso == null || iso === '') return null;
+  const s = String(iso).trim();
+  if (!s) return null;
+  let d: Date;
+  if (/[zZ]$/.test(s)) d = new Date(s);
+  else if (/[+-]\d{2}:?\d{2}$/.test(s)) d = new Date(s);
+  else {
+    const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(normalized)) d = new Date(`${normalized}Z`);
+    else d = new Date(s);
+  }
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export function normalizeIanaTimeZone(tz: string | null | undefined): string {
   const raw = (tz ?? DEFAULT_TENANT_TIMEZONE).trim() || DEFAULT_TENANT_TIMEZONE;
   try {

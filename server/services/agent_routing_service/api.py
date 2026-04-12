@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from datetime import timezone as dt_timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
@@ -71,9 +71,25 @@ class TransferRequest(BaseModel):
     target_team: Optional[str] = None
 
 
+def _datetime_utc_iso_z(v: Optional[datetime]) -> Optional[str]:
+    """Serialize naive DB UTC instants with explicit Z for correct client parsing."""
+    if v is None:
+        return None
+    aware = v.replace(tzinfo=dt_timezone.utc) if v.tzinfo is None else v.astimezone(dt_timezone.utc)
+    return aware.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+
+
 class AttendanceSessionOut(BaseModel):
     start_at: datetime
     end_at: Optional[datetime] = None
+
+    @field_serializer("start_at")
+    def _ser_start_at(self, v: datetime) -> str:
+        return _datetime_utc_iso_z(v) or ""
+
+    @field_serializer("end_at")
+    def _ser_end_at(self, v: Optional[datetime]) -> Optional[str]:
+        return _datetime_utc_iso_z(v)
 
 
 class AttendanceDayOut(BaseModel):

@@ -12,6 +12,11 @@ import { buildSingleAgentPdf, filterByMonth } from '@/lib/attendance-pdf';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const NAME_RE = /^[A-Za-z]+$/;
+
+function trimmedAvatarUrl(url: string | null | undefined): string | null {
+  const u = url != null ? String(url).trim() : '';
+  return u !== '' ? u : null;
+}
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
@@ -141,6 +146,10 @@ export default function AdminAgents() {
   const selectedAgent = useMemo(
     () => agents.find((a) => a.id === selectedId) ?? null,
     [agents, selectedId],
+  );
+  const selectedAvatarUrl = useMemo(
+    () => trimmedAvatarUrl(selectedAgent?.avatarUrl),
+    [selectedAgent?.avatarUrl],
   );
   useEffect(() => {
     if (!selectedAgent?.id) {
@@ -347,6 +356,7 @@ export default function AdminAgents() {
               <ul className="p-2 space-y-0.5">
                 {agents.map((agent) => {
                   const isActive = agent.id === selectedId;
+                  const rowAvatarUrl = trimmedAvatarUrl(agent.avatarUrl);
                   return (
                     <li
                       key={agent.id}
@@ -361,8 +371,13 @@ export default function AdminAgents() {
                             : 'text-text-secondary hover:bg-panel hover:text-text-primary'
                         }`}
                       >
-                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0">
-                          {agent.name.charAt(0)}
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold flex-shrink-0 overflow-hidden">
+                          {rowAvatarUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={rowAvatarUrl} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            agent.name.charAt(0)
+                          )}
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium truncate">{agent.name}</p>
@@ -397,8 +412,13 @@ export default function AdminAgents() {
             {/* Row 1: Agent info (col 1-2) + Access & Lifecycle (col 3-4) */}
             <div className="lg:col-span-2 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary text-lg font-semibold">
-                  {(editingName ? nameDraft : selectedAgent.name).charAt(0) || '?'}
+                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary text-lg font-semibold overflow-hidden">
+                  {selectedAvatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={selectedAvatarUrl} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    (editingName ? nameDraft : selectedAgent.name).charAt(0) || '?'
+                  )}
                 </div>
                 <div className="min-w-0 flex-1">
                   {editingName ? (
