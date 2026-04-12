@@ -544,7 +544,7 @@ async def list_conversations(
     status_param: Optional[str] = None,
     agent_id: Optional[int] = None,
     include_transferred_out_for_agent_id: Optional[int] = None,
-    limit: int = 50,
+    limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
 ):

@@ -250,12 +250,13 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       const handlerAgentId = c.agent_id != null ? String(c.agent_id) : undefined;
       const handlerName =
         handlerAgentId != null ? agents.find((a) => a.id === handlerAgentId)?.name : undefined;
+      // Show as "transferred" for the prior handler when they no longer own the thread.
+      // (Do not require transfer_to !== agent_id — after a successful handoff both match the new assignee.)
       const transferredOut =
         aid != null &&
         c.transfer_from_agent_id != null &&
         Number(c.transfer_from_agent_id) === Number(aid) &&
-        c.transfer_to_agent_id != null &&
-        c.transfer_to_agent_id !== c.agent_id;
+        (c.agent_id == null || Number(c.agent_id) !== Number(aid));
       return {
         id: c.id,
         customerName: c.customer_name || `Customer #${c.customer_id}`,
@@ -504,6 +505,13 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         queueMicrotask(() => {
           void refreshConversations();
         });
+        return;
+      }
+      if (msg.type === 'portal_connected') {
+        queueMicrotask(() => {
+          void refreshConversations();
+        });
+        return;
       }
     });
   }, [subscribe, syncInboxReadState, timeZone, refreshConversations]);
@@ -538,6 +546,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       const listUrl = new URL(`${API_BASE}/api/messaging/conversations`);
       listUrl.searchParams.set('tenant_id', String(TENANT_ID));
       listUrl.searchParams.set('agent_id', String(Number(aid)));
+      listUrl.searchParams.set('include_transferred_out_for_agent_id', String(Number(aid)));
 
       try {
         const [rowsRaw, detailData] = await Promise.all([

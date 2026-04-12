@@ -16,6 +16,7 @@ import {
   AGENT_PORTAL_PREFERS_OFFLINE_KEY,
   readAuthAgentId,
 } from '@/lib/agent-session-storage';
+import { sendAgentOfflineKeepalive } from '@/lib/agent-offline-beacon';
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
@@ -185,7 +186,16 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
     };
 
     connect();
+
+    const onPageHide = (ev: PageTransitionEvent) => {
+      if (ev.persisted) return;
+      sendAgentOfflineKeepalive();
+    };
+    window.addEventListener('pagehide', onPageHide);
+
     return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      sendAgentOfflineKeepalive();
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       try {
         wsRef.current?.close();

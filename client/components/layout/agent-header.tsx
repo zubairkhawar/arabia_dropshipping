@@ -86,7 +86,9 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const slug = getSlugByName(fullName);
   const rawStatus: AgentStatus =
     currentAgent?.status === 'online' || currentAgent?.status === 'busy' ? 'active' : 'offline';
-  const agentStatus: AgentStatus = isWithinSchedule() ? rawStatus : 'offline';
+  // Header must reflect backend presence (WS + /routing/agents/:id/status). Do not override with
+  // business-hours schedule — that caused "Offline" in the bar while the agent was actually online.
+  const agentStatus: AgentStatus = rawStatus;
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -319,12 +321,10 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
               <div className="fixed inset-0 z-10" onClick={() => setShowStatusMenu(false)} />
               <div className="absolute right-0 mt-1 w-40 bg-white border border-border rounded-lg shadow-xl z-20 py-1">
                 {(Object.keys(statusConfig) as AgentStatus[]).map((status) => {
-                  const disabled = status === 'active' && !isWithinSchedule();
                   return (
                     <button
                       key={status}
                       onClick={() => {
-                        if (disabled) return;
                         if (status === 'offline' && agentStatus === 'active') {
                           setShowStatusMenu(false);
                           setShowOfflineConfirm(true);
@@ -332,15 +332,12 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                         }
                         applyStatusChange(status);
                       }}
-                      disabled={disabled}
                       title={
-                        disabled
-                          ? `You can only go online during working hours (${schedule.startTime}–${schedule.endTime}, selected days)`
+                        status === 'active' && !isWithinSchedule()
+                          ? `Outside configured working hours (${schedule.startTime}–${schedule.endTime}); you can still go online.`
                           : undefined
                       }
-                      className={`w-full flex items-center gap-2 px-4 py-2 text-left text-sm ${
-                        disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-panel'
-                      }`}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-left text-sm hover:bg-panel"
                     >
                       <span className={`w-2 h-2 rounded-full ${statusConfig[status].dotClass}`} />
                       {statusConfig[status].label}

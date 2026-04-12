@@ -505,6 +505,7 @@ async def transfer_conversation(
         "at": datetime.utcnow().isoformat(),
     }
     conversation.conversation_metadata = meta
+    conversation.updated_at = datetime.utcnow()
     db.add(conversation)
     db.commit()
     from services.agent_portal_service.broadcast import push_unread_summary, push_inbox_sync_event
