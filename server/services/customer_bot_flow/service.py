@@ -145,56 +145,44 @@ def _looks_like_free_text_question(text: str) -> bool:
 def _looks_like_order_status_question(text: str) -> bool:
     """Order / tracking intent while user is still on the new-customer menu."""
     t = (text or "").strip().lower()
-    if len(t) < 5:
+    if len(t) < 6:
         return False
+    # Ignore obvious FAQ/company-info prompts.
     info_markers = (
         "what is",
         "tell me about",
-        "give me information",
-        "information about",
+        "why should i",
+        "how does",
+        "compare",
         "about dropship",
         "dropship arabia",
         "who are you",
         "services",
     )
-    order_markers_strict = (
-        "order",
-        "status",
-        "track",
-        "tracking",
-        "delivery",
-        "shipment",
-        "ship",
-        "dispatch",
-        "parcel",
-        "package",
-        "shipped",
-        "order id",
-    )
-    # FAQ/info queries should never route into order flow unless they clearly include order intent.
-    if any(m in t for m in info_markers) and not any(k in t for k in order_markers_strict):
-        return False
-    phrases = (
-        "order",
-        "status",
-        "track",
-        "tracking",
-        "delivery",
-        "shipment",
-        "ship",
-        "dispatch",
-        "parcel",
+    strict_order_markers = (
+        "my order",
         "mera order",
         "mere order",
+        "order status",
+        "track my order",
+        "track order",
+        "tracking id",
+        "where is my order",
         "order id",
-        "order ka",
-        "order ki",
-        "kab aayega",
-        "kab milega",
-        "shipped",
-        "package",
+        "delivery status",
     )
-    return any(p in t for p in phrases)
+    # If this looks like an FAQ and has no strict order marker, keep it out of order flow.
+    if any(m in t for m in info_markers) and not any(k in t for k in strict_order_markers):
+        return False
+    if any(k in t for k in strict_order_markers):
+        return True
+
+    # Secondary gate: require both order-domain and "asking" intent.
+    has_order_domain = any(k in t for k in ("order", "tracking", "track", "parcel", "package"))
+    is_asking = ("?" in t) or any(k in t for k in ("where", "when", "status", "kab", "kahan"))
+    if has_order_domain and is_asking:
+        return True
+    return False
 
 
 def _is_likely_order_id_only(text: str) -> bool:
@@ -556,6 +544,9 @@ async def process_customer_bot_message(
                     "step": "existing_awaiting_email",
                 }
                 return save(f, _t(flow_lang, MSGS["ask_email"]))
+            if _looks_like_free_text_question(text):
+                f = {**base, "step": "awaiting_customer_type"}
+                return ai_forward("[Customer entry question] " + text, f, skip_api=True)
             return save(base, _t(flow_lang, MSGS["entry"]))
         if choice == "new":
             f = {**flow, "customer_kind": "new", "step": "new_main_menu", "lang": flow_lang}

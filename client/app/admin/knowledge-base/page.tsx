@@ -41,6 +41,62 @@ const API_BASE_URL =
   'https://arabia-dropshipping.onrender.com';
 const DEFAULT_TENANT_ID = 1;
 
+/**
+ * Open KB preview in a new tab. Huge `data:` URLs (e.g. base64 PDFs) exceed browser URL limits
+ * and navigate to about:blank — use a Blob object URL instead.
+ */
+async function openKnowledgePreview(
+  url: string,
+  onError: (message: string) => void,
+): Promise<void> {
+  const trimmed = (url || '').trim();
+  if (!trimmed) {
+    onError('Nothing to preview');
+    return;
+  }
+  try {
+    if (trimmed.startsWith('data:')) {
+      let blob: Blob;
+      try {
+        const res = await fetch(trimmed);
+        if (!res.ok) throw new Error(`fetch ${res.status}`);
+        blob = await res.blob();
+      } catch {
+        const comma = trimmed.indexOf(',');
+        if (comma < 0) throw new Error('invalid data url');
+        const meta = trimmed.slice(0, comma);
+        const data = trimmed.slice(comma + 1);
+        const mimeMatch = /^data:([^;]+)/.exec(meta);
+        const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+        const isBase64 = /;base64$/i.test(meta);
+        if (isBase64) {
+          const binary = atob(data);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          blob = new Blob([bytes], { type: mime });
+        } else {
+          blob = new Blob([decodeURIComponent(data)], { type: mime });
+        }
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      const win = window.open(objectUrl, '_blank', 'noopener,noreferrer');
+      if (!win) {
+        URL.revokeObjectURL(objectUrl);
+        onError('Popup blocked. Allow popups for this site to preview files.');
+        return;
+      }
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120_000);
+      return;
+    }
+    const win = window.open(trimmed, '_blank', 'noopener,noreferrer');
+    if (!win) {
+      onError('Popup blocked. Allow popups for this site to open links.');
+    }
+  } catch {
+    onError('Could not open preview');
+  }
+}
+
 export default function AdminKnowledgeBase() {
   const { toast } = useToast();
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
@@ -524,7 +580,8 @@ export default function AdminKnowledgeBase() {
               type="button"
               disabled={!source.viewUrl}
               onClick={() => {
-                if (source.viewUrl) window.open(source.viewUrl, '_blank', 'noopener,noreferrer');
+                if (!source.viewUrl) return;
+                void openKnowledgePreview(source.viewUrl, (msg) => toast(msg));
                 setOpenMenuId(null);
               }}
               className="w-full text-left px-3 py-2 text-[11px] hover:bg-panel disabled:opacity-40"
