@@ -46,17 +46,9 @@ export default function AdminKnowledgeBase() {
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [fileName, setFileName] = useState('');
   const [url, setUrl] = useState('');
-  const [apiName, setApiName] = useState('');
-  const [apiUrl, setApiUrl] = useState('');
-  const [authType, setAuthType] = useState<'none' | 'api_key' | 'bearer'>('none');
-  const [apiKey, setApiKey] = useState('');
-  const [headers, setHeaders] = useState('');
-  const [refreshInterval, setRefreshInterval] = useState('24');
-  const [schemaNotes, setSchemaNotes] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmittingFile, setIsSubmittingFile] = useState(false);
   const [isSubmittingUrl, setIsSubmittingUrl] = useState(false);
-  const [isSubmittingApi, setIsSubmittingApi] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [reindexingId, setReindexingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -265,62 +257,6 @@ export default function AdminKnowledgeBase() {
     }
   };
 
-  const handleApiAdd = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmedName = apiName.trim();
-    const trimmedUrl = apiUrl.trim();
-    if (!trimmedName || !trimmedUrl) {
-      toast('API name and base URL are required');
-      return;
-    }
-    let parsedHeaders: Record<string, unknown> = {};
-    if (headers.trim()) {
-      try {
-        const parsed = JSON.parse(headers) as unknown;
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          toast('Extra headers must be a JSON object');
-          return;
-        }
-        parsedHeaders = parsed as Record<string, unknown>;
-      } catch {
-        toast('Extra headers JSON is invalid');
-        return;
-      }
-    }
-    const refresh = Number(refreshInterval);
-    if (!Number.isFinite(refresh) || refresh <= 0) {
-      toast('Refresh interval must be greater than 0');
-      return;
-    }
-    setIsSubmittingApi(true);
-    try {
-      await createSource({
-        name: trimmedName,
-        type: 'api',
-        url: trimmedUrl,
-        metadata: {
-          auth_type: authType,
-          api_key: authType === 'none' ? '' : apiKey,
-          refresh_interval_hours: refresh,
-          headers: parsedHeaders,
-          schema_notes: schemaNotes.trim(),
-        },
-      });
-      toast('API source connected');
-      setApiName('');
-      setApiUrl('');
-      setAuthType('none');
-      setApiKey('');
-      setHeaders('');
-      setRefreshInterval('24');
-      setSchemaNotes('');
-    } catch {
-      toast('Failed to connect API source');
-    } finally {
-      setIsSubmittingApi(false);
-    }
-  };
-
   const removeSource = async (id: string) => {
     setDeletingId(id);
     try {
@@ -366,7 +302,7 @@ export default function AdminKnowledgeBase() {
     [],
   );
 
-  const isBusy = isSubmittingApi || isSubmittingFile || isSubmittingUrl;
+  const isBusy = isSubmittingFile || isSubmittingUrl;
 
   const openFilePicker = () => {
     fileInputRef.current?.click();
@@ -383,7 +319,7 @@ export default function AdminKnowledgeBase() {
       <div>
         <h1 className="text-2xl font-bold text-text-primary">Knowledge Base</h1>
         <p className="text-text-secondary mt-1">
-          Connect documents, websites, and APIs so the AI bot can answer with up-to-date, brand-specific knowledge.
+          Connect documents and websites so the AI bot can answer with up-to-date, brand-specific knowledge.
         </p>
       </div>
 
@@ -464,108 +400,6 @@ export default function AdminKnowledgeBase() {
             </div>
           </div>
 
-          <div className="bg-card rounded-lg p-5 border border-border space-y-3">
-            <h3 className="text-sm font-semibold text-text-primary">API knowledge source</h3>
-            <p className="text-xs text-text-secondary">
-              Connect an API that the AI can call for live answers (for example: order status, inventory, delivery slots).
-            </p>
-            <form onSubmit={handleApiAdd} className="space-y-3 text-xs">
-              <div>
-                <label className="block mb-1 font-medium text-text-primary">API name</label>
-                <input
-                  type="text"
-                  value={apiName}
-                  onChange={(e) => setApiName(e.target.value)}
-                  placeholder="Orders API (Shopify)"
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-              <div>
-                <label className="block mb-1 font-medium text-text-primary">Base URL</label>
-                <input
-                  type="url"
-                  value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
-                  placeholder="https://api.yourstore.com/orders"
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block mb-1 font-medium text-text-primary">Auth type</label>
-                  <select
-                    value={authType}
-                    onChange={(e) => setAuthType(e.target.value as typeof authType)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="none">None</option>
-                    <option value="api_key">API key header</option>
-                    <option value="bearer">Bearer token</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block mb-1 font-medium text-text-primary">Refresh interval (hours)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={refreshInterval}
-                    onChange={(e) => setRefreshInterval(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-              </div>
-              {authType !== 'none' && (
-                <div>
-                  <label className="block mb-1 font-medium text-text-primary">
-                    API key / token (stored server-side)
-                  </label>
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="sk_live_..."
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-              )}
-              <div>
-                <label className="block mb-1 font-medium text-text-primary">
-                  Extra headers (JSON)
-                </label>
-                <textarea
-                  value={headers}
-                  onChange={(e) => setHeaders(e.target.value)}
-                  placeholder={`{ "X-Store-Id": "my-store", "Accept": "application/json" }`}
-                  rows={3}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-              <div>
-                <label className="block mb-1 font-medium text-text-primary">
-                  Schema mapping notes
-                </label>
-                <textarea
-                  value={schemaNotes}
-                  onChange={(e) => setSchemaNotes(e.target.value)}
-                  placeholder="Example: field `order_number` maps to user-facing `Order ID`, `eta` maps to delivery estimate."
-                  rows={3}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-                <p className="mt-1 text-[11px] text-text-muted">
-                  These notes help your LangChain / tool configuration know how to turn raw API fields into natural language answers.
-                </p>
-              </div>
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={isBusy}
-                  className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {isSubmittingApi ? 'Connecting API source...' : 'Connect API source'}
-                </button>
-              </div>
-            </form>
-          </div>
         </div>
 
         {/* Data sources table */}
@@ -586,7 +420,7 @@ export default function AdminKnowledgeBase() {
           ) : sources.length === 0 ? (
             <div className="flex-1 flex items-center justify-center py-12">
               <p className="text-sm text-text-secondary">
-                No knowledge sources yet. Upload a file, add a URL, or connect an API on the left.
+                No knowledge sources yet. Upload a file or add a URL on the left.
               </p>
             </div>
           ) : (
