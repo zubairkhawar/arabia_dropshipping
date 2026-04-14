@@ -385,20 +385,17 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "english": (
             "💡 Here's what you need to know:\n\n{body}\n\n"
             "📌 Source: https://www.arabiadropship.com\n\n"
-            "Need more help? Type support\n"
-            "To see the main choices again, type main menu."
+            "Type \"support\" to speak with a human agent."
         ),
         "arabic": (
             "💡 إليك المعلومات:\n\n{body}\n\n"
             "📌 المصدر: https://www.arabiadropship.com\n\n"
-            "لمزيد من المساعدة اكتب support\n"
-            "لعرض الخيارات من جديد اكتب: القائمة الرئيسية"
+            "اكتب \"support\" للتحدث مع موظف."
         ),
         "roman_urdu": (
             "💡 Yeh information aap ke liye:\n\n{body}\n\n"
             "📌 Source: https://www.arabiadropship.com\n\n"
-            "Mazeed madad ke liye support likhein\n"
-            "Menu dubara dekhne ke liye likhein: main menu"
+            "\"support\" likhein human agent se baat karne ke liye."
         ),
     },
     "unknown_info": {
