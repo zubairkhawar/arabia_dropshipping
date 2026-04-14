@@ -4,7 +4,7 @@ import hashlib
 from io import BytesIO
 import logging
 import re
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Any, List, Optional, Dict, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, status, HTTPException
@@ -94,7 +94,7 @@ def _normalize_plain_extraction(raw: str) -> str:
     Normalize PDF/plain text without collapsing newlines into spaces.
     _clean_text destroys line breaks and makes PDFs one blob with no clause boundaries.
     """
-    t = (raw or "").replace("\r\n", "\n")
+    t = (raw or "").replace("\r\n", "\n").replace("\r", "\n")
     t = re.sub(r"[ \t\f\v]+", " ", t)
     t = re.sub(r"\n{3,}", "\n\n", t)
     return t.strip()
@@ -206,6 +206,133 @@ def _chunk_text(
             row["page"] = page
         out.append(row)
     return out
+
+
+def _extract_pdf_page_text(page: Any, page_idx: int, src_name: str) -> str:
+    """Best-effort page text; try default extract then layout mode when pypdf supports it."""
+    chunks: List[str] = []
+    try:
+        chunks.append(page.extract_text() or "")
+    except Exception as e:
+        logger.warning("KB PDF %s p%d extract_text failed: %s", src_name, page_idx, e)
+    try:
+        chunks.append(page.extract_text(extraction_mode="layout") or "")
+    except TypeError:
+        pass
+    except Exception as e:
+        logger.debug("KB PDF %s p%d layout extract: %s", src_name, page_idx, e)
+    for raw in chunks:
+        s = (raw or "").strip()
+        if s:
+            return s
+    return ""
+
+
+def _ingest_pdf_blob(
+    blob: bytes,
+    src: KnowledgeSource,
+    md: Dict[str, Any],
+) -> Tuple[Optional[Tuple[str, int, Dict[str, Any]]], str]:
+    """
+    Build chunk objects from PDF bytes.
+    Returns ((status, chunk_count, md), "") when ingestion finishes successfully.
+    Returns (None, continuation_text) when the generic `text` path should run
+    (e.g. joined text after failed per-page chunking), or (None, "") after error.
+    """
+    try:
+        from pypdf import PdfReader  # type: ignore
+
+        reader = PdfReader(BytesIO(blob))
+        pages: List[str] = []
+        for i, page in enumerate(reader.pages):
+            pt = _extract_pdf_page_text(page, i + 1, src.name)
+            if not pt:
+                logger.warning("KB PDF page %s p%d: extracted no text", src.name, i + 1)
+            pages.append(pt)
+        raw_chars = sum(len(p) for p in pages)
+        logger.info(
+            "KB PDF extract %s: %d pages, %d raw chars from pypdf",
+            src.name,
+            len(pages),
+            raw_chars,
+        )
+        page_chunks: List[Dict[str, Any]] = []
+        chunk_idx = 0
+        for page_idx, page_text in enumerate(pages, start=1):
+            if not page_text:
+                continue
+            normalized_page = _normalize_plain_extraction(page_text)
+            if not normalized_page:
+                continue
+            c = _chunk_text(
+                normalized_page,
+                source_name=src.name,
+                page=page_idx,
+                start_index=chunk_idx,
+            )
+            logger.debug(
+                "KB PDF page %s p%d: %d in chars → %d chunks",
+                src.name,
+                page_idx,
+                len(normalized_page),
+                len(c),
+            )
+            page_chunks.extend(c)
+            chunk_idx += len(c)
+        joined_preview = "\n\n".join(_normalize_plain_extraction(p) for p in pages if p).strip()
+        logger.info(
+            "KB PDF %s after normalize: joined len=%d; page_chunks=%d",
+            src.name,
+            len(joined_preview),
+            len(page_chunks),
+        )
+        if page_chunks:
+            preview0 = (page_chunks[0].get("text") or "")[:500]
+            logger.info(
+                "PDF extracted %d raw chars, created %d chunks; first chunk len=%d",
+                raw_chars,
+                len(page_chunks),
+                len(page_chunks[0].get("text") or ""),
+            )
+            logger.info("KB PDF first chunk preview (500): %r", preview0)
+            md["chunks"] = page_chunks
+            md["chunk_schema"] = "v2_object"
+            md["parse_method"] = "pdf_pypdf_page_text"
+            md["content_preview"] = preview0
+            joined = "\n".join([str(x.get("text") or "") for x in page_chunks])
+            md["content_hash"] = hashlib.sha256(joined.encode("utf-8", errors="ignore")).hexdigest()
+            return ("ready", len(page_chunks), md), ""
+        if joined_preview:
+            joined_chunks = _chunk_text(joined_preview, source_name=src.name)
+            if joined_chunks:
+                logger.info(
+                    "KB PDF ingest %s (joined fallback): %d chunks",
+                    src.name,
+                    len(joined_chunks),
+                )
+                logger.info(
+                    "PDF extracted %d raw chars, created %d chunks (joined)",
+                    raw_chars,
+                    len(joined_chunks),
+                )
+                md["chunks"] = joined_chunks
+                md["chunk_schema"] = "v2_object"
+                md["parse_method"] = "pdf_pypdf_joined_text"
+                md["content_preview"] = (joined_chunks[0].get("text") or "")[:500]
+                jh = "\n".join(str(x.get("text") or "") for x in joined_chunks)
+                md["content_hash"] = hashlib.sha256(jh.encode("utf-8", errors="ignore")).hexdigest()
+                return ("ready", len(joined_chunks), md), ""
+            logger.warning(
+                "KB PDF joined chunking produced 0 chunks for %s (%d chars)",
+                src.name,
+                len(joined_preview),
+            )
+            return None, joined_preview
+        return None, ""
+    except Exception as e:
+        logger.error("PDF extraction failed for %s: %s", src.name, e)
+        md["last_error"] = f"pdf_extract_failed:{e!s}"[:220]
+        return None, ""
 
 
 async def _fetch_url_text(
@@ -367,97 +494,23 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
         if b64:
             try:
                 blob = base64.b64decode(b64)
+                filename = str(md.get("filename") or src.name or "").lower()
+                # Browsers often send application/octet-stream for PDFs; trust extension too.
+                is_pdf = (
+                    mime == "application/pdf"
+                    or mime == "application/x-pdf"
+                    or filename.endswith(".pdf")
+                )
                 if mime.startswith("text/") or mime in {
                     "application/json",
                     "application/csv",
                     "text/csv",
                 }:
                     text = blob.decode("utf-8", errors="ignore")
-                elif mime == "application/pdf":
-                    try:
-                        from pypdf import PdfReader  # type: ignore
-
-                        reader = PdfReader(BytesIO(blob))
-                        pages: List[str] = []
-                        for page in reader.pages:
-                            pages.append((page.extract_text() or "").strip())
-                        raw_chars = sum(len(p) for p in pages)
-                        logger.info(
-                            "KB PDF extract %s: %d pages, %d raw chars from pypdf",
-                            src.name,
-                            len(pages),
-                            raw_chars,
-                        )
-                        page_chunks: List[Dict[str, Any]] = []
-                        chunk_idx = 0
-                        for page_idx, page_text in enumerate(pages, start=1):
-                            if not page_text:
-                                continue
-                            normalized_page = _normalize_plain_extraction(page_text)
-                            if not normalized_page:
-                                continue
-                            c = _chunk_text(
-                                normalized_page,
-                                source_name=src.name,
-                                page=page_idx,
-                                start_index=chunk_idx,
-                            )
-                            logger.debug(
-                                "KB PDF page %s p%d: %d in chars → %d chunks",
-                                src.name,
-                                page_idx,
-                                len(normalized_page),
-                                len(c),
-                            )
-                            page_chunks.extend(c)
-                            chunk_idx += len(c)
-                        if page_chunks:
-                            logger.info(
-                                "KB PDF ingest %s: %d chunks (chunk_size≈900)",
-                                src.name,
-                                len(page_chunks),
-                            )
-                            md["chunks"] = page_chunks
-                            md["chunk_schema"] = "v2_object"
-                            md["parse_method"] = "pdf_pypdf_page_text"
-                            md["content_preview"] = page_chunks[0].get("text", "")[:500]
-                            joined = "\n".join([str(x.get("text") or "") for x in page_chunks])
-                            md["content_hash"] = hashlib.sha256(
-                                joined.encode("utf-8", errors="ignore")
-                            ).hexdigest()
-                            return "ready", len(page_chunks), md
-                        joined = "\n\n".join(
-                            _normalize_plain_extraction(p) for p in pages if p
-                        ).strip()
-                        if joined:
-                            joined_chunks = _chunk_text(joined, source_name=src.name)
-                            if joined_chunks:
-                                logger.info(
-                                    "KB PDF ingest %s (joined fallback): %d chunks",
-                                    src.name,
-                                    len(joined_chunks),
-                                )
-                                md["chunks"] = joined_chunks
-                                md["chunk_schema"] = "v2_object"
-                                md["parse_method"] = "pdf_pypdf_joined_text"
-                                md["content_preview"] = joined_chunks[0].get("text", "")[:500]
-                                jh = "\n".join(str(x.get("text") or "") for x in joined_chunks)
-                                md["content_hash"] = hashlib.sha256(
-                                    jh.encode("utf-8", errors="ignore")
-                                ).hexdigest()
-                                return "ready", len(joined_chunks), md
-                            logger.warning(
-                                "KB PDF joined chunking produced 0 chunks for %s (%d chars)",
-                                src.name,
-                                len(joined),
-                            )
-                            text = joined
-                        else:
-                            text = ""
-                    except Exception as e:
-                        logger.error("PDF extraction failed for %s: %s", src.name, e)
-                        md["last_error"] = f"pdf_extract_failed:{e!s}"[:220]
-                        text = ""
+                elif is_pdf:
+                    pdf_done, text = _ingest_pdf_blob(blob, src, md)
+                    if pdf_done is not None:
+                        return pdf_done
                 elif mime in {
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 }:

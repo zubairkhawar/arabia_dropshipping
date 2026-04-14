@@ -25,3 +25,4 @@ python-docx
 pandas
 openpyxl
 xlrd
+pypdf>=4.0.0

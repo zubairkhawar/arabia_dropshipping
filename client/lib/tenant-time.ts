@@ -22,6 +22,25 @@ export function parseBackendUtcDate(iso: string | null | undefined): Date | null
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** Admin knowledge-base "Last updated" column: dd/mm/yyyy, 24h clock in tenant zone. */
+export function formatKnowledgeSourceUpdatedInZone(
+  iso: string | null | undefined,
+  timeZone: string,
+): string {
+  const d = parseBackendUtcDate(iso);
+  if (!d) return '-';
+  return d.toLocaleString('en-GB', {
+    timeZone,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
 export function normalizeIanaTimeZone(tz: string | null | undefined): string {
   const raw = (tz ?? DEFAULT_TENANT_TIMEZONE).trim() || DEFAULT_TENANT_TIMEZONE;
   try {

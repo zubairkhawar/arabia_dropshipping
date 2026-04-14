@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '@/contexts/ToastContext';
+import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
+import { formatKnowledgeSourceUpdatedInZone } from '@/lib/tenant-time';
 
 type SourceType = 'file' | 'url' | 'api';
 
@@ -99,6 +101,7 @@ async function openKnowledgePreview(
 
 export default function AdminKnowledgeBase() {
   const { toast } = useToast();
+  const { timeZone } = useTenantTimezone();
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [fileName, setFileName] = useState('');
   const [url, setUrl] = useState('');
@@ -160,7 +163,7 @@ export default function AdminKnowledgeBase() {
       type: s.type,
       status: s.status === 'ready' ? 'ready' : s.status === 'error' ? 'error' : 'indexing',
       chunks: s.chunk_count,
-      lastUpdated: updated ? new Date(updated).toLocaleString() : '-',
+      lastUpdated: formatKnowledgeSourceUpdatedInZone(updated, timeZone),
       lastError: typeof s.metadata?.last_error === 'string' ? s.metadata.last_error : undefined,
       url: s.url,
       authType: typeof s.metadata?.auth_type === 'string' ? s.metadata.auth_type : undefined,
@@ -176,7 +179,7 @@ export default function AdminKnowledgeBase() {
         typeof s.metadata?.schema_notes === 'string' ? s.metadata.schema_notes : undefined,
       viewUrl,
     };
-  }, []);
+  }, [timeZone]);
 
   const fetchSources = useCallback(async () => {
     try {
