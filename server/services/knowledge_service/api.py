@@ -89,10 +89,57 @@ def _clean_text(raw: str) -> str:
     return txt
 
 
+def _normalize_plain_extraction(raw: str) -> str:
+    """
+    Normalize PDF/plain text without collapsing newlines into spaces.
+    _clean_text destroys line breaks and makes PDFs one blob with no clause boundaries.
+    """
+    t = (raw or "").replace("\r\n", "\n")
+    t = re.sub(r"[ \t\f\v]+", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+def _hard_chunk_slices(s: str, size: int, overlap: int) -> List[str]:
+    """Fixed-size windows with overlap (used when merge tail still exceeds size)."""
+    if not s:
+        return []
+    ov = max(0, min(overlap, size // 2))
+    out: List[str] = []
+    start = 0
+    L = len(s)
+    while start < L:
+        end = min(L, start + size)
+        piece = s[start:end].strip()
+        if piece:
+            out.append(piece)
+        if end >= L:
+            break
+        nxt = max(start + 1, end - ov)
+        if nxt <= start:
+            nxt = end
+        start = nxt
+    return out
+
+
 def _split_sentences(text: str) -> List[str]:
-    # Keep punctuation-boundary chunks where possible.
-    parts = re.split(r"(?<=[.!?])\s+", text)
-    return [p.strip() for p in parts if p and p.strip()]
+    """
+    Split into units for chunking. PDFs often lack '. ' boundaries; keep line breaks.
+    """
+    raw = (text or "").replace("\r\n", "\n").strip()
+    if not raw:
+        return []
+    pieces: List[str] = []
+    for block in re.split(r"\n{2,}", raw):
+        block = block.strip()
+        if not block:
+            continue
+        parts = re.split(r"(?<=[.!?。！？])\s+|\n+", block)
+        for p in parts:
+            p = p.strip()
+            if p:
+                pieces.append(p)
+    return pieces if pieces else ([raw] if raw else [])
 
 
 def _chunk_text(
@@ -127,20 +174,20 @@ def _chunk_text(
             continue
         if current:
             windows.append(current)
-            # overlap by trailing chars from previous chunk
-            current = (current[-ov:] + " " + unit).strip() if ov > 0 else unit
+            merged = (current[-ov:] + " " + unit).strip() if ov > 0 else unit
+            if len(merged) > size:
+                windows.extend(_hard_chunk_slices(merged, size, ov))
+                current = ""
+            else:
+                current = merged
         else:
-            # very long sentence fallback: hard split
-            start = 0
-            while start < len(unit):
-                end = min(len(unit), start + size)
-                windows.append(unit[start:end].strip())
-                if end >= len(unit):
-                    break
-                start = max(start + 1, end - ov)
+            windows.extend(_hard_chunk_slices(unit, size, ov))
             current = ""
     if current:
-        windows.append(current)
+        if len(current) > size:
+            windows.extend(_hard_chunk_slices(current, size, ov))
+        else:
+            windows.append(current)
 
     out: List[Dict[str, Any]] = []
     cursor = 0
@@ -334,20 +381,42 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                         pages: List[str] = []
                         for page in reader.pages:
                             pages.append((page.extract_text() or "").strip())
+                        raw_chars = sum(len(p) for p in pages)
+                        logger.info(
+                            "KB PDF extract %s: %d pages, %d raw chars from pypdf",
+                            src.name,
+                            len(pages),
+                            raw_chars,
+                        )
                         page_chunks: List[Dict[str, Any]] = []
                         chunk_idx = 0
                         for page_idx, page_text in enumerate(pages, start=1):
                             if not page_text:
                                 continue
+                            normalized_page = _normalize_plain_extraction(page_text)
+                            if not normalized_page:
+                                continue
                             c = _chunk_text(
-                                _clean_text(page_text),
+                                normalized_page,
                                 source_name=src.name,
                                 page=page_idx,
                                 start_index=chunk_idx,
                             )
+                            logger.debug(
+                                "KB PDF page %s p%d: %d in chars → %d chunks",
+                                src.name,
+                                page_idx,
+                                len(normalized_page),
+                                len(c),
+                            )
                             page_chunks.extend(c)
                             chunk_idx += len(c)
                         if page_chunks:
+                            logger.info(
+                                "KB PDF ingest %s: %d chunks (chunk_size≈900)",
+                                src.name,
+                                len(page_chunks),
+                            )
                             md["chunks"] = page_chunks
                             md["chunk_schema"] = "v2_object"
                             md["parse_method"] = "pdf_pypdf_page_text"
@@ -357,7 +426,34 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                                 joined.encode("utf-8", errors="ignore")
                             ).hexdigest()
                             return "ready", len(page_chunks), md
-                        text = "\n".join(p for p in pages if p).strip()
+                        joined = "\n\n".join(
+                            _normalize_plain_extraction(p) for p in pages if p
+                        ).strip()
+                        if joined:
+                            joined_chunks = _chunk_text(joined, source_name=src.name)
+                            if joined_chunks:
+                                logger.info(
+                                    "KB PDF ingest %s (joined fallback): %d chunks",
+                                    src.name,
+                                    len(joined_chunks),
+                                )
+                                md["chunks"] = joined_chunks
+                                md["chunk_schema"] = "v2_object"
+                                md["parse_method"] = "pdf_pypdf_joined_text"
+                                md["content_preview"] = joined_chunks[0].get("text", "")[:500]
+                                jh = "\n".join(str(x.get("text") or "") for x in joined_chunks)
+                                md["content_hash"] = hashlib.sha256(
+                                    jh.encode("utf-8", errors="ignore")
+                                ).hexdigest()
+                                return "ready", len(joined_chunks), md
+                            logger.warning(
+                                "KB PDF joined chunking produced 0 chunks for %s (%d chars)",
+                                src.name,
+                                len(joined),
+                            )
+                            text = joined
+                        else:
+                            text = ""
                     except Exception as e:
                         logger.error("PDF extraction failed for %s: %s", src.name, e)
                         md["last_error"] = f"pdf_extract_failed:{e!s}"[:220]
@@ -390,13 +486,27 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                 text = ""
 
     if text:
-        cleaned = _clean_text(text)
+        mime_lower = str(md.get("mime_type") or "").lower().strip()
+        fname = str(md.get("filename") or src.name or "").lower()
+        if mime_lower == "application/pdf" or fname.endswith(".pdf"):
+            cleaned = _normalize_plain_extraction(text)
+            parse_method = "file_pdf_plain_normalize"
+        else:
+            cleaned = _clean_text(text)
+            parse_method = "file_text_clean"
         chunks = _chunk_text(cleaned, source_name=src.name)
         md["chunks"] = chunks
         md["chunk_schema"] = "v2_object"
         md["content_preview"] = cleaned[:500]
         md["content_hash"] = hashlib.sha256(cleaned.encode("utf-8", errors="ignore")).hexdigest()
-        md["parse_method"] = "file_text_clean"
+        md["parse_method"] = parse_method
+        logger.info(
+            "KB file ingest %s: %d chars → %d chunks (%s)",
+            src.name,
+            len(cleaned),
+            len(chunks),
+            parse_method,
+        )
         return "ready", len(chunks), md
 
     filename = str(md.get("filename") or src.name or "file").strip()
