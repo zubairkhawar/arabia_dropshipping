@@ -747,6 +747,10 @@ async def process_customer_bot_message(
                 team=TEAM_NEW_CUSTOMER,
                 esc=True,
             )
+        # FAQ/info questions should be answered directly from KB in new customer flow.
+        if _looks_like_free_text_question(text):
+            f = {**flow, "step": "new_main_menu", "lang": flow_lang}
+            return ai_forward(text, f, skip_api=True)
         if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
             f = _state_back_to_customer_pick(flow)
             return save(

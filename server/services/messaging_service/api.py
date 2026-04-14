@@ -56,6 +56,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _already_processed_wa_message(db: Session, wa_message_id: str) -> bool:
+    """
+    Best-effort webhook idempotency: ignore duplicate inbound WhatsApp message ids.
+    """
+    mid = (wa_message_id or "").strip()
+    if not mid:
+        return False
+    try:
+        row = (
+            db.query(Message.id)
+            .filter(Message.message_metadata["wa_message_id"].astext == mid)
+            .first()
+        )
+        if row:
+            return True
+    except Exception:
+        # Fallback when JSON path operator is unavailable for the current DB backend.
+        pass
+    try:
+        recent = db.query(Message).order_by(desc(Message.id)).limit(400).all()
+        for m in recent:
+            meta = m.message_metadata if isinstance(m.message_metadata, dict) else {}
+            if str(meta.get("wa_message_id") or "").strip() == mid:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 class ConversationSummary(BaseModel):
     id: int
     tenant_id: int
@@ -1627,6 +1656,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         store_id=store.id,
         customer_id=customer.id,
     )
+
+    if wa_message_id and _already_processed_wa_message(db, wa_message_id):
+        return {
+            "status": "ignored",
+            "conversation_id": conversation.id,
+            "reason": "duplicate_wa_message_id",
+        }
 
     orchestrator = AIOrchestrator()
     bot = ArabiaLangChainBot(db=db)
