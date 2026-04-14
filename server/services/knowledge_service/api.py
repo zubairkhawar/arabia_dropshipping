@@ -17,6 +17,7 @@ from models import KnowledgeSource
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+MAX_EXCEL_ROWS_PER_SHEET = 5000
 
 
 class KnowledgeSourceIn(BaseModel):
@@ -208,6 +209,63 @@ def _build_api_source_text(src: KnowledgeSource) -> str:
     return "\n".join(lines)
 
 
+def _extract_docx_text(blob: bytes, source_name: str) -> str:
+    try:
+        import docx  # type: ignore
+
+        doc = docx.Document(BytesIO(blob))
+        parts: List[str] = []
+        for para in doc.paragraphs:
+            txt = (para.text or "").strip()
+            if txt:
+                parts.append(txt)
+        for table in doc.tables:
+            for row in table.rows:
+                row_vals: List[str] = []
+                for cell in row.cells:
+                    val = (cell.text or "").strip()
+                    if val:
+                        row_vals.append(val)
+                if row_vals:
+                    parts.append(" | ".join(row_vals))
+        return "\n\n".join(parts).strip()
+    except Exception as exc:
+        logger.error("DOCX extraction failed for %s: %s", source_name, exc)
+        return ""
+
+
+def _extract_excel_text(blob: bytes, source_name: str) -> str:
+    try:
+        import pandas as pd  # type: ignore
+
+        book = pd.ExcelFile(BytesIO(blob))
+        out: List[str] = []
+        for sheet in book.sheet_names:
+            try:
+                df = pd.read_excel(book, sheet_name=sheet)
+            except Exception as exc:
+                logger.warning("Excel sheet parse failed for %s (%s): %s", source_name, sheet, exc)
+                continue
+            if df is None or df.empty:
+                continue
+            out.append(f"Sheet: {sheet}")
+            # Keep bounded for very large files
+            if len(df) > MAX_EXCEL_ROWS_PER_SHEET:
+                df = df.head(MAX_EXCEL_ROWS_PER_SHEET)
+            for _, row in df.iterrows():
+                row_parts: List[str] = []
+                for col, val in row.items():
+                    if pd.notna(val):
+                        row_parts.append(f"{col}: {val}")
+                if row_parts:
+                    out.append(" | ".join(row_parts))
+            out.append("")
+        return "\n".join(out).strip()
+    except Exception as exc:
+        logger.error("Excel extraction failed for %s: %s", source_name, exc)
+        return ""
+
+
 async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[str, Any]]:
     """
     Returns: status, chunk_count, metadata_patch
@@ -304,6 +362,30 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                         logger.error("PDF extraction failed for %s: %s", src.name, e)
                         md["last_error"] = f"pdf_extract_failed:{e!s}"[:220]
                         text = ""
+                elif mime in {
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                }:
+                    text = _extract_docx_text(blob, src.name)
+                    if not text:
+                        md["last_error"] = "docx_extract_failed"
+                elif mime in {
+                    "application/vnd.ms-excel",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                }:
+                    text = _extract_excel_text(blob, src.name)
+                    if not text:
+                        md["last_error"] = "excel_extract_failed"
+                else:
+                    # Fallback by extension when browsers provide unknown MIME.
+                    filename = str(md.get("filename") or src.name or "").lower()
+                    if filename.endswith(".docx"):
+                        text = _extract_docx_text(blob, src.name)
+                        if not text:
+                            md["last_error"] = "docx_extract_failed"
+                    elif filename.endswith(".xlsx") or filename.endswith(".xls"):
+                        text = _extract_excel_text(blob, src.name)
+                        if not text:
+                            md["last_error"] = "excel_extract_failed"
             except Exception:
                 text = ""
 
