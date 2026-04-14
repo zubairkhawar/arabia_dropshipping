@@ -101,7 +101,8 @@ class ArabiaLangChainBot:
                     score = self._score_chunk_overlap(tokens, chunk_text)
                     if score < max(min_score, 0) and tokens:
                         continue
-                    scored_chunks.append((score, f"[{src.name}] {chunk_text[:700]}"))
+                    cite = self._chunk_citation(chunk)
+                    scored_chunks.append((score, f"[{src.name}{cite}] {chunk_text[:700]}"))
             if src.type == "api":
                 base_url = src.url or metadata.get("base_url") or "N/A"
                 schema_notes = metadata.get("schema_notes") or ""
@@ -164,6 +165,18 @@ class ArabiaLangChainBot:
                 return txt
         return ""
 
+    def _chunk_citation(self, chunk: Any) -> str:
+        if not isinstance(chunk, dict):
+            return ""
+        page = chunk.get("page")
+        idx = chunk.get("index")
+        parts: List[str] = []
+        if isinstance(page, int):
+            parts.append(f"p{page}")
+        if isinstance(idx, int):
+            parts.append(f"c{idx}")
+        return f" ({', '.join(parts)})" if parts else ""
+
     def _build_knowledge_context_embeddings(
         self,
         tenant_id: int,
@@ -181,6 +194,7 @@ class ArabiaLangChainBot:
             user_message=user_message,
             max_items=max_items,
             max_chunks=max_chunks,
+            min_score=max(0, int(getattr(settings, "kb_min_score", 1) or 0)),
         )
 
     def _conversation_history_block(
@@ -262,10 +276,18 @@ class ArabiaLangChainBot:
         )
         schedule_context = self._build_schedule_context(tenant_id)
         broadcast_context = self._build_active_broadcast_context(tenant_id)
-        knowledge_context = self._build_knowledge_context(
-            tenant_id,
-            user_message=user_message,
-        )
+        min_score = max(0, int(getattr(settings, "kb_min_score", 1) or 0))
+        if bool(getattr(settings, "kb_use_embeddings", False)):
+            knowledge_context = self._build_knowledge_context_embeddings(
+                tenant_id,
+                user_message=user_message,
+            )
+        else:
+            knowledge_context = self._build_knowledge_context(
+                tenant_id,
+                user_message=user_message,
+                min_score=min_score,
+            )
 
         messages = self.prompt.format_messages(
             current_time=now_utc_iso(),

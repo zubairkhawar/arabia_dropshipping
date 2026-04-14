@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
     openai_temperature: float = 0.2
+    kb_min_score: int = 1
+    kb_use_embeddings: bool = False
     
     # WhatsApp
     wati_api_key: Optional[str] = None

@@ -1,5 +1,6 @@
 from datetime import datetime
 import base64
+import hashlib
 from io import BytesIO
 import logging
 import re
@@ -57,6 +58,27 @@ def _to_knowledge_source_out(row: KnowledgeSource) -> KnowledgeSourceOut:
     )
 
 
+def _needs_refresh(row: KnowledgeSource) -> bool:
+    if row.type not in {"url", "api"}:
+        return False
+    md = row.knowledge_metadata or {}
+    hours_raw = md.get("refresh_interval_hours")
+    try:
+        hours = int(hours_raw) if hours_raw is not None else 24
+    except Exception:
+        hours = 24
+    if hours <= 0:
+        return False
+    last = str(md.get("last_fetched_at") or "").strip()
+    if not last:
+        return True
+    try:
+        dt = datetime.fromisoformat(last)
+    except Exception:
+        return True
+    return (datetime.utcnow() - dt).total_seconds() >= hours * 3600
+
+
 def _clean_text(raw: str) -> str:
     # Best-effort HTML/text cleanup without external parser deps.
     txt = re.sub(r"(?is)<script.*?>.*?</script>", " ", raw)
@@ -78,6 +100,8 @@ def _chunk_text(
     overlap: int = 150,
     *,
     source_name: str = "unknown",
+    page: Optional[int] = None,
+    start_index: int = 0,
 ) -> List[Dict[str, Any]]:
     if not text:
         return []
@@ -119,29 +143,46 @@ def _chunk_text(
 
     out: List[Dict[str, Any]] = []
     cursor = 0
-    for idx, chunk_text in enumerate([w for w in windows if w]):
+    for idx, chunk_text in enumerate([w for w in windows if w], start=start_index):
         start_pos = max(0, normalized.find(chunk_text[:40], cursor))
         end_pos = start_pos + len(chunk_text)
         cursor = max(cursor, end_pos - ov)
-        out.append(
-            {
-                "text": chunk_text,
-                "index": idx,
-                "source": source_name,
-                "start_char": start_pos,
-                "end_char": end_pos,
-            }
-        )
+        row: Dict[str, Any] = {
+            "text": chunk_text,
+            "index": idx,
+            "source": source_name,
+            "start_char": start_pos,
+            "end_char": end_pos,
+        }
+        if page is not None:
+            row["page"] = page
+        out.append(row)
     return out
 
 
-async def _fetch_url_text(url: str) -> str:
+async def _fetch_url_text(
+    url: str,
+    *,
+    etag: Optional[str] = None,
+    last_modified: Optional[str] = None,
+) -> Tuple[str, Dict[str, str], bool]:
+    req_headers: Dict[str, str] = {}
+    if etag:
+        req_headers["If-None-Match"] = etag
+    if last_modified:
+        req_headers["If-Modified-Since"] = last_modified
     async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-        resp = await client.get(url)
+        resp = await client.get(url, headers=req_headers or None)
+        if resp.status_code == 304:
+            return "", {}, True
         resp.raise_for_status()
         content_type = (resp.headers.get("content-type") or "").lower()
         raw = resp.text if "text" in content_type or "html" in content_type else resp.text
-    return _clean_text(raw)
+        fetch_headers = {
+            "etag": resp.headers.get("etag") or "",
+            "last_modified": resp.headers.get("last-modified") or "",
+        }
+    return _clean_text(raw), fetch_headers, False
 
 
 def _build_api_source_text(src: KnowledgeSource) -> str:
@@ -173,12 +214,21 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
     """
     md = dict(src.knowledge_metadata or {})
     md.pop("last_error", None)
+    md["last_fetched_at"] = datetime.utcnow().isoformat()
 
     if src.type == "url":
         if not src.url:
             md["last_error"] = "URL source missing url"
             return "error", 0, md
-        text = await _fetch_url_text(src.url)
+        text, fetch_headers, not_modified = await _fetch_url_text(
+            src.url,
+            etag=str(md.get("etag") or "").strip() or None,
+            last_modified=str(md.get("last_modified") or "").strip() or None,
+        )
+        if not_modified:
+            existing_chunks = md.get("chunks")
+            if isinstance(existing_chunks, list) and existing_chunks:
+                return "ready", len(existing_chunks), md
         if not text:
             md["last_error"] = "No readable content fetched from URL"
             return "error", 0, md
@@ -186,6 +236,12 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
         md["chunks"] = chunks
         md["chunk_schema"] = "v2_object"
         md["content_preview"] = text[:500]
+        md["content_hash"] = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+        if fetch_headers.get("etag"):
+            md["etag"] = fetch_headers["etag"]
+        if fetch_headers.get("last_modified"):
+            md["last_modified"] = fetch_headers["last_modified"]
+        md["parse_method"] = "url_html_clean"
         return "ready", len(chunks), md
 
     if src.type == "api":
@@ -194,13 +250,11 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
         md["chunks"] = chunks
         md["chunk_schema"] = "v2_object"
         md["content_preview"] = text[:500]
+        md["content_hash"] = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+        md["parse_method"] = "api_metadata"
         return "ready", len(chunks), md
 
     # file source ingestion
-    existing_chunks = md.get("chunks")
-    if isinstance(existing_chunks, list) and existing_chunks:
-        return "ready", len(existing_chunks), md
-
     text = str(md.get("file_text") or "").strip()
     if not text:
         b64 = str(md.get("file_data_base64") or "").strip()
@@ -222,9 +276,33 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                         pages: List[str] = []
                         for page in reader.pages:
                             pages.append((page.extract_text() or "").strip())
+                        page_chunks: List[Dict[str, Any]] = []
+                        chunk_idx = 0
+                        for page_idx, page_text in enumerate(pages, start=1):
+                            if not page_text:
+                                continue
+                            c = _chunk_text(
+                                _clean_text(page_text),
+                                source_name=src.name,
+                                page=page_idx,
+                                start_index=chunk_idx,
+                            )
+                            page_chunks.extend(c)
+                            chunk_idx += len(c)
+                        if page_chunks:
+                            md["chunks"] = page_chunks
+                            md["chunk_schema"] = "v2_object"
+                            md["parse_method"] = "pdf_pypdf_page_text"
+                            md["content_preview"] = page_chunks[0].get("text", "")[:500]
+                            joined = "\n".join([str(x.get("text") or "") for x in page_chunks])
+                            md["content_hash"] = hashlib.sha256(
+                                joined.encode("utf-8", errors="ignore")
+                            ).hexdigest()
+                            return "ready", len(page_chunks), md
                         text = "\n".join(p for p in pages if p).strip()
                     except Exception as e:
                         logger.error("PDF extraction failed for %s: %s", src.name, e)
+                        md["last_error"] = f"pdf_extract_failed:{e!s}"[:220]
                         text = ""
             except Exception:
                 text = ""
@@ -235,6 +313,8 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
         md["chunks"] = chunks
         md["chunk_schema"] = "v2_object"
         md["content_preview"] = cleaned[:500]
+        md["content_hash"] = hashlib.sha256(cleaned.encode("utf-8", errors="ignore")).hexdigest()
+        md["parse_method"] = "file_text_clean"
         return "ready", len(chunks), md
 
     filename = str(md.get("filename") or src.name or "file").strip()
@@ -249,6 +329,7 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
     ]
     md["chunk_schema"] = "v2_object"
     md["content_preview"] = f"File source connected: {filename}"
+    md["parse_method"] = "file_placeholder"
     return "ready", 1, md
 
 
@@ -324,6 +405,38 @@ async def reindex_source(source_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(src)
     return _to_knowledge_source_out(src)
+
+
+@router.post("/sources/reindex-stale", response_model=List[KnowledgeSourceOut])
+async def reindex_stale_sources(tenant_id: int, db: Session = Depends(get_db)):
+    """
+    Reindex URL/API sources whose refresh interval has elapsed.
+    """
+    rows = (
+        db.query(KnowledgeSource)
+        .filter(KnowledgeSource.tenant_id == tenant_id)
+        .order_by(KnowledgeSource.updated_at.asc())
+        .all()
+    )
+    updated: List[KnowledgeSourceOut] = []
+    for src in rows:
+        if not _needs_refresh(src):
+            continue
+        src.status = "indexing"
+        src.updated_at = datetime.utcnow()
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+        status_value, chunk_count, md_patch = await _ingest_source_content(src)
+        src.status = status_value
+        src.chunk_count = chunk_count
+        src.knowledge_metadata = md_patch
+        src.updated_at = datetime.utcnow()
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+        updated.append(_to_knowledge_source_out(src))
+    return updated
 
 
 @router.delete("/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)

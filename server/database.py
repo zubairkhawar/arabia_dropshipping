@@ -17,6 +17,18 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+def ensure_pgvector_extension() -> None:
+    """
+    Best-effort pgvector enablement for future semantic KB retrieval.
+    Safe no-op on non-PostgreSQL or hosts without extension privileges.
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    except Exception:
+        pass
+
+
 def ensure_broadcast_delivery_columns() -> None:
     """
     Add broadcast delivery columns on existing PostgreSQL DBs (no Alembic in this repo).
