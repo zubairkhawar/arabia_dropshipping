@@ -129,9 +129,11 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
         detected_language = bf_lang
 
     if not flow.handled:
+        flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
         customer_context = await orchestrator.fetch_customer_context(
             phone=message.phone,
             message_text=message.message,
+            bot_flow=flow_state,
         )
         recent_orders = customer_context.get("recent_orders") or []
         customer = customer_context.get("customer") or {}
@@ -143,7 +145,7 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             customer_context=customer,
             recent_orders=recent_orders,
             fetch_context=customer_context,
-            bot_flow=flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None,
+            bot_flow=flow_state,
             conversation_id=conversation.id if conversation else None,
         )
         if message.conversation_id is not None and conversation:
@@ -183,9 +185,11 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             customer: dict = {}
             recent_orders: list = []
         else:
+            flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
             customer_context = await orchestrator.fetch_customer_context(
                 phone=message.phone,
                 message_text=message.message,
+                bot_flow=flow_state,
             )
             recent_orders = customer_context.get("recent_orders") or []
             customer = customer_context.get("customer") or {}
@@ -197,7 +201,9 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             customer_context=customer,
             recent_orders=recent_orders,
             fetch_context=customer_context if not flow.skip_store_api else None,
-            bot_flow=flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None,
+            bot_flow=flow_state if not flow.skip_store_api else (
+                flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
+            ),
             conversation_id=conversation.id if conversation else None,
         )
         if flow.skip_store_api:
@@ -207,9 +213,11 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
         if (flow.merge_metadata.get("bot_flow") or {}).get("customer_kind") == "new":
             customer, recent_orders = {}, []
         else:
+            flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
             customer_context = await orchestrator.fetch_customer_context(
                 phone=message.phone,
                 message_text=message.message,
+                bot_flow=flow_state,
             )
             recent_orders = customer_context.get("recent_orders") or []
             customer = customer_context.get("customer") or {}

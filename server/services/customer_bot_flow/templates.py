@@ -141,10 +141,45 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Please 2 (Existing customer) reply karein, verify complete karein, phir Order track choose karke Order ID bhejein."
         ),
     },
+    "ask_email": {
+        "english": "Please provide your email address ✉️",
+        "arabic": "يرجى إدخال بريدك الإلكتروني ✉️",
+        "roman_urdu": "Apna email address bhejein ✉️",
+    },
+    "email_invalid": {
+        "english": "Please enter a valid email address (example: name@email.com).",
+        "arabic": "يرجى إدخال بريد إلكتروني صحيح (مثال: name@email.com).",
+        "roman_urdu": "Please valid email likhein (misal: name@email.com).",
+    },
+    "code_sent": {
+        "english": "Verification code sent to your email. Please enter the code 🔐",
+        "arabic": "تم إرسال رمز التحقق إلى بريدك الإلكتروني. يرجى إدخال الرمز 🔐",
+        "roman_urdu": "Verification code email par bhej diya gaya hai. Code enter karein 🔐",
+    },
     "verify": {
         "english": "Please enter your verification code 🔐",
         "arabic": "يرجى إدخال رمز التحقق 🔐",
         "roman_urdu": "Apna verification code enter karein 🔐",
+    },
+    "verify_send_error": {
+        "english": "We couldn't send a verification code right now. Please recheck your email and try again.",
+        "arabic": "تعذر إرسال رمز التحقق الآن. يرجى التحقق من البريد الإلكتروني والمحاولة مرة أخرى.",
+        "roman_urdu": "Abhi verification code send nahi ho saka. Email dobara check karke phir try karein.",
+    },
+    "verify_invalid_code": {
+        "english": "The verification code is incorrect or expired. Please try again.",
+        "arabic": "رمز التحقق غير صحيح أو منتهي الصلاحية. حاول مرة أخرى.",
+        "roman_urdu": "Verification code ghalat hai ya expire ho gaya. Dobara try karein.",
+    },
+    "ask_mobile": {
+        "english": "Please provide your mobile number 📱",
+        "arabic": "يرجى إدخال رقم الجوال 📱",
+        "roman_urdu": "Apna mobile number bhejein 📱",
+    },
+    "customer_not_found_after_verify": {
+        "english": "We could not find a customer with this email and mobile. Please check and send your mobile number again.",
+        "arabic": "لم نعثر على عميل بهذا البريد والجوال. يرجى التحقق وإرسال رقم الجوال مرة أخرى.",
+        "roman_urdu": "Is email aur mobile par customer nahi mila. Mobile dobara check karke bhejein.",
     },
     "verified_menu": {
         "english": (
@@ -216,30 +251,30 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "connecting_agent_named": {
         "english": (
-            "\n\nYou're connected with {agent_name}. "
-            "They'll reply to you here in WhatsApp."
+            "\n\nYou are now connected with {agent_name}. "
+            "They will reply to you here."
         ),
         "arabic": (
-            "\n\nتم توصيلك بـ {agent_name}. "
-            "سيردّ عليك هنا في واتساب."
+            "\n\nتم توصيلك الآن مع {agent_name}. "
+            "سيقوم بالرد عليك هنا."
         ),
         "roman_urdu": (
-            "\n\nAap {agent_name} se connect ho chuke hain. "
-            "Woh yahin WhatsApp par jawab dein ge."
+            "\n\nAap ab {agent_name} se connect ho gaye hain. "
+            "Woh yahin reply karein ge."
         ),
     },
     "connecting": {
         "english": (
-            "Sure! Connecting you to support\n"
-            "Please wait a moment 😊"
+            "I understand. Let me connect you with a human agent.\n"
+            "Please wait while I find an available agent."
         ),
         "arabic": (
-            "حسنًا! سيتم توصيلك بالدعم\n"
-            "يرجى الانتظار قليلاً 😊"
+            "أفهم ذلك. دعني أوصلك بأحد الوكلاء البشريين.\n"
+            "يرجى الانتظار بينما أبحث عن وكيل متاح."
         ),
         "roman_urdu": (
-            "Theek hai! Aap ko support se connect kiya ja raha hai\n"
-            "Thora intezar karein 😊"
+            "Main samajh gaya. Mujhe aap ko human agent se connect karna hai.\n"
+            "Meharbani karke thora intezar karein. Main abhi available agent dhoondh raha hoon."
         ),
     },
     "handoff_retry": {

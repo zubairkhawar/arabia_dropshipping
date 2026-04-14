@@ -33,6 +33,16 @@ def _extract_order_id_from_message(message: str, phone: Optional[str]) -> Option
     return None
 
 
+def _extract_tracking_id_from_message(message: str) -> Optional[str]:
+    text = (message or "").strip()
+    if not text:
+        return None
+    m = re.search(r"\b([A-Z]{2}\d{6,20})\b", text.upper())
+    if m:
+        return m.group(1)
+    return None
+
+
 class AIOrchestrator:
     """
     Central place where we orchestrate:
@@ -185,6 +195,7 @@ class AIOrchestrator:
         self,
         phone: Optional[str],
         message_text: Optional[str] = None,
+        bot_flow: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Resolve customer and recent orders via the merchant API, plus a single order
@@ -198,28 +209,53 @@ class AIOrchestrator:
         orders: list = []
         store_context_error: Optional[str] = None
         verification_method = "none"
+        faq_entries: list = []
+        tracking_detail: Optional[Dict[str, Any]] = None
+        invoices: list = []
+        seller_id: Optional[str] = None
 
-        if phone:
+        flow = bot_flow if isinstance(bot_flow, dict) else {}
+        vc = flow.get("verified_customer")
+        if isinstance(vc, dict):
+            customer = vc
+            verification_method = "email_code"
+
+        seller_raw = flow.get("seller_id")
+        if seller_raw is not None:
+            seller_id = str(seller_raw)
+        elif isinstance(customer, dict) and customer.get("seller_id") is not None:
+            seller_id = str(customer.get("seller_id"))
+
+        # Only use Arabia APIs: orders by id, tracking, faq, invoice by seller_id
+        if seller_id:
+            try:
+                inv_payload = await self.store_client.get_invoice_by_seller_id(seller_id)
+                if isinstance(inv_payload.get("orders"), list):
+                    orders = [x for x in inv_payload.get("orders") if isinstance(x, dict)]
+                elif isinstance(inv_payload.get("data"), list):
+                    orders = [x for x in inv_payload.get("data") if isinstance(x, dict)]
+                if isinstance(inv_payload.get("invoices"), list):
+                    invoices = [x for x in inv_payload.get("invoices") if isinstance(x, dict)]
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Store API invoice by seller_id failed")
+                store_context_error = f"invoice_fetch:{exc!s}"[:220]
+
+        if not seller_id and phone:
+            # Preserve compatibility for channels that still only provide phone.
             try:
                 customer = await self.store_client.get_customer_by_phone(phone)
                 if customer and customer.get("id"):
                     verification_method = "phone"
-                    try:
-                        orders = await self.store_client.get_recent_orders_for_customer(
-                            customer_id=str(customer["id"]),
-                            limit=3,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.exception("Store API recent orders failed")
-                        store_context_error = f"orders_fetch:{exc!s}"[:220]
+                    if customer.get("seller_id") is not None:
+                        seller_id = str(customer.get("seller_id"))
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Store API customer by phone failed")
-                store_context_error = f"customer_fetch:{exc!s}"[:220]
+                store_context_error = (store_context_error or "") + f" customer_fetch:{exc!s}"[:220]
 
         order_id = _extract_order_id_from_message(message_text or "", phone)
         if order_id:
             try:
-                detail = await self.store_client.get_order_by_id(order_id)
+                detail = await self.store_client.get_order_by_id(order_id, seller_id=seller_id)
                 if detail:
                     orders = [detail] + [
                         o for o in orders if str(o.get("id", o)) != str(detail.get("id", detail))
@@ -228,12 +264,33 @@ class AIOrchestrator:
                 logger.exception("Store API order by id failed")
                 store_context_error = (store_context_error or "") + f" order_fetch:{exc!s}"[:220]
 
+        tracking_id = _extract_tracking_id_from_message(message_text or "")
+        if tracking_id:
+            try:
+                tracking_detail = await self.store_client.get_tracking_status(
+                    tracking_id,
+                    seller_id=seller_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Store API tracking failed")
+                store_context_error = (store_context_error or "") + f" tracking_fetch:{exc!s}"[:220]
+
+        try:
+            faq_entries = await self.store_client.get_faq()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Store API faq failed")
+            store_context_error = (store_context_error or "") + f" faq_fetch:{exc!s}"[:220]
+
         return {
             "customer": customer or {},
             "recent_orders": orders,
             "is_store_customer": bool(customer and customer.get("id")),
             "verification_method": verification_method,
             "store_context_error": store_context_error,
+            "seller_id": seller_id,
+            "tracking_detail": tracking_detail or {},
+            "faq_entries": faq_entries,
+            "invoices": invoices,
         }
 
     async def should_escalate(self, message: str) -> bool:

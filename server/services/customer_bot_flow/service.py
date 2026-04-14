@@ -204,6 +204,11 @@ def _is_likely_order_id_only(text: str) -> bool:
     return bool(re.fullmatch(r"[\d\-\s#]+", s))
 
 
+def _is_likely_email(text: str) -> bool:
+    s = (text or "").strip().lower()
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", s))
+
+
 def _state_back_to_customer_pick(flow: Dict[str, Any]) -> Dict[str, Any]:
     """Let user choose 2 (existing) for order flow after wrong-path message."""
     return {
@@ -548,9 +553,9 @@ async def process_customer_bot_message(
                     **base,
                     "customer_kind": "existing",
                     "verified": False,
-                    "step": "existing_awaiting_verification",
+                    "step": "existing_awaiting_email",
                 }
-                return save(f, _t(flow_lang, MSGS["verify"]))
+                return save(f, _t(flow_lang, MSGS["ask_email"]))
             return save(base, _t(flow_lang, MSGS["entry"]))
         if choice == "new":
             f = {**flow, "customer_kind": "new", "step": "new_main_menu", "lang": flow_lang}
@@ -560,10 +565,10 @@ async def process_customer_bot_message(
                 **flow,
                 "customer_kind": "existing",
                 "verified": False,
-                "step": "existing_awaiting_verification",
+                "step": "existing_awaiting_email",
                 "lang": flow_lang,
             }
-            return save(f, _t(flow_lang, MSGS["verify"]))
+            return save(f, _t(flow_lang, MSGS["ask_email"]))
         if _looks_like_free_text_question(text):
             f = {**flow, "step": "awaiting_customer_type", "intro_shown": True, "lang": flow_lang}
             return ai_forward("[Customer entry question] " + text, f, skip_api=True)
@@ -573,18 +578,70 @@ async def process_customer_bot_message(
             _t(flow_lang, MSGS["entry"]),
         )
 
-    if step == "existing_awaiting_verification":
-        # MVP / intentional: any non-empty message completes "verification" (no OTP or store check).
-        # Replace with email/SMS code or store lookup when you need real identity proof.
-        if len(text) >= 1:
+    if step == "existing_awaiting_email":
+        email = (text or "").strip().lower()
+        if not _is_likely_email(email):
+            return save(flow, _t(flow_lang, MSGS["email_invalid"]))
+        sent = await store_client.send_verification_code(email)
+        if not sent:
+            return save(flow, _t(flow_lang, MSGS["verify_send_error"]))
+        f = {
+            **flow,
+            "pending_email": email,
+            "verified": False,
+            "step": "existing_awaiting_verification_code",
+            "lang": flow_lang,
+        }
+        return save(f, _t(flow_lang, MSGS["code_sent"]))
+
+    if step == "existing_awaiting_verification_code":
+        code = (text or "").strip()
+        pending_email = (flow.get("pending_email") or "").strip().lower()
+        if not pending_email:
             f = {
                 **flow,
-                "verified": True,
-                "step": "existing_verified_menu",
+                "step": "existing_awaiting_email",
                 "lang": flow_lang,
             }
-            return save(f, _t(flow_lang, MSGS["verified_menu"]))
-        return save(flow, _t(flow_lang, MSGS["verify"]))
+            return save(f, _t(flow_lang, MSGS["ask_email"]))
+        if len(code) < 4:
+            return save(flow, _t(flow_lang, MSGS["verify"]))
+        verified = await store_client.verify_code(pending_email, code)
+        if not verified:
+            return save(flow, _t(flow_lang, MSGS["verify_invalid_code"]))
+        f = {
+            **flow,
+            "verified": False,
+            "step": "existing_awaiting_mobile",
+            "lang": flow_lang,
+        }
+        return save(f, _t(flow_lang, MSGS["ask_mobile"]))
+
+    if step == "existing_awaiting_mobile":
+        pending_email = (flow.get("pending_email") or "").strip().lower()
+        mobile = (text or "").strip()
+        if not pending_email:
+            f = {
+                **flow,
+                "step": "existing_awaiting_email",
+                "lang": flow_lang,
+            }
+            return save(f, _t(flow_lang, MSGS["ask_email"]))
+        if len(mobile) < 7:
+            return save(flow, _t(flow_lang, MSGS["ask_mobile"]))
+        customer = await store_client.get_customer_by_email_mobile(pending_email, mobile)
+        if not customer:
+            return save(flow, _t(flow_lang, MSGS["customer_not_found_after_verify"]))
+        f = {
+            **flow,
+            "verified": True,
+            "step": "existing_verified_menu",
+            "verified_customer": customer,
+            "seller_id": customer.get("seller_id"),
+            "pending_mobile": mobile,
+            "lang": flow_lang,
+        }
+        return save(f, _t(flow_lang, MSGS["verified_menu"]))
 
     if step == "existing_verified_menu":
         choice = _parse_choice(text, {"1": "track", "2": "details", "3": "support"})

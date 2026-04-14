@@ -1753,9 +1753,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         detected_language = bf_lang
 
     if not flow.handled:
+        flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
         customer_context = await orchestrator.fetch_customer_context(
             phone=from_phone,
             message_text=text,
+            bot_flow=flow_state,
         )
         recent_orders = customer_context.get("recent_orders") or []
         customer_ctx = customer_context.get("customer") or {}
@@ -1767,7 +1769,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             customer_context=customer_ctx,
             recent_orders=recent_orders,
             fetch_context=customer_context,
-            bot_flow=flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None,
+            bot_flow=flow_state,
             conversation_id=conversation.id,
         )
     elif flow.use_ai:
@@ -1775,9 +1777,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             customer_ctx = {}
             recent_orders = []
         else:
+            flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
             customer_context = await orchestrator.fetch_customer_context(
                 phone=from_phone,
                 message_text=text,
+                bot_flow=flow_state,
             )
             recent_orders = customer_context.get("recent_orders") or []
             customer_ctx = customer_context.get("customer") or {}
@@ -1789,7 +1793,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             customer_context=customer_ctx,
             recent_orders=recent_orders,
             fetch_context=customer_context if not flow.skip_store_api else None,
-            bot_flow=flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None,
+            bot_flow=flow_state if not flow.skip_store_api else (
+                flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
+            ),
             conversation_id=conversation.id,
         )
         if flow.skip_store_api:

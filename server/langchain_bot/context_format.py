@@ -109,4 +109,33 @@ def build_customer_identity_summary(
             "Scripted chat bot: user has not completed new vs existing selection (or state cleared)."
         )
 
+    sid = fetch_ctx.get("seller_id")
+    if sid:
+        lines.append(f"Seller linkage: seller_id {sid} is available for scoped store lookups.")
+
+    tracking = fetch_ctx.get("tracking_detail")
+    if isinstance(tracking, dict) and tracking:
+        tracking_id = tracking.get("tracking_number") or tracking.get("id") or "tracking"
+        tracking_status = tracking.get("status") or tracking.get("delivery_status") or "unknown"
+        lines.append(f"Tracking lookup: {tracking_id} status is {tracking_status}.")
+
+    invoices = fetch_ctx.get("invoices")
+    if isinstance(invoices, list) and invoices:
+        lines.append(f"Invoices context: {len(invoices)} invoice records are available.")
+
+    faq = fetch_ctx.get("faq_entries")
+    if isinstance(faq, list) and faq:
+        faq_lines: List[str] = []
+        for item in faq[:5]:
+            if not isinstance(item, dict):
+                continue
+            q = str(item.get("question") or item.get("title") or "").strip()
+            a = str(item.get("answer") or item.get("description") or "").strip()
+            if q and a:
+                faq_lines.append(f"Q: {q} | A: {a[:180]}")
+            elif q:
+                faq_lines.append(f"Q: {q}")
+        if faq_lines:
+            lines.append("FAQ excerpts:\n" + "\n".join(faq_lines))
+
     return "\n".join(lines)
