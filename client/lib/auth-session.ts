@@ -45,6 +45,32 @@ export function forceLoginRedirect(): void {
   window.location.replace('/login');
 }
 
+/**
+ * WebSocket close codes / reasons that mean the token is invalid — redirect to login
+ * instead of reconnecting forever with a dead session.
+ */
+export function redirectIfWebSocketAuthFailure(ev: CloseEvent): boolean {
+  if (typeof window === 'undefined') return false;
+  const code = ev.code;
+  const reason = String(ev.reason || '').toLowerCase();
+  if (code === 4001 || code === 4401 || code === 4403) {
+    forceLoginRedirect();
+    return true;
+  }
+  if (
+    code === 1008 &&
+    (reason.includes('auth') ||
+      reason.includes('token') ||
+      reason.includes('jwt') ||
+      reason.includes('unauthorized') ||
+      reason.includes('forbidden'))
+  ) {
+    forceLoginRedirect();
+    return true;
+  }
+  return false;
+}
+
 export function readStoredAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
   try {

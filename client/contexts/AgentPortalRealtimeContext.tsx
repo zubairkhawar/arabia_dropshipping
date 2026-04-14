@@ -17,6 +17,7 @@ import {
   readAuthAgentId,
 } from '@/lib/agent-session-storage';
 import { sendAgentOfflineKeepalive } from '@/lib/agent-offline-beacon';
+import { redirectIfWebSocketAuthFailure } from '@/lib/auth-session';
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
@@ -172,8 +173,11 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
           // ignore
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         wsRef.current = null;
+        if (redirectIfWebSocketAuthFailure(ev)) {
+          return;
+        }
         reconnectTimerRef.current = setTimeout(connect, 4000);
       };
       ws.onerror = () => {

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
+import { redirectIfWebSocketAuthFailure } from '@/lib/auth-session';
+
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
@@ -107,9 +109,13 @@ export function useDmConversationRealtime(
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         wsRef.current = null;
         optionsRef.current?.onClose?.();
+        if (redirectIfWebSocketAuthFailure(ev)) {
+          closed = true;
+          return;
+        }
         if (!closed) scheduleReconnect();
       };
 

@@ -22,15 +22,21 @@ type AuthSessionContextValue = {
 
 const AuthSessionContext = createContext<AuthSessionContextValue | undefined>(undefined);
 
-async function validateTokenWithServer(token: string): Promise<boolean> {
+/** `invalid` = 401 from server (session cleared + redirect). `unknown` = network/5xx — do not redirect. */
+async function validateTokenWithServer(token: string): Promise<'ok' | 'invalid' | 'unknown'> {
   try {
     const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
     });
-    return res.ok;
+    if (res.status === 401) {
+      forceLoginRedirect();
+      return 'invalid';
+    }
+    if (res.ok) return 'ok';
+    return 'unknown';
   } catch {
-    return false;
+    return 'unknown';
   }
 }
 
@@ -58,10 +64,9 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const ok = await validateTokenWithServer(token);
-    if (!ok) {
-      forceLoginRedirect();
-    }
+    const v = await validateTokenWithServer(token);
+    if (v === 'invalid') return;
+    if (v !== 'ok') return;
   }, [pathname, router]);
 
   useEffect(() => {

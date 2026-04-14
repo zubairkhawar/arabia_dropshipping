@@ -43,6 +43,19 @@ function isOurApiHost(host: string): boolean {
   }
 }
 
+/**
+ * Next.js rewrites `/api/*` to the backend, so `fetch('/api/...')` uses the **page** host
+ * (e.g. localhost:3000), not the API host — 401 would otherwise be ignored.
+ */
+function isProxiedSameOriginApi(requestUrl: URL): boolean {
+  if (typeof window === 'undefined') return false;
+  return requestUrl.host === window.location.host && requestUrl.pathname.startsWith('/api/');
+}
+
+function isOurApiRequest(requestUrl: URL): boolean {
+  return isOurApiHost(requestUrl.host) || isProxiedSameOriginApi(requestUrl);
+}
+
 /** True when a 401 on this response should invalidate the browser session. */
 function shouldSessionExpireOn401(
   status: number,
@@ -51,7 +64,7 @@ function shouldSessionExpireOn401(
   init?: RequestInit,
 ): boolean {
   if (status !== 401 || !requestUrl) return false;
-  if (!isOurApiHost(requestUrl.host)) return false;
+  if (!isOurApiRequest(requestUrl)) return false;
 
   const pathname = requestUrl.pathname;
   const publicAuth = /^\/api\/auth\/(login|register|forgot-password|reset-password|verify-reset-token)(?:\/|$)/;
