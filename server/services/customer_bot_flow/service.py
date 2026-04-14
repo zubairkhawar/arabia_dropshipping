@@ -47,10 +47,9 @@ def _t(lang: str, table: Dict[str, str]) -> str:
 
 
 def format_kb_reply(lang: str, ai_body: str, source: Optional[str] = None) -> str:
-    """Wrap a knowledge/AI answer (KB turns). Optional citation line when source is known."""
+    """Wrap a knowledge/AI answer (KB turns). Source line is always the public website in templates."""
     body = (ai_body or "").strip()
-    src = (source or "").strip() or _t(lang, MSGS["kb_default_source"])
-    return _t(lang, MSGS["kb_wrap"]).format(body=body, source=src)
+    return _t(lang, MSGS["kb_wrap"]).format(body=body)
 
 
 def _normalize_meta(conv: Conversation) -> Dict[str, Any]:

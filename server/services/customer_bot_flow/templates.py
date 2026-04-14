@@ -381,32 +381,24 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "3️⃣ 3+ saal"
         ),
     },
-    "kb_default_source": {
-        "english": "Arabia Dropshipping knowledge base",
-        "arabic": "قاعدة معلومات Arabia Dropshipping",
-        "roman_urdu": "Arabia Dropshipping knowledge base",
-    },
     "kb_wrap": {
         "english": (
-            "Based on our information:\n\n{body}\n\n"
-            "📌 Source: {source}\n\n"
-            "Was this helpful? If not, you can:\n"
-            "• Ask me to explain differently\n"
-            "• Type \"agent\" to speak with a human"
+            "💡 Here's what you need to know:\n\n{body}\n\n"
+            "📌 Source: https://www.arabiadropship.com\n\n"
+            "Need more help? Type support\n"
+            "To see the main choices again, type main menu."
         ),
         "arabic": (
-            "بناءً على معلوماتنا:\n\n{body}\n\n"
-            "📌 المصدر: {source}\n\n"
-            "هل كان هذا مفيدًا؟ إن لم يكن، يمكنك:\n"
-            "• أن تطلب مني الشرح بطريقة أخرى\n"
-            "• كتابة \"agent\" للتحدث مع موظف"
+            "💡 إليك المعلومات:\n\n{body}\n\n"
+            "📌 المصدر: https://www.arabiadropship.com\n\n"
+            "لمزيد من المساعدة اكتب support\n"
+            "لعرض الخيارات من جديد اكتب: القائمة الرئيسية"
         ),
         "roman_urdu": (
-            "Hamari information ke mutabiq:\n\n{body}\n\n"
-            "📌 Source: {source}\n\n"
-            "Kya yeh helpful tha? Agar nahi, to:\n"
-            "• Mujh se doosre andaaz mein samjhane ko keh sakte hain\n"
-            "• Insaan se baat ke liye \"agent\" likhein"
+            "💡 Yeh information aap ke liye:\n\n{body}\n\n"
+            "📌 Source: https://www.arabiadropship.com\n\n"
+            "Mazeed madad ke liye support likhein\n"
+            "Menu dubara dekhne ke liye likhein: main menu"
         ),
     },
     "unknown_info": {
