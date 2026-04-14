@@ -6,6 +6,7 @@ Team routing uses Agent.team values: new_customer, beginner, intermediate, exper
 """
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -29,6 +30,8 @@ from services.human_handoff_intent import (
     wants_human_agent,
 )
 from services.customer_bot_flow.templates import BOT_FLOW_TEMPLATES
+
+logger = logging.getLogger(__name__)
 
 BOT_FLOW_KEY = "bot_flow"
 
@@ -148,9 +151,14 @@ def _looks_like_order_status_question(text: str) -> bool:
     t = (text or "").strip().lower()
     if len(t) < 6:
         return False
-    # Ignore obvious FAQ/company-info prompts.
+    # Ignore obvious FAQ/company-info prompts (not "where is my order" — that stays order flow).
     info_markers = (
         "what is",
+        "what markets",
+        "which markets",
+        "operate in",
+        "do i need",
+        "do i have to",
         "tell me about",
         "why should i",
         "how does",
@@ -179,7 +187,14 @@ def _looks_like_order_status_question(text: str) -> bool:
         return True
 
     # Secondary gate: require both order-domain and "asking" intent.
-    has_order_domain = any(k in t for k in ("order", "tracking", "track", "parcel", "package"))
+    # Use word boundaries — substring "order" matches inside "inventory" and misroutes FAQ to verify.
+    has_order_domain = bool(
+        re.search(r"\border\b", t)
+        or re.search(r"\btracking\b", t)
+        or re.search(r"\btrack\b", t)
+        or re.search(r"\bparcel\b", t)
+        or re.search(r"\bpackage\b", t)
+    )
     is_asking = ("?" in t) or any(k in t for k in ("where", "when", "status", "kab", "kahan"))
     if has_order_domain and is_asking:
         return True
@@ -560,6 +575,11 @@ async def process_customer_bot_message(
         )
 
     def ai_forward(msg: str, f: Dict[str, Any], skip_api: bool):
+        logger.debug(
+            "customer_bot_flow ai_forward skip_store_api=%s preview=%s",
+            skip_api,
+            (msg or "")[:160].replace("\n", " "),
+        )
         f["lang"] = flow_lang
         return BotFlowResult(
             reply_text="",
