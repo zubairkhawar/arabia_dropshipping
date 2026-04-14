@@ -210,7 +210,8 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             reply_text = format_kb_reply(bf_lang or detected_language, reply_text)
     else:
         reply_text = flow.reply_text
-        if (flow.merge_metadata.get("bot_flow") or {}).get("customer_kind") == "new":
+        bf = flow.merge_metadata.get("bot_flow") or {}
+        if bf.get("customer_kind") == "new" or not bf.get("verified"):
             customer, recent_orders = {}, []
         else:
             flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
@@ -223,7 +224,8 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             customer = customer_context.get("customer") or {}
 
     if conversation and flow.assign_team:
-        kind = (flow.merge_metadata.get("bot_flow") or {}).get("customer_kind")
+        bf = flow.merge_metadata.get("bot_flow") or {}
+        kind = bf.get("customer_kind")
         assign_result = assign_from_bot_flow(
             db,
             tenant_id=message.tenant_id,
@@ -231,7 +233,7 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             store_id=conversation.store_id,
             customer_id=conversation.customer_id,
             routed_team=flow.assign_team,
-            is_existing_customer=(kind == "existing"),
+            is_existing_customer=(kind == "existing" or bool(bf.get("verified"))),
         )
         db.refresh(conversation)
         if assign_result.agent_id is not None and assign_result.reason != "conversation_already_assigned":

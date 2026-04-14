@@ -1840,7 +1840,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         reply_text = flow.reply_text
 
     if flow.assign_team:
-        kind = (flow.merge_metadata.get("bot_flow") or {}).get("customer_kind")
+        bf = flow.merge_metadata.get("bot_flow") or {}
+        kind = bf.get("customer_kind")
         assign_result = assign_from_bot_flow(
             db,
             tenant_id=tenant_id,
@@ -1848,7 +1849,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             store_id=store.id,
             customer_id=customer.id,
             routed_team=flow.assign_team,
-            is_existing_customer=(kind == "existing"),
+            is_existing_customer=(kind == "existing" or bool(bf.get("verified"))),
         )
         db.refresh(conversation)
         if assign_result.agent_id is not None and assign_result.reason != "conversation_already_assigned":

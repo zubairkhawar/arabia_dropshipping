@@ -1,5 +1,6 @@
 'use client';
 
+import { AuthSessionProvider } from '@/contexts/AuthSessionContext';
 import { TeamsProvider } from '@/contexts/TeamsContext';
 import { AgentsProvider } from '@/contexts/AgentsContext';
 import { OnlineScheduleProvider } from '@/contexts/OnlineScheduleContext';
@@ -9,16 +10,18 @@ import { ToastProvider } from '@/contexts/ToastContext';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <TenantTimezoneProvider>
-      <TeamsProvider>
-        <AgentsProvider>
-          <OnlineScheduleProvider>
-            <SoundAlertsProvider>
-              <ToastProvider>{children}</ToastProvider>
-            </SoundAlertsProvider>
-          </OnlineScheduleProvider>
-        </AgentsProvider>
-      </TeamsProvider>
-    </TenantTimezoneProvider>
+    <AuthSessionProvider>
+      <TenantTimezoneProvider>
+        <TeamsProvider>
+          <AgentsProvider>
+            <OnlineScheduleProvider>
+              <SoundAlertsProvider>
+                <ToastProvider>{children}</ToastProvider>
+              </SoundAlertsProvider>
+            </OnlineScheduleProvider>
+          </AgentsProvider>
+        </TeamsProvider>
+      </TenantTimezoneProvider>
+    </AuthSessionProvider>
   );
 }

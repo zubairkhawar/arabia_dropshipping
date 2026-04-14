@@ -46,9 +46,11 @@ def _t(lang: str, table: Dict[str, str]) -> str:
     return table.get(lang) or table.get("english") or next(iter(table.values()))
 
 
-def format_kb_reply(lang: str, ai_body: str) -> str:
-    """Wrap a knowledge/AI answer for new-customer style responses."""
-    return _t(lang, MSGS["kb_wrap"]).format(body=(ai_body or "").strip())
+def format_kb_reply(lang: str, ai_body: str, source: Optional[str] = None) -> str:
+    """Wrap a knowledge/AI answer (KB turns). Optional citation line when source is known."""
+    body = (ai_body or "").strip()
+    src = (source or "").strip() or _t(lang, MSGS["kb_default_source"])
+    return _t(lang, MSGS["kb_wrap"]).format(body=body, source=src)
 
 
 def _normalize_meta(conv: Conversation) -> Dict[str, Any]:
@@ -197,14 +199,126 @@ def _is_likely_email(text: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", s))
 
 
-def _state_back_to_customer_pick(flow: Dict[str, Any]) -> Dict[str, Any]:
-    """Let user choose 2 (existing) for order flow after wrong-path message."""
+def _verified_at_iso() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_verified_at(raw: str) -> Optional[datetime]:
+    """Parse bot_flow verified_at (ISO UTC with optional Z suffix)."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1]
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _clear_verification_state(flow: Dict[str, Any]) -> None:
+    """Drop script verification fields (manual /reset uses _reset_bot_flow instead)."""
+    flow["verified"] = False
+    flow["seller_id"] = None
+    flow["customer_email"] = None
+    flow["verified_at"] = None
+    flow["verified_customer"] = None
+    if flow.get("customer_kind") == "existing":
+        flow["customer_kind"] = None
+    st = str(flow.get("step") or "")
+    if st in ("existing_awaiting_order_id", "existing_verified_menu"):
+        flow["step"] = "conversational"
+
+
+def _apply_verification_expiry(flow: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    """
+    If verified_at is older than settings.customer_bot_verification_expiry_days,
+    clear verification state. Returns (flow, expired_this_turn).
+    """
+    if not flow.get("verified"):
+        return flow, False
+    days = int(getattr(settings, "customer_bot_verification_expiry_days", 3) or 0)
+    if days <= 0:
+        return flow, False
+    verified_at = flow.get("verified_at")
+    if not verified_at:
+        _clear_verification_state(flow)
+        return flow, True
+    verified_dt = _parse_verified_at(str(verified_at))
+    if verified_dt is None:
+        _clear_verification_state(flow)
+        return flow, True
+    if datetime.utcnow() - verified_dt > timedelta(days=days):
+        _clear_verification_state(flow)
+        return flow, True
+    return flow, False
+
+
+def _migrate_legacy_bot_flow(flow: Dict[str, Any]) -> Dict[str, Any]:
+    """Map old menu-based steps to the conversational engine."""
+    if not flow:
+        return {"step": "conversational", "intro_shown": False}
+    step = str(flow.get("step") or "")
+    if step in ("awaiting_customer_type", "entry", "new_main_menu"):
+        out = {**flow, "step": "conversational"}
+        out.pop("customer_kind", None)
+        return out
+    if step == "existing_verified_menu":
+        return {**flow, "step": "conversational"}
+    return flow
+
+
+def _default_skip_store_api(f: Dict[str, Any]) -> bool:
+    if f.get("customer_kind") == "new":
+        return True
+    if f.get("verified"):
+        return False
+    return True
+
+
+def _looks_like_account_question(text: str) -> bool:
+    """Invoice / account area — requires verification like order lookups."""
+    t = (text or "").strip().lower()
+    if len(t) < 6:
+        return False
+    if _looks_like_order_status_question(text):
+        return False
+    markers = (
+        "invoice",
+        "invoices",
+        "billing",
+        "statement",
+        "payment history",
+        "my account",
+        "account details",
+    )
+    ru = ("hisab", "invoice", "payment", "account")
+    if any(m in t for m in markers):
+        return True
+    if any(m in t for m in ru) and len(t) >= 8:
+        return True
+    return False
+
+
+def _needs_account_verification(flow: Dict[str, Any]) -> bool:
+    return not bool(flow.get("verified"))
+
+
+def _reset_bot_flow(lang_code: str) -> Dict[str, Any]:
     return {
-        **flow,
-        "customer_kind": None,
-        "verified": False,
-        "step": "awaiting_customer_type",
+        "step": "conversational",
         "intro_shown": True,
+        "lang": lang_code,
+        "verified": False,
+        "seller_id": None,
+        "customer_email": None,
+        "verified_at": None,
+        "verified_customer": None,
+        "pending_email": None,
+        "pending_mobile": None,
+        "pending_order_ref": None,
+        "verify_reason": None,
+        "customer_kind": None,
         "experience_team": None,
     }
 
@@ -250,15 +364,30 @@ def _apply_inactivity_bot_reset(
 
 
 def _flow_is_tabula_rasa(flow: Dict[str, Any]) -> bool:
-    """True when user is still only on the new/existing entry (no path chosen yet)."""
+    """True when a mid-session 'hi' should not trigger resume (early / idle state)."""
     if not flow:
         return True
-    if flow.get("customer_kind"):
-        return False
-    step = flow.get("step") or "awaiting_customer_type"
+    step = str(flow.get("step") or "conversational")
     if step == "awaiting_resume_choice":
         return False
-    return step in ("awaiting_customer_type", "entry")
+    if flow.get("verified"):
+        return False
+    if step in (
+        "existing_awaiting_email",
+        "existing_awaiting_verification_code",
+        "existing_awaiting_mobile",
+        "existing_awaiting_order_id",
+        "existing_awaiting_experience",
+        "awaiting_agent",
+        "new_main_menu",
+        "existing_verified_menu",
+    ):
+        return False
+    if step == "conversational":
+        return True
+    if step in ("awaiting_customer_type", "entry"):
+        return True
+    return False
 
 
 def _parse_choice(text: str, mapping: Dict[str, str]) -> Optional[str]:
@@ -390,6 +519,8 @@ async def process_customer_bot_message(
     meta = _normalize_meta(conversation)
     flow = _get_flow(meta)
     meta, flow = _apply_inactivity_bot_reset(db, conversation, meta, flow)
+    flow = _migrate_legacy_bot_flow(flow)
+    flow, verification_expired_this_turn = _apply_verification_expiry(flow)
 
     lang = await orchestrator.detect_language(user_message)
     if not (user_message or "").strip():
@@ -402,7 +533,7 @@ async def process_customer_bot_message(
             or bool(re.fullmatch(r"[\d\-\s#]+", t0))
         ):
             lang = sticky
-    step = flow.get("step") or "awaiting_customer_type"
+    step = flow.get("step") or "conversational"
     flow_lang = lang
 
     store_client = StoreIntegrationClient()
@@ -417,7 +548,7 @@ async def process_customer_bot_message(
     ):
         f["lang"] = flow_lang
         if skip_api is None:
-            skip_api = f.get("customer_kind") == "new"
+            skip_api = _default_skip_store_api(f)
         return BotFlowResult(
             reply_text=reply,
             merge_metadata=_merge_flow(meta, f),
@@ -445,8 +576,8 @@ async def process_customer_bot_message(
     text = (user_message or "").strip()
 
     if is_slash_reset_command(text):
-        nf = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
-        return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=False)
+        nf = _reset_bot_flow(flow_lang)
+        return save(nf, _t(flow_lang, MSGS["greeting"]), skip_api=False)
 
     if step == "awaiting_resume_choice":
         snap = flow.get("resume_snapshot")
@@ -473,23 +604,22 @@ async def process_customer_bot_message(
             restored["lang"] = flow_lang
             return save(restored, _t(flow_lang, MSGS["resume_continued"]))
         if choice == "fresh":
-            nf = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
-            return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=False)
+            nf = _reset_bot_flow(flow_lang)
+            return save(nf, _t(flow_lang, MSGS["greeting"]), skip_api=False)
         return save(flow, _t(flow_lang, MSGS["welcome_back"]))
 
     # Clear stale WhatsApp/web bot state (e.g. old "verified" session) — before handoff
     if wants_bot_flow_reset(text):
-        nf = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
-        return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=False)
+        nf = _reset_bot_flow(flow_lang)
+        return save(nf, _t(flow_lang, MSGS["greeting"]), skip_api=False)
 
     # Global handoff: any step (incl. verification) when user asks for a human agent
     if wants_human_agent(text):
-        kind = flow.get("customer_kind")
         exp_team = flow.get("experience_team")
-        if kind == "new" or not kind:
-            team = TEAM_NEW_CUSTOMER
-        else:
+        if flow.get("verified"):
             team = exp_team or TEAM_BEGINNER
+        else:
+            team = TEAM_NEW_CUSTOMER
         f = {
             **flow,
             "step": "awaiting_agent",
@@ -514,61 +644,6 @@ async def process_customer_bot_message(
         }
         return save(wb, _t(flow_lang, MSGS["welcome_back"]))
 
-    # New / existing qualification (first turns)
-    if not flow.get("customer_kind") and step in (
-        "awaiting_customer_type",
-        "entry",
-    ):
-        choice = _parse_choice(
-            text,
-            {
-                "1": "new",
-                "new": "new",
-                "n": "new",
-                "2": "existing",
-                "existing": "existing",
-                "old": "existing",
-                "e": "existing",
-            },
-        )
-        if not flow.get("intro_shown"):
-            base = {**flow, "intro_shown": True, "step": "awaiting_customer_type", "lang": flow_lang}
-            if choice == "new":
-                f = {**base, "customer_kind": "new", "step": "new_main_menu"}
-                return save(f, _t(flow_lang, MSGS["new_welcome"]))
-            if choice == "existing":
-                f = {
-                    **base,
-                    "customer_kind": "existing",
-                    "verified": False,
-                    "step": "existing_awaiting_email",
-                }
-                return save(f, _t(flow_lang, MSGS["ask_email"]))
-            if _looks_like_free_text_question(text):
-                f = {**base, "step": "awaiting_customer_type"}
-                return ai_forward("[Customer entry question] " + text, f, skip_api=True)
-            return save(base, _t(flow_lang, MSGS["entry"]))
-        if choice == "new":
-            f = {**flow, "customer_kind": "new", "step": "new_main_menu", "lang": flow_lang}
-            return save(f, _t(flow_lang, MSGS["new_welcome"]))
-        if choice == "existing":
-            f = {
-                **flow,
-                "customer_kind": "existing",
-                "verified": False,
-                "step": "existing_awaiting_email",
-                "lang": flow_lang,
-            }
-            return save(f, _t(flow_lang, MSGS["ask_email"]))
-        if _looks_like_free_text_question(text):
-            f = {**flow, "step": "awaiting_customer_type", "intro_shown": True, "lang": flow_lang}
-            return ai_forward("[Customer entry question] " + text, f, skip_api=True)
-        # Unclear reply (e.g. "hi") — send the fixed entry template again, not generic fallback.
-        return save(
-            {**flow, "step": "awaiting_customer_type", "lang": flow_lang},
-            _t(flow_lang, MSGS["entry"]),
-        )
-
     if step == "existing_awaiting_email":
         email = (text or "").strip().lower()
         if not _is_likely_email(email):
@@ -583,7 +658,7 @@ async def process_customer_bot_message(
             "step": "existing_awaiting_verification_code",
             "lang": flow_lang,
         }
-        return save(f, _t(flow_lang, MSGS["code_sent"]))
+        return save(f, _t(flow_lang, MSGS["code_sent"]).format(email=email))
 
     if step == "existing_awaiting_verification_code":
         code = (text or "").strip()
@@ -595,8 +670,14 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(f, _t(flow_lang, MSGS["ask_email"]))
+        low = code.lower()
+        if low in ("resend", "resend code", "code resend"):
+            sent = await store_client.send_verification_code(pending_email)
+            if not sent:
+                return save(flow, _t(flow_lang, MSGS["verify_send_error"]))
+            return save(flow, _t(flow_lang, MSGS["code_sent"]).format(email=pending_email))
         if len(code) < 4:
-            return save(flow, _t(flow_lang, MSGS["verify"]))
+            return save(flow, _t(flow_lang, MSGS["verify"]).format(email=pending_email))
         verified = await store_client.verify_code(pending_email, code)
         if not verified:
             return save(flow, _t(flow_lang, MSGS["verify_invalid_code"]))
@@ -623,56 +704,58 @@ async def process_customer_bot_message(
         customer = await store_client.get_customer_by_email_mobile(pending_email, mobile)
         if not customer:
             return save(flow, _t(flow_lang, MSGS["customer_not_found_after_verify"]))
-        f = {
+        verified_at = _verified_at_iso()
+        reason = flow.get("verify_reason")
+        oref_raw = flow.get("pending_order_ref")
+        oref = (str(oref_raw).strip() if oref_raw else "") or ""
+
+        base_f: Dict[str, Any] = {
             **flow,
             "verified": True,
-            "step": "existing_verified_menu",
+            "step": "conversational",
+            "customer_kind": "existing",
             "verified_customer": customer,
             "seller_id": customer.get("seller_id"),
+            "customer_email": pending_email,
+            "verified_at": verified_at,
             "pending_mobile": mobile,
+            "pending_email": None,
+            "verify_reason": None,
+            "pending_order_ref": None,
             "lang": flow_lang,
         }
-        return save(f, _t(flow_lang, MSGS["verified_menu"]))
 
-    if step == "existing_verified_menu":
-        choice = _parse_choice(text, {"1": "track", "2": "details", "3": "support"})
-        if choice == "track":
-            f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
-            return save(f, _t(flow_lang, MSGS["ask_order"]))
-        if choice == "details":
-            f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
-            return save(f, _t(flow_lang, MSGS["ask_order"]))
-        if choice == "support":
-            f = {**flow, "step": "existing_awaiting_experience", "lang": flow_lang}
-            return save(f, _t(flow_lang, MSGS["experience"]))
-        if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
-            ref = ""
-            if _is_likely_order_id_only(text):
-                ref = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
-            else:
-                ref = (_extract_order_id_from_message(text, phone) or "").strip()
-            if ref:
-                order, src = await _lookup_order(db, tenant_id, ref, store_client)
-                if order:
-                    body = _t(flow_lang, MSGS["order_found"]).format(
+        intro_line = _t(flow_lang, MSGS["verification_success"])
+        parts: list[str] = [intro_line]
+
+        if oref:
+            order, src = await _lookup_order(db, tenant_id, oref, store_client)
+            if order:
+                parts.append(
+                    _t(flow_lang, MSGS["order_found"]).format(
                         order_id=order["order_number"],
                         status=order["status"],
                         delivery=order["delivery"],
                     )
-                    f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
-                    return save(f, body)
-                if src == "api_error":
-                    f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
-                    return save(f, _t(flow_lang, MSGS["order_lookup_error"]))
-                f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
-                return save(f, _t(flow_lang, MSGS["order_not_found"]))
-            f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
-            return save(f, _t(flow_lang, MSGS["ask_order"]))
-        if _looks_like_greeting(text):
-            f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
-            return save(f, _t(flow_lang, MSGS["verified_menu"]))
-        f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
-        return ai_forward("[Customer question] " + text, f, skip_api=True)
+                )
+                parts.append(_t(flow_lang, MSGS["verified_followup"]))
+                return save(base_f, "\n\n".join(parts))
+            if src == "api_error":
+                parts.append(_t(flow_lang, MSGS["order_lookup_error"]))
+                parts.append(_t(flow_lang, MSGS["verified_followup"]))
+                return save(base_f, "\n\n".join(parts))
+            parts.append(_t(flow_lang, MSGS["order_not_found"]))
+            parts.append(_t(flow_lang, MSGS["ask_order"]))
+            oid_flow = {**base_f, "step": "existing_awaiting_order_id"}
+            return save(oid_flow, "\n\n".join(parts))
+
+        if reason == "order":
+            parts.append(_t(flow_lang, MSGS["ask_order"]))
+            oid_flow = {**base_f, "step": "existing_awaiting_order_id"}
+            return save(oid_flow, "\n\n".join(parts))
+
+        parts.append(_t(flow_lang, MSGS["verified_followup"]))
+        return save(base_f, "\n\n".join(parts))
 
     if step == "existing_awaiting_order_id":
         raw = (text or "").strip()
@@ -684,7 +767,7 @@ async def process_customer_bot_message(
                 status=order["status"],
                 delivery=order["delivery"],
             )
-            f = {**flow, "step": "existing_verified_menu", "lang": flow_lang}
+            f = {**flow, "step": "conversational", "lang": flow_lang}
             return save(f, body)
         f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
         if src == "api_error":
@@ -692,80 +775,111 @@ async def process_customer_bot_message(
         return save(f, _t(flow_lang, MSGS["order_not_found"]))
 
     if step == "existing_awaiting_experience":
-        c2 = _parse_choice(
-            text,
-            {"1": "beginner", "2": "intermediate", "3": "expert"},
-        )
-        team_map = {
-            "beginner": TEAM_BEGINNER,
-            "intermediate": TEAM_INTERMEDIATE,
-            "expert": TEAM_EXPERT,
+        routed = TEAM_BEGINNER
+        f = {
+            **flow,
+            "experience_team": routed,
+            "step": "awaiting_agent",
+            "lang": flow_lang,
+            "pending_handoff_team": routed,
         }
-        if c2 in team_map:
-            routed = team_map[c2]
-            f = {
-                **flow,
-                "experience_team": routed,
-                "step": "awaiting_agent",
-                "lang": flow_lang,
-                "pending_handoff_team": routed,
-            }
-            return save(
-                f,
-                _t(flow_lang, MSGS["connecting"]),
-                team=routed,
-                esc=True,
-            )
         return save(
-            {**flow, "step": "existing_awaiting_experience", "lang": flow_lang},
-            _t(flow_lang, MSGS["experience"]),
+            f,
+            _t(flow_lang, MSGS["connecting"]),
+            team=routed,
+            esc=True,
         )
 
-    if step == "new_main_menu":
-        choice = _parse_choice(text, {"1": "products", "2": "info", "3": "support"})
-        if choice == "products":
-            f = {**flow, "step": "new_main_menu", "lang": flow_lang}
-            return save(f, _t(flow_lang, MSGS["products_hint"]))
-        if choice == "info":
-            f = {**flow, "step": "new_main_menu", "lang": flow_lang}
+    if step == "conversational":
+        if (
+            _looks_like_order_status_question(text) or _looks_like_account_question(text)
+        ) and _needs_account_verification(flow):
+            pre_ref = ""
+            if _is_likely_order_id_only(text):
+                pre_ref = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
+            else:
+                pre_ref = (_extract_order_id_from_message(text, phone) or "").strip()
+            reason = "order" if _looks_like_order_status_question(text) else "account"
+            if verification_expired_this_turn:
+                intro_key = "verification_expired_reverify"
+            else:
+                intro_key = "order_verify_intro" if reason == "order" else "account_verify_intro"
+            f = {
+                **flow,
+                "step": "existing_awaiting_email",
+                "verify_reason": reason,
+                "pending_order_ref": pre_ref or None,
+                "intro_shown": True,
+                "lang": flow_lang,
+            }
+            return save(f, _t(flow_lang, MSGS[intro_key]))
+
+        if flow.get("verified"):
+            if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
+                ref = ""
+                if _is_likely_order_id_only(text):
+                    ref = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
+                else:
+                    ref = (_extract_order_id_from_message(text, phone) or "").strip()
+                if ref:
+                    order, src = await _lookup_order(db, tenant_id, ref, store_client)
+                    if order:
+                        body = _t(flow_lang, MSGS["order_found"]).format(
+                            order_id=order["order_number"],
+                            status=order["status"],
+                            delivery=order["delivery"],
+                        )
+                        f = {**flow, "step": "conversational", "lang": flow_lang}
+                        return save(f, body)
+                    if src == "api_error":
+                        f = {**flow, "step": "conversational", "lang": flow_lang}
+                        return save(f, _t(flow_lang, MSGS["order_lookup_error"]))
+                    f = {**flow, "step": "conversational", "lang": flow_lang}
+                    return save(f, _t(flow_lang, MSGS["order_not_found"]))
+                nf = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
+                return save(nf, _t(flow_lang, MSGS["ask_order"]))
+            if _looks_like_account_question(text):
+                return ai_forward(
+                    "[Customer account question] " + text,
+                    {**flow, "step": "conversational"},
+                    skip_api=False,
+                )
+            if _looks_like_free_text_question(text):
+                return ai_forward(
+                    "[Customer question] " + text,
+                    {**flow, "step": "conversational"},
+                    skip_api=False,
+                )
+            if _looks_like_greeting(text):
+                return save(
+                    {**flow, "step": "conversational"},
+                    _t(flow_lang, MSGS["hello_ack"]),
+                )
             return ai_forward(
-                "[Customer selected: get information — answer from knowledge base, concise.] "
-                + text,
-                f,
+                "[Customer question] " + text,
+                {**flow, "step": "conversational"},
+                skip_api=False,
+            )
+
+        if _looks_like_free_text_question(text):
+            return ai_forward(
+                "[Customer question] " + text,
+                {**flow, "step": "conversational", "intro_shown": True},
                 skip_api=True,
             )
-        if choice == "support":
-            f = {
-                **flow,
-                "step": "awaiting_agent",
-                "lang": flow_lang,
-                "pending_handoff_team": TEAM_NEW_CUSTOMER,
-            }
-            return save(
-                f,
-                _t(flow_lang, MSGS["connecting"]),
-                team=TEAM_NEW_CUSTOMER,
-                esc=True,
-            )
-        # FAQ/info questions should be answered directly from KB in new customer flow.
-        if _looks_like_free_text_question(text):
-            f = {**flow, "step": "new_main_menu", "lang": flow_lang}
-            return ai_forward(text, f, skip_api=True)
-        if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
-            f = _state_back_to_customer_pick(flow)
-            return save(
-                f,
-                _t(flow_lang, MSGS["new_customer_order_use_existing_flow"]),
-            )
         if _looks_like_greeting(text):
-            f = {**flow, "step": "new_main_menu", "lang": flow_lang}
-            return save(f, _t(flow_lang, MSGS["new_menu_after_greeting"]))
-        # Free-form question → AI, no store API
-        f = {**flow, "step": "new_main_menu", "lang": flow_lang}
-        return ai_forward(text, f, skip_api=True)
+            return save(
+                {**flow, "step": "conversational", "intro_shown": True},
+                _t(flow_lang, MSGS["hello_ack"]),
+            )
+        return ai_forward(
+            text,
+            {**flow, "step": "conversational", "intro_shown": True},
+            skip_api=True,
+        )
 
     if step == "awaiting_agent":
-        if flow.get("customer_kind") == "existing" and flow.get("verified"):
+        if flow.get("verified"):
             team = (
                 flow.get("pending_handoff_team")
                 or flow.get("experience_team")
@@ -784,25 +898,21 @@ async def process_customer_bot_message(
                 esc=True,
                 skip_api=False,
             )
-        if flow.get("customer_kind") == "new":
-            team = flow.get("pending_handoff_team") or TEAM_NEW_CUSTOMER
-            f = {
-                **flow,
-                "customer_kind": "new",
-                "step": "awaiting_agent",
-                "lang": flow_lang,
-                "pending_handoff_team": team,
-            }
-            return save(
-                f,
-                _t(flow_lang, MSGS["handoff_retry"]),
-                team=team,
-                esc=True,
-                skip_api=True,
-            )
-        nf = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
-        return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=False)
+        team = flow.get("pending_handoff_team") or TEAM_NEW_CUSTOMER
+        f = {
+            **flow,
+            "step": "awaiting_agent",
+            "lang": flow_lang,
+            "pending_handoff_team": team,
+        }
+        return save(
+            f,
+            _t(flow_lang, MSGS["handoff_retry"]),
+            team=team,
+            esc=True,
+            skip_api=True,
+        )
 
-    # Unknown step — reset
-    f = {"step": "awaiting_customer_type", "intro_shown": False, "lang": flow_lang}
-    return save(f, _t(flow_lang, MSGS["entry"]), skip_api=False)
+    # Unknown / legacy step — migrate to conversational greeting
+    nf = _reset_bot_flow(flow_lang)
+    return save(nf, _t(flow_lang, MSGS["greeting"]), skip_api=False)

@@ -110,6 +110,10 @@ def wants_bot_flow_reset(text: str) -> bool:
     s = _nfkc(raw)
     lowered = s.lower()
 
+    lowered_stripped = lowered.strip()
+    if lowered_stripped == "reset":
+        return True
+
     latin = (
         "start over",
         "start again",

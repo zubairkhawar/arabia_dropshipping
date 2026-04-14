@@ -12,14 +12,9 @@ import { SoundAlertsBridge } from '@/components/agent/SoundAlertsBridge';
 import { NotificationsProvider } from '@/contexts/NotificationsContext';
 import { AgentSearchProvider } from '@/contexts/AgentSearchContext';
 import { useSidebar } from '@/contexts/SidebarContext';
-import { clearAuthAgentId } from '@/lib/agent-session-storage';
+import { clearAuthSession, API_BASE_URL } from '@/lib/auth-session';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  'https://arabia-dropshipping.onrender.com';
 
 function AgentLayoutContent({ children }: { children: React.ReactNode }) {
   const { isCollapsed } = useSidebar();
@@ -40,15 +35,11 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
 
         const authHeaders = { Authorization: `Bearer ${token}` };
         const [meRes, agentMeRes] = await Promise.all([
-          fetch(`${API_BASE}/api/auth/me`, { method: 'GET', headers: authHeaders }),
-          fetch(`${API_BASE}/api/agents/me`, { method: 'GET', headers: authHeaders }),
+          fetch(`${API_BASE_URL}/api/auth/me`, { method: 'GET', headers: authHeaders }),
+          fetch(`${API_BASE_URL}/api/agents/me`, { method: 'GET', headers: authHeaders }),
         ]);
         if (!meRes.ok) {
-          localStorage.removeItem('auth_token');
-          localStorage.removeItem('auth_token_type');
-          localStorage.removeItem('auth_email');
-          localStorage.removeItem('auth_role');
-          clearAuthAgentId();
+          clearAuthSession();
           router.replace('/login');
           return;
         }
@@ -60,17 +51,13 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
         }
 
         if (!agentMeRes.ok) {
-          localStorage.removeItem('auth_token');
-          localStorage.removeItem('auth_token_type');
-          localStorage.removeItem('auth_email');
-          localStorage.removeItem('auth_role');
-          clearAuthAgentId();
+          clearAuthSession();
           router.replace('/login');
           return;
         }
         if (!cancelled) setAuthChecked(true);
       } catch {
-        clearAuthAgentId();
+        clearAuthSession();
         router.replace('/login');
       }
     };

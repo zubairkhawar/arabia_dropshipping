@@ -49,30 +49,31 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Bot se dubara baat karne ke liye /reset bhejein"
         ),
     },
-    "entry": {
+    "hello_ack": {
+        "english": "Hello! How can I help today?",
+        "arabic": "مرحبًا! كيف يمكنني مساعدتك اليوم؟",
+        "roman_urdu": "Hello! Aaj kya madad karoon?",
+    },
+    "greeting": {
         "english": (
-            "Hi! Welcome to Arabia Dropshipping 😊\n\n"
-            "Are you:\n\n"
-            "1️⃣ New customer\n"
-            "2️⃣ Existing customer\n\n"
-            "Reply with 1 or 2 😊\n"
-            "Tip: type /reset anytime to restart this menu."
+            "Hello. I'm Arabia Dropbot, your assistant for Arabia Dropshipping. How can I help?"
         ),
         "arabic": (
-            "السلام عليكم! مرحبًا بك في Arabia Dropshipping 😊\n\n"
-            "هل أنت:\n\n"
-            "1️⃣ عميل جديد\n"
-            "2️⃣ عميل حالي\n\n"
-            "يرجى الرد بـ 1 أو 2 😊\n"
-            "لإعادة القائمة اكتب /reset"
+            "مرحبًا، أنا Arabia Dropbot، مساعدك في Arabia Dropshipping. كيف يمكنني مساعدتك؟"
         ),
         "roman_urdu": (
-            "Salam! Welcome to Arabia Dropshipping 😊\n\n"
-            "Aap new customer hain ya existing customer?\n\n"
-            "1️⃣ New customer\n"
-            "2️⃣ Existing customer\n\n"
-            "Reply mein 1 ya 2 likh dein 😊\n"
-            "Menu dubara ke liye /reset likhein"
+            "Hello, main Arabia Dropbot hoon — Arabia Dropshipping ka assistant. Kaise madad karoon?"
+        ),
+    },
+    "entry": {
+        "english": (
+            "Hello. I'm Arabia Dropbot, your assistant for Arabia Dropshipping. How can I help?"
+        ),
+        "arabic": (
+            "مرحبًا، أنا Arabia Dropbot، مساعدك في Arabia Dropshipping. كيف يمكنني مساعدتك؟"
+        ),
+        "roman_urdu": (
+            "Hello, main Arabia Dropbot hoon — Arabia Dropshipping ka assistant. Kaise madad karoon?"
         ),
     },
     "new_welcome": {
@@ -127,24 +128,58 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Ya apna sawal likh dein"
         ),
     },
-    "new_customer_order_use_existing_flow": {
+    "order_verify_intro": {
         "english": (
-            "📦 Order status is only available in the Existing customer flow (verify → Track order).\n\n"
-            "Please reply with 2 (Existing customer), complete verification, then choose Track order and send your Order ID."
+            "I can help you check your order status.\n\n"
+            "To do this, I need to verify your account first.\n\n"
+            "Please reply with your email address associated with your account."
         ),
         "arabic": (
-            "📦 حالة الطلب متاحة فقط في مسار عميل حالي (تحقق ← تتبع الطلب).\n\n"
-            "يرجى الرد بـ 2 (عميل حالي)، ثم أكمل التحقق واختر تتبع الطلب وأرسل رقم الطلب."
+            "يمكنني مساعدتك في التحقق من حالة طلبك.\n\n"
+            "لذلك أحتاج أولاً إلى التحقق من حسابك.\n\n"
+            "يرجى إرسال عنوان البريد الإلكتروني المرتبط بحسابك."
         ),
         "roman_urdu": (
-            "📦 Order status sirf Existing customer flow mein milta hai (verify → Order track).\n\n"
-            "Please 2 (Existing customer) reply karein, verify complete karein, phir Order track choose karke Order ID bhejein."
+            "Main aap ki order status check karne mein madad kar sakta hoon.\n\n"
+            "Is ke liye pehle aap ka account verify karna zaroori hai.\n\n"
+            "Apne account se jura hua email address bhejein."
+        ),
+    },
+    "verification_expired_reverify": {
+        "english": (
+            "Your previous verification has expired for security.\n\n"
+            "Please verify again. Send your email address."
+        ),
+        "arabic": (
+            "انتهت صلاحية التحقق السابق لأسباب أمنية.\n\n"
+            "يرجى التحقق مرة أخرى. أرسل عنوان بريدك الإلكتروني."
+        ),
+        "roman_urdu": (
+            "Security ki wajah se aap ka pehla verification expire ho chuka hai.\n\n"
+            "Dobara verify karein. Apna email address bhejein."
+        ),
+    },
+    "account_verify_intro": {
+        "english": (
+            "I can help with account details (orders, invoices, etc.).\n\n"
+            "To do this, I need to verify your account first.\n\n"
+            "Please reply with your email address associated with your account."
+        ),
+        "arabic": (
+            "يمكنني المساعدة في تفاصيل الحساب (الطلبات، الفواتير، وغيرها).\n\n"
+            "لذلك أحتاج أولاً إلى التحقق من حسابك.\n\n"
+            "يرجى إرسال عنوان البريد الإلكتروني المرتبط بحسابك."
+        ),
+        "roman_urdu": (
+            "Main account se mutaliq cheezon (orders, invoices, waghera) mein madad kar sakta hoon.\n\n"
+            "Is ke liye pehle aap ka account verify karna zaroori hai.\n\n"
+            "Apne account se jura hua email address bhejein."
         ),
     },
     "ask_email": {
-        "english": "Please provide your email address ✉️",
-        "arabic": "يرجى إدخال بريدك الإلكتروني ✉️",
-        "roman_urdu": "Apna email address bhejein ✉️",
+        "english": "Please reply with your email address associated with your account.",
+        "arabic": "يرجى إرسال عنوان البريد الإلكتروني المرتبط بحسابك.",
+        "roman_urdu": "Apne account se jura hua email address bhejein.",
     },
     "email_invalid": {
         "english": "Please enter a valid email address (example: name@email.com).",
@@ -152,14 +187,44 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": "Please valid email likhein (misal: name@email.com).",
     },
     "code_sent": {
-        "english": "Verification code sent to your email. Please enter the code 🔐",
-        "arabic": "تم إرسال رمز التحقق إلى بريدك الإلكتروني. يرجى إدخال الرمز 🔐",
-        "roman_urdu": "Verification code email par bhej diya gaya hai. Code enter karein 🔐",
+        "english": (
+            "I've sent a 6-digit verification code to {email}.\n\n"
+            "Please enter the code here.\n\n"
+            "The code expires in 5 minutes.\n\n"
+            "Type \"resend\" to get a new code."
+        ),
+        "arabic": (
+            "أرسلتُ رمز تحقق مكوّن من 6 أرقام إلى {email}.\n\n"
+            "يرجى إدخال الرمز هنا.\n\n"
+            "تنتهي صلاحية الرمز خلال 5 دقائق.\n\n"
+            "اكتب \"resend\" لإرسال رمز جديد."
+        ),
+        "roman_urdu": (
+            "Main ne {email} par 6 digit ka verification code bhej diya hai.\n\n"
+            "Yahan code enter karein.\n\n"
+            "Code 5 minute mein expire ho jata hai.\n\n"
+            "Naya code ke liye \"resend\" likhein."
+        ),
     },
     "verify": {
-        "english": "Please enter your verification code 🔐",
-        "arabic": "يرجى إدخال رمز التحقق 🔐",
-        "roman_urdu": "Apna verification code enter karein 🔐",
+        "english": (
+            "I've sent a 6-digit verification code to {email}.\n\n"
+            "Please enter the code here.\n\n"
+            "The code expires in 5 minutes.\n\n"
+            "Type \"resend\" to get a new code."
+        ),
+        "arabic": (
+            "أرسلتُ رمز تحقق مكوّن من 6 أرقام إلى {email}.\n\n"
+            "يرجى إدخال الرمز هنا.\n\n"
+            "تنتهي صلاحية الرمز خلال 5 دقائق.\n\n"
+            "اكتب \"resend\" لإرسال رمز جديد."
+        ),
+        "roman_urdu": (
+            "Main ne {email} par 6 digit ka verification code bhej diya hai.\n\n"
+            "Yahan code enter karein.\n\n"
+            "Code 5 minute mein expire ho jata hai.\n\n"
+            "Naya code ke liye \"resend\" likhein."
+        ),
     },
     "verify_send_error": {
         "english": "We couldn't send a verification code right now. Please recheck your email and try again.",
@@ -181,29 +246,20 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "لم نعثر على عميل بهذا البريد والجوال. يرجى التحقق وإرسال رقم الجوال مرة أخرى.",
         "roman_urdu": "Is email aur mobile par customer nahi mila. Mobile dobara check karke bhejein.",
     },
+    "verification_success": {
+        "english": "✅ Verified!",
+        "arabic": "✅ تم التحقق!",
+        "roman_urdu": "✅ Verified!",
+    },
+    "verified_followup": {
+        "english": "Need anything else?",
+        "arabic": "هل تحتاج إلى أي شيء آخر؟",
+        "roman_urdu": "Aur kuch madad chahiye?",
+    },
     "verified_menu": {
-        "english": (
-            "✅ Verified successfully!\n\n"
-            "How can we assist you?\n\n"
-            "1️⃣ Track your order 📦\n"
-            "2️⃣ Order details 📄\n"
-            "3️⃣ Talk to support\n\n"
-            "Or type your question"
-        ),
-        "arabic": (
-            "✅ تم التحقق بنجاح!\n\n"
-            "كيف يمكننا مساعدتك؟\n\n"
-            "1️⃣ تتبع الطلب 📦\n"
-            "2️⃣ تفاصيل الطلب 📄\n"
-            "3️⃣ التحدث مع الدعم"
-        ),
-        "roman_urdu": (
-            "✅ Verification successful!\n\n"
-            "Aap kya karna chahte hain?\n\n"
-            "1️⃣ Order track karein 📦\n"
-            "2️⃣ Order details dekhein 📄\n"
-            "3️⃣ Support se baat karein"
-        ),
+        "english": "✅ Verified! How can I help you next?",
+        "arabic": "✅ تم التحقق! كيف يمكنني مساعدتك الآن؟",
+        "roman_urdu": "✅ Verified! Ab kya madad karoon?",
     },
     "ask_order": {
         "english": "📦 Please enter your Order ID:",
@@ -325,22 +381,38 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "3️⃣ 3+ saal"
         ),
     },
+    "kb_default_source": {
+        "english": "Arabia Dropshipping knowledge base",
+        "arabic": "قاعدة معلومات Arabia Dropshipping",
+        "roman_urdu": "Arabia Dropshipping knowledge base",
+    },
     "kb_wrap": {
         "english": (
-            "💡 Here's what you need to know:\n\n{body}\n\n"
-            "Need more help? Type support\n"
-            "To see the main choices again, type main menu."
+            "Based on our information:\n\n{body}\n\n"
+            "📌 Source: {source}\n\n"
+            "Was this helpful? If not, you can:\n"
+            "• Ask me to explain differently\n"
+            "• Type \"agent\" to speak with a human"
         ),
         "arabic": (
-            "💡 إليك المعلومات:\n\n{body}\n\n"
-            "لمزيد من المساعدة اكتب support\n"
-            "لعرض الخيارات من جديد اكتب: القائمة الرئيسية"
+            "بناءً على معلوماتنا:\n\n{body}\n\n"
+            "📌 المصدر: {source}\n\n"
+            "هل كان هذا مفيدًا؟ إن لم يكن، يمكنك:\n"
+            "• أن تطلب مني الشرح بطريقة أخرى\n"
+            "• كتابة \"agent\" للتحدث مع موظف"
         ),
         "roman_urdu": (
-            "💡 Yeh information aap ke liye:\n\n{body}\n\n"
-            "Mazeed madad ke liye support likhein\n"
-            "Menu dubara dekhne ke liye likhein: main menu"
+            "Hamari information ke mutabiq:\n\n{body}\n\n"
+            "📌 Source: {source}\n\n"
+            "Kya yeh helpful tha? Agar nahi, to:\n"
+            "• Mujh se doosre andaaz mein samjhane ko keh sakte hain\n"
+            "• Insaan se baat ke liye \"agent\" likhein"
         ),
+    },
+    "unknown_info": {
+        "english": 'I don\'t have that information. Type "agent" to speak with a human.',
+        "arabic": "لا تتوفر لدي هذه المعلومة. اكتب \"agent\" للتحدث مع موظف.",
+        "roman_urdu": "Mere paas yeh information nahi hai. Insaan se baat ke liye \"agent\" likhein.",
     },
     "products_hint": {
         "english": "Browse products section is available. You can also type your question.",
@@ -349,16 +421,16 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "fallback": {
         "english": (
-            "I didn’t understand that 🤔\n"
-            "Please choose an option or type your question."
+            "I didn’t catch that 🤔\n"
+            "Ask your question in one message, or type \"agent\" for a human."
         ),
         "arabic": (
             "لم أفهم ذلك 🤔\n"
-            "يرجى اختيار خيار أو كتابة سؤالك."
+            "اكتب سؤالك في رسالة واحدة، أو اكتب \"agent\" للتحدث مع موظف."
         ),
         "roman_urdu": (
-            "Mujhay samajh nahi aaya 🤔\n"
-            "Please option select karein ya sawal likhein."
+            "Samajh nahi aaya 🤔\n"
+            "Apna sawal ek message mein likhein, ya insaan ke liye \"agent\" likhein."
         ),
     },
 }

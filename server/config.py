@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # set CUSTOMER_BOT_INACTIVITY_RESET_DAYS=0 to disable.
     customer_bot_inactivity_reset_days: int = 7
 
+    # Customer bot: script verification (email/mobile) expires after N days. Default 3;
+    # set CUSTOMER_BOT_VERIFICATION_EXPIRY_DAYS=0 to disable auto-expiry.
+    customer_bot_verification_expiry_days: int = 3
+
     # Application
     environment: str = "development"
     debug: bool = True
