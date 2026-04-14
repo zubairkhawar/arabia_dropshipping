@@ -1,6 +1,7 @@
 from datetime import datetime
 import base64
 from io import BytesIO
+import logging
 import re
 from typing import List, Optional, Dict, Any, Tuple
 
@@ -14,6 +15,7 @@ from models import KnowledgeSource
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeSourceIn(BaseModel):
@@ -64,21 +66,73 @@ def _clean_text(raw: str) -> str:
     return txt
 
 
-def _chunk_text(text: str, chunk_size: int = 900, overlap: int = 150) -> List[str]:
+def _split_sentences(text: str) -> List[str]:
+    # Keep punctuation-boundary chunks where possible.
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    return [p.strip() for p in parts if p and p.strip()]
+
+
+def _chunk_text(
+    text: str,
+    chunk_size: int = 900,
+    overlap: int = 150,
+    *,
+    source_name: str = "unknown",
+) -> List[Dict[str, Any]]:
     if not text:
         return []
     size = max(300, chunk_size)
     ov = max(0, min(overlap, size // 2))
-    chunks: List[str] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        end = min(n, i + size)
-        chunks.append(text[i:end].strip())
-        if end >= n:
-            break
-        i = max(i + 1, end - ov)
-    return [c for c in chunks if c]
+    normalized = re.sub(r"\n{3,}", "\n\n", text).strip()
+    paragraphs = [p.strip() for p in normalized.split("\n\n") if p.strip()]
+    units: List[str] = []
+    for para in paragraphs if paragraphs else [normalized]:
+        sentences = _split_sentences(para)
+        if sentences:
+            units.extend(sentences)
+        elif para:
+            units.append(para)
+
+    windows: List[str] = []
+    current = ""
+    for unit in units:
+        candidate = (f"{current} {unit}".strip() if current else unit).strip()
+        if len(candidate) <= size:
+            current = candidate
+            continue
+        if current:
+            windows.append(current)
+            # overlap by trailing chars from previous chunk
+            current = (current[-ov:] + " " + unit).strip() if ov > 0 else unit
+        else:
+            # very long sentence fallback: hard split
+            start = 0
+            while start < len(unit):
+                end = min(len(unit), start + size)
+                windows.append(unit[start:end].strip())
+                if end >= len(unit):
+                    break
+                start = max(start + 1, end - ov)
+            current = ""
+    if current:
+        windows.append(current)
+
+    out: List[Dict[str, Any]] = []
+    cursor = 0
+    for idx, chunk_text in enumerate([w for w in windows if w]):
+        start_pos = max(0, normalized.find(chunk_text[:40], cursor))
+        end_pos = start_pos + len(chunk_text)
+        cursor = max(cursor, end_pos - ov)
+        out.append(
+            {
+                "text": chunk_text,
+                "index": idx,
+                "source": source_name,
+                "start_char": start_pos,
+                "end_char": end_pos,
+            }
+        )
+    return out
 
 
 async def _fetch_url_text(url: str) -> str:
@@ -128,15 +182,17 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
         if not text:
             md["last_error"] = "No readable content fetched from URL"
             return "error", 0, md
-        chunks = _chunk_text(text)
+        chunks = _chunk_text(text, source_name=src.name)
         md["chunks"] = chunks
+        md["chunk_schema"] = "v2_object"
         md["content_preview"] = text[:500]
         return "ready", len(chunks), md
 
     if src.type == "api":
         text = _build_api_source_text(src)
-        chunks = _chunk_text(text, chunk_size=700, overlap=80)
+        chunks = _chunk_text(text, chunk_size=700, overlap=80, source_name=src.name)
         md["chunks"] = chunks
+        md["chunk_schema"] = "v2_object"
         md["content_preview"] = text[:500]
         return "ready", len(chunks), md
 
@@ -167,21 +223,31 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                         for page in reader.pages:
                             pages.append((page.extract_text() or "").strip())
                         text = "\n".join(p for p in pages if p).strip()
-                    except Exception:
-                        # pypdf unavailable or parse failed
+                    except Exception as e:
+                        logger.error("PDF extraction failed for %s: %s", src.name, e)
                         text = ""
             except Exception:
                 text = ""
 
     if text:
         cleaned = _clean_text(text)
-        chunks = _chunk_text(cleaned)
+        chunks = _chunk_text(cleaned, source_name=src.name)
         md["chunks"] = chunks
+        md["chunk_schema"] = "v2_object"
         md["content_preview"] = cleaned[:500]
         return "ready", len(chunks), md
 
     filename = str(md.get("filename") or src.name or "file").strip()
-    md["chunks"] = [f"File source connected: {filename}"]
+    md["chunks"] = [
+        {
+            "text": f"File source connected: {filename}",
+            "index": 0,
+            "source": src.name,
+            "start_char": 0,
+            "end_char": len(filename),
+        }
+    ]
+    md["chunk_schema"] = "v2_object"
     md["content_preview"] = f"File source connected: {filename}"
     return "ready", 1, md
 

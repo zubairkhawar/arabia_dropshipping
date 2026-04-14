@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 from typing import Any, Dict, List, Optional
 
 from langchain_openai import ChatOpenAI
@@ -71,6 +72,7 @@ class ArabiaLangChainBot:
         user_message: str,
         max_items: int = 8,
         max_chunks: int = 8,
+        min_score: int = 1,
     ) -> str:
         rows = (
             self.db.query(KnowledgeSource)
@@ -85,7 +87,7 @@ class ArabiaLangChainBot:
         if not rows:
             return "No knowledge sources connected."
 
-        tokens = set((user_message or "").lower().split())
+        tokens = self._normalized_query_tokens(user_message)
         scored_chunks: List[tuple[int, str]] = []
         items: List[str] = []
         for src in rows:
@@ -93,13 +95,13 @@ class ArabiaLangChainBot:
             chunk_list = metadata.get("chunks")
             if isinstance(chunk_list, list):
                 for chunk in chunk_list:
-                    if not isinstance(chunk, str):
+                    chunk_text = self._chunk_text_value(chunk)
+                    if not chunk_text:
                         continue
-                    low = chunk.lower()
-                    score = sum(1 for t in tokens if len(t) > 2 and t in low)
-                    if score <= 0 and tokens:
+                    score = self._score_chunk_overlap(tokens, chunk_text)
+                    if score < max(min_score, 0) and tokens:
                         continue
-                    scored_chunks.append((score, f"[{src.name}] {chunk[:700]}"))
+                    scored_chunks.append((score, f"[{src.name}] {chunk_text[:700]}"))
             if src.type == "api":
                 base_url = src.url or metadata.get("base_url") or "N/A"
                 schema_notes = metadata.get("schema_notes") or ""
@@ -122,6 +124,64 @@ class ArabiaLangChainBot:
                 ]
             )
         return "\n".join(items)
+
+    def _normalize_token(self, token: str) -> str:
+        t = re.sub(r"[^a-z0-9]", "", (token or "").lower()).strip()
+        if len(t) <= 3:
+            return t
+        if t.endswith("ies") and len(t) > 4:
+            t = t[:-3] + "y"
+        for suffix in ("ing", "edly", "ed", "ly", "es", "s"):
+            if t.endswith(suffix) and len(t) - len(suffix) >= 3:
+                t = t[: -len(suffix)]
+                break
+        return t
+
+    def _normalized_query_tokens(self, text: str) -> set[str]:
+        out: set[str] = set()
+        for tok in (text or "").lower().split():
+            nt = self._normalize_token(tok)
+            if len(nt) > 2:
+                out.add(nt)
+        return out
+
+    def _score_chunk_overlap(self, tokens: set[str], chunk_text: str) -> int:
+        if not tokens:
+            return 0
+        chunk_tokens = {
+            self._normalize_token(tok)
+            for tok in re.split(r"\W+", (chunk_text or "").lower())
+            if tok
+        }
+        return sum(1 for t in tokens if t and t in chunk_tokens)
+
+    def _chunk_text_value(self, chunk: Any) -> str:
+        if isinstance(chunk, str):
+            return chunk
+        if isinstance(chunk, dict):
+            txt = chunk.get("text")
+            if isinstance(txt, str):
+                return txt
+        return ""
+
+    def _build_knowledge_context_embeddings(
+        self,
+        tenant_id: int,
+        *,
+        user_message: str,
+        max_items: int = 8,
+        max_chunks: int = 8,
+    ) -> str:
+        """
+        Optional semantic retrieval hook.
+        TODO: integrate pgvector/external embeddings; currently falls back to token overlap.
+        """
+        return self._build_knowledge_context(
+            tenant_id,
+            user_message=user_message,
+            max_items=max_items,
+            max_chunks=max_chunks,
+        )
 
     def _conversation_history_block(
         self,
