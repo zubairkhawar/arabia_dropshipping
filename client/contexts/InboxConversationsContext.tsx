@@ -293,12 +293,8 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     if (!res.ok) return [];
     const rows = (await res.json()) as ConversationSummaryApi[];
     if (isAgentPortal) return rows;
-    // Admin: show assigned chats plus active bot-queue (WhatsApp/web) so handoffs and stuck flows are visible
-    return rows.filter(
-      (c) =>
-        c.agent_id != null ||
-        ((c.channel === 'whatsapp' || c.channel === 'web') && c.status === 'active'),
-    );
+    // Admin: show all conversations — bot-handled, agent-handled, and closed
+    return rows;
   }, [currentAgentId, isAgentPortal]);
 
   const mapDetailToMessages = useCallback(

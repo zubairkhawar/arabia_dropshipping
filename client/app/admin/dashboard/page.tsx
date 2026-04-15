@@ -17,8 +17,7 @@ const TENANT_ID = 1;
 interface DashboardAnalyticsApi {
   total_conversations: number;
   total_conversations_change_percent: number;
-  total_messages: number;
-  total_messages_change_percent: number;
+  ai_handled_conversations: number;
   ai_handled_percent: number;
   total_agents: number;
   active_agents: number;
@@ -26,7 +25,7 @@ interface DashboardAnalyticsApi {
 }
 
 interface AgentActivityApi {
-  days: Record<string, { customer: number; agent: number; ai: number }>;
+  days: Record<string, { conversations_handled: number; agent_messages: number; ai_messages: number; customer_messages: number }>;
 }
 
 interface LanguageDistributionApi {
@@ -67,8 +66,8 @@ export default function AdminDashboard() {
         const activitySeries = Object.entries(activityData.days)
           .sort(([a], [b]) => (a > b ? 1 : -1))
           .map(([isoDate, counts]) => ({
-            name: new Date(isoDate).toLocaleDateString(undefined, { weekday: 'short' }),
-            active: counts.agent ?? 0,
+            name: new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short' }),
+            active: counts.conversations_handled ?? 0,
           }));
 
         setDashboard(dashboardData);
@@ -97,9 +96,8 @@ export default function AdminDashboard() {
   }, [toast]);
 
   const totalConversations = dashboard?.total_conversations ?? 0;
-  const totalMessages = dashboard?.total_messages ?? 0;
+  const aiHandledConversations = dashboard?.ai_handled_conversations ?? 0;
   const aiHandledPercent = dashboard?.ai_handled_percent ?? 0;
-  const aiHandledMessages = Math.round(totalMessages * (aiHandledPercent / 100));
   const totalAgents = dashboard?.total_agents ?? 0;
   const activeAgents = dashboard?.active_agents ?? 0;
   const conversationsChange = dashboard?.total_conversations_change_percent ?? 0;
@@ -127,8 +125,8 @@ export default function AdminDashboard() {
         />
         <KPICard
           title="AI Handled"
-          value={aiHandledMessages.toLocaleString()}
-          change={`${aiHandledPercent.toFixed(1)}% of total`}
+          value={aiHandledConversations.toLocaleString()}
+          change={`${aiHandledPercent.toFixed(1)}% of conversations`}
           changeType="positive"
           icon={<Bot className={iconClass} />}
         />
@@ -152,7 +150,7 @@ export default function AdminDashboard() {
         <div className="bg-white rounded-lg p-6 border border-border shadow-sm">
           <h3 className="text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
             <Activity className="w-5 h-5 text-primary" />
-            Agent Activity
+            Agent Activity (Conversations Handled)
           </h3>
           {isLoading ? (
             <div className="h-[280px] flex items-center justify-center text-sm text-text-secondary">

@@ -7,12 +7,10 @@ const API_BASE =
 
 /**
  * Marks the current agent offline using a keepalive request so it still runs when the tab closes.
- * Skips when the user explicitly chose Offline (already offline on the server).
  */
 export function sendAgentOfflineKeepalive(): void {
   if (typeof window === 'undefined') return;
   try {
-    if (sessionStorage.getItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY) === '1') return;
     const id = readAuthAgentId();
     const token = localStorage.getItem('auth_token');
     const role = (localStorage.getItem('auth_role') || '').toLowerCase();

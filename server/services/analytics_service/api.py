@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, case
+from sqlalchemy import func, case, distinct
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -20,13 +20,12 @@ async def get_dashboard_analytics(
     """
     High-level dashboard analytics used by the admin dashboard.
     Returns:
-    - total_conversations
+    - total_conversations (all conversations in the period)
     - total_conversations_change_percent (vs previous period)
-    - total_messages
-    - total_messages_change_percent (vs previous period, kept for compatibility)
+    - ai_handled_conversations (conversations handled entirely by AI, no agent assigned)
+    - ai_handled_percent (percentage of total conversations handled by AI)
     - total_agents
     - active_agents (online)
-    - ai_handled_percent (messages from AI vs total)
     """
     now = datetime.utcnow()
     period_start = now - timedelta(days=days)
@@ -66,52 +65,22 @@ async def get_dashboard_analytics(
             / total_conversations_prev
         ) * 100.0
 
-    # Total messages current period
-    total_current = (
-        db.query(func.count(Message.id))
-        .join(Conversation, Message.conversation_id == Conversation.id)
+    # AI-handled conversations: conversations where no agent was ever assigned
+    ai_handled_conversations = (
+        db.query(func.count(Conversation.id))
         .filter(
             Conversation.tenant_id == tenant_id,
-            Message.created_at >= period_start,
-            Message.created_at <= now,
-        )
-        .scalar()
-        or 0
-    )
-
-    # Total messages previous period
-    total_prev = (
-        db.query(func.count(Message.id))
-        .join(Conversation, Message.conversation_id == Conversation.id)
-        .filter(
-            Conversation.tenant_id == tenant_id,
-            Message.created_at >= prev_start,
-            Message.created_at < period_start,
-        )
-        .scalar()
-        or 0
-    )
-
-    if total_prev == 0:
-        total_change_percent = 100.0 if total_current > 0 else 0.0
-    else:
-        total_change_percent = ((total_current - total_prev) / total_prev) * 100.0
-
-    # AI handled messages share
-    ai_messages = (
-        db.query(func.count(Message.id))
-        .join(Conversation, Message.conversation_id == Conversation.id)
-        .filter(
-            Conversation.tenant_id == tenant_id,
-            Message.sender_type == "ai",
-            Message.created_at >= period_start,
-            Message.created_at <= now,
+            Conversation.agent_id.is_(None),
+            Conversation.created_at >= period_start,
+            Conversation.created_at <= now,
         )
         .scalar()
         or 0
     )
     ai_handled_percent = (
-        (ai_messages / total_current) * 100.0 if total_current > 0 else 0.0
+        (ai_handled_conversations / total_conversations_current) * 100.0
+        if total_conversations_current > 0
+        else 0.0
     )
 
     # Agent counts
@@ -131,8 +100,7 @@ async def get_dashboard_analytics(
     return {
         "total_conversations": total_conversations_current,
         "total_conversations_change_percent": total_conversations_change_percent,
-        "total_messages": total_current,
-        "total_messages_change_percent": total_change_percent,
+        "ai_handled_conversations": ai_handled_conversations,
         "ai_handled_percent": ai_handled_percent,
         "total_agents": total_agents,
         "active_agents": active_agents,
@@ -147,14 +115,35 @@ async def get_agent_activity(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """
-    Time-series of messages by day, split by sender_type.
-    Used for "Agent Activity" chart.
+    Time-series of daily activity used for the "Agent Activity" chart.
+    Returns per-day:
+    - conversations_handled: distinct conversations where an agent sent at least one message
+    - agent_messages: total agent messages
+    - ai_messages: total AI bot messages
     """
     now = datetime.utcnow()
     start = now - timedelta(days=days)
 
-    # Group by date and sender_type (use SQL date() for broad DB compatibility)
-    rows = (
+    # Conversations handled by agents per day (distinct conversations with agent replies)
+    conv_rows = (
+        db.query(
+            func.date(Message.created_at).label("day"),
+            func.count(distinct(Message.conversation_id)).label("conv_count"),
+        )
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .filter(
+            Conversation.tenant_id == tenant_id,
+            Message.sender_type == "agent",
+            Message.created_at >= start,
+            Message.created_at <= now,
+        )
+        .group_by("day")
+        .order_by("day")
+        .all()
+    )
+
+    # Message counts by sender type per day
+    msg_rows = (
         db.query(
             func.date(Message.created_at).label("day"),
             Message.sender_type,
@@ -172,18 +161,27 @@ async def get_agent_activity(
     )
 
     series: Dict[str, Dict[str, int]] = {}
-    for day, sender_type, count in rows:
-        day_str = str(day)
-        if day_str not in series:
-            series[day_str] = {"customer": 0, "agent": 0, "ai": 0}
-        if sender_type in series[day_str]:
-            series[day_str][sender_type] = int(count)
 
-    # Ensure all days in range are present so charts have a stable 7-day axis.
+    # Ensure all days in range are present so charts have a stable axis.
     for i in range(days):
         d = (start + timedelta(days=i)).date().isoformat()
-        if d not in series:
-            series[d] = {"customer": 0, "agent": 0, "ai": 0}
+        series[d] = {"conversations_handled": 0, "agent_messages": 0, "ai_messages": 0, "customer_messages": 0}
+
+    for day, conv_count in conv_rows:
+        day_str = str(day)
+        if day_str in series:
+            series[day_str]["conversations_handled"] = int(conv_count)
+
+    for day, sender_type, count in msg_rows:
+        day_str = str(day)
+        if day_str not in series:
+            series[day_str] = {"conversations_handled": 0, "agent_messages": 0, "ai_messages": 0, "customer_messages": 0}
+        if sender_type == "agent":
+            series[day_str]["agent_messages"] = int(count)
+        elif sender_type == "ai":
+            series[day_str]["ai_messages"] = int(count)
+        elif sender_type == "customer":
+            series[day_str]["customer_messages"] = int(count)
 
     return {"days": dict(sorted(series.items(), key=lambda item: item[0]))}
 

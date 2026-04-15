@@ -122,21 +122,25 @@ export function ChatList() {
   const selectedId = inboxConv ? inboxConv.selectedId : localSelectedId;
   const setSelectedId = inboxConv ? inboxConv.setSelectedId : setLocalSelectedId;
 
-  const view: 'all' | 'live' | 'closed' = useMemo(() => {
+  const view: 'bot' | 'live' | 'closed' = useMemo(() => {
     if (pathname?.startsWith('/admin/inbox/live')) return 'live';
     if (pathname?.startsWith('/admin/inbox/closed')) return 'closed';
-    return 'all';
+    return 'bot';
   }, [pathname]);
   const isAdminInbox = pathname?.startsWith('/admin/inbox');
   const isAdminLivePage = pathname?.startsWith('/admin/inbox/live');
   const isAdminClosedPage = pathname?.startsWith('/admin/inbox/closed');
-  const isAdminAllPage = Boolean(isAdminInbox && !isAdminLivePage && !isAdminClosedPage);
+  const isAdminBotPage = Boolean(isAdminInbox && !isAdminLivePage && !isAdminClosedPage);
 
   const filteredConversations = useMemo(() => {
     let list = conversations;
 
-    if (view === 'live') {
-      list = list.filter((c) => c.status === 'active');
+    if (view === 'bot') {
+      // AI Bot: conversations handled by bot, not yet escalated to agent
+      list = list.filter((c) => c.handlerType === 'ai' && c.status === 'active');
+    } else if (view === 'live') {
+      // Live Now: conversations where a real agent is actively handling
+      list = list.filter((c) => c.handlerType === 'agent' && c.status === 'active');
     } else if (view === 'closed') {
       list = list.filter((c) => c.status === 'resolved');
     }
@@ -291,7 +295,9 @@ export function ChatList() {
                 ))}
               </div>
             ) : null}
-            {(isAgentInbox || (isAdminAllPage && hasAnyInboxConversation)) && !(isAgentInbox && inboxConv?.isLoading) && (
+
+            {/* ── Agent Inbox: Live Conversations ── */}
+            {isAgentInbox && !(inboxConv?.isLoading) && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -316,8 +322,8 @@ export function ChatList() {
                   liveConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
                     const isReopened = !!(conv as { reopenedAt?: string }).reopenedAt;
-                    const showNewLead = isAgentInbox && conv.status === 'active' && conv.isNewLead && !isReopened;
-                    const showReopened = isAgentInbox && conv.status === 'active' && isReopened;
+                    const showNewLead = conv.status === 'active' && conv.isNewLead && !isReopened;
+                    const showReopened = conv.status === 'active' && isReopened;
                     return (
                       <button
                         key={conv.id}
@@ -396,7 +402,8 @@ export function ChatList() {
               </div>
             )}
 
-            {(isAgentInbox || (isAdminAllPage && hasAnyInboxConversation)) && !(isAgentInbox && inboxConv?.isLoading) && (
+            {/* ── Agent Inbox: Closed Conversations ── */}
+            {isAgentInbox && !(inboxConv?.isLoading) && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -475,7 +482,8 @@ export function ChatList() {
               </div>
             )}
 
-            {isAgentInbox && !(isAgentInbox && inboxConv?.isLoading) && (
+            {/* ── Agent Inbox: Transferred Chats ── */}
+            {isAgentInbox && !(inboxConv?.isLoading) && (
               <div className="space-y-1">
                 <button
                   type="button"
@@ -541,9 +549,66 @@ export function ChatList() {
               </div>
             )}
 
-            {!isAgentInbox && isAdminLivePage && !(isAgentInbox && inboxConv?.isLoading) && (
+            {/* ── Admin: AI Bot conversations (default /admin/inbox) ── */}
+            {!isAgentInbox && isAdminBotPage && (
               <div className="space-y-1">
-                {liveConversations.map((conv) => {
+                <p className="px-1 py-1 text-[11px] font-semibold text-text-muted uppercase tracking-wide">
+                  AI Bot Conversations — {filteredConversations.length} active
+                </p>
+                {filteredConversations.map((conv) => {
+                  const isSelected = selectedId === conv.id;
+                  // "New" if last message is from customer (awaiting bot reply or just started),
+                  // "Old" if the bot has already replied.
+                  const isNewConv = conv.isNewLead;
+                  return (
+                    <button
+                      key={conv.id}
+                      type="button"
+                      onClick={() => setSelectedId(conv.id)}
+                      className={`w-full text-left p-3 rounded-lg cursor-pointer transition-colors ${
+                        isSelected ? 'bg-primary text-white' : 'bg-white hover:bg-panel border border-border'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <span className={`text-sm font-medium truncate flex-1 min-w-0 flex items-center gap-1.5 ${isSelected ? 'text-white' : 'text-text-primary'}`}>
+                          {conv.customerName}
+                          <span
+                            className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
+                              isSelected
+                                ? 'bg-white/20 text-white'
+                                : isNewConv
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-gray-100 text-gray-500'
+                            }`}
+                          >
+                            {isNewConv ? 'New' : 'Old'}
+                          </span>
+                        </span>
+                        <span className={`text-xs flex-shrink-0 ${isSelected ? 'text-white/80' : 'text-text-muted'}`}>
+                          {conv.lastActivityAt}
+                        </span>
+                      </div>
+                      {conv.customerPhone && (
+                        <p className={`text-[11px] truncate mb-0.5 ${isSelected ? 'text-white/85' : 'text-text-muted'}`}>
+                          {conv.customerPhone}
+                        </p>
+                      )}
+                      <p className={`text-xs truncate ${isSelected ? 'text-white/90' : 'text-text-secondary'}`}>
+                        {conv.lastMessage}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* ── Admin: Live Now (agent-handled active conversations) ── */}
+            {!isAgentInbox && isAdminLivePage && (
+              <div className="space-y-1">
+                <p className="px-1 py-1 text-[11px] font-semibold text-text-muted uppercase tracking-wide">
+                  Live Agent Conversations — {filteredConversations.length} active
+                </p>
+                {filteredConversations.map((conv) => {
                   const isSelected = selectedId === conv.id;
                   return (
                     <button
@@ -567,6 +632,9 @@ export function ChatList() {
                           {conv.customerPhone}
                         </p>
                       )}
+                      <p className={`text-[11px] truncate mb-0.5 ${isSelected ? 'text-white/80' : 'text-primary'}`}>
+                        Agent: {conv.handlerName || 'Assigned'}
+                      </p>
                       <p className={`text-xs truncate ${isSelected ? 'text-white/90' : 'text-text-secondary'}`}>
                         {conv.lastMessage}
                       </p>
@@ -576,9 +644,13 @@ export function ChatList() {
               </div>
             )}
 
-            {!isAgentInbox && isAdminClosedPage && !(isAgentInbox && inboxConv?.isLoading) && (
+            {/* ── Admin: Closed conversations ── */}
+            {!isAgentInbox && isAdminClosedPage && (
               <div className="space-y-1">
-                {closedConversations.map((conv) => {
+                <p className="px-1 py-1 text-[11px] font-semibold text-text-muted uppercase tracking-wide">
+                  Closed Conversations — {filteredConversations.length}
+                </p>
+                {filteredConversations.map((conv) => {
                   const isSelected = selectedId === conv.id;
                   return (
                     <button
@@ -611,13 +683,16 @@ export function ChatList() {
               </div>
             )}
 
-            {!(isAgentInbox && inboxConv?.isLoading) &&
-              liveConversations.length === 0 &&
-              closedConversations.length === 0 &&
-              (!isAgentInbox || transferredConversations.length === 0) && (
+            {/* ── Empty state ── */}
+            {!(isAgentInbox && inboxConv?.isLoading) && filteredConversations.length === 0 && (
               <div className="px-2 py-4 text-[12px] text-text-muted">
-                No conversations match this view yet. Adjust the agent selection or try a different
-                inbox view.
+                {isAdminBotPage
+                  ? 'No active AI bot conversations right now.'
+                  : isAdminLivePage
+                    ? 'No live agent conversations right now.'
+                    : isAdminClosedPage
+                      ? 'No closed conversations found.'
+                      : 'No conversations match this view yet.'}
               </div>
             )}
               </>

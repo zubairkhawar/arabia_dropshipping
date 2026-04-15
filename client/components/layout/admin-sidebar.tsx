@@ -10,6 +10,9 @@ import {
   LayoutDashboard,
   LucideIcon,
   MessageCircle,
+  Bot,
+  Radio,
+  CheckCircle2,
   FolderCog,
   ChevronDown,
 } from 'lucide-react';
@@ -29,9 +32,9 @@ const teamsSection: SidebarLink[] = [{ icon: Users, label: 'Teams', path: '/admi
 const agentsSection: SidebarLink[] = [{ icon: User, label: 'Agents', path: '/admin/agents' }];
 
 const conversationsViews: SidebarLink[] = [
-  { icon: MessageCircle, label: 'All Conversations', path: '/admin/inbox' },
-  { icon: MessageCircle, label: 'Live Now', path: '/admin/inbox/live' },
-  { icon: MessageCircle, label: 'Closed', path: '/admin/inbox/closed' },
+  { icon: Bot, label: 'AI Bot', path: '/admin/inbox' },
+  { icon: Radio, label: 'Live Now', path: '/admin/inbox/live' },
+  { icon: CheckCircle2, label: 'Closed', path: '/admin/inbox/closed' },
 ];
 
 const bottomSection: SidebarLink[] = [

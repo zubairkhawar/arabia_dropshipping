@@ -160,18 +160,19 @@ async def update_agent_status(
                 )
             )
 
-    if was_active and not is_active:
-        open_session = (
+    if not is_active:
+        # Close ALL open attendance sessions when going offline (or already offline).
+        # This also cleans up dangling sessions from crashes/disconnects.
+        open_sessions = (
             db.query(AgentAttendanceSession)
             .filter(
                 AgentAttendanceSession.tenant_id == agent.tenant_id,
                 AgentAttendanceSession.agent_id == agent.id,
                 AgentAttendanceSession.ended_at.is_(None),
             )
-            .order_by(AgentAttendanceSession.started_at.desc())
-            .first()
+            .all()
         )
-        if open_session:
+        for open_session in open_sessions:
             open_session.ended_at = now
             db.add(open_session)
 
@@ -198,9 +199,40 @@ async def get_agent_attendance(
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-    today = datetime.utcnow().date()
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    tz_name = (
+        (tenant.display_timezone if tenant and getattr(tenant, "display_timezone", None) else None)
+        or "Asia/Karachi"
+    )
+    try:
+        tenant_tz = ZoneInfo(tz_name)
+    except Exception:
+        tenant_tz = ZoneInfo("Asia/Karachi")
+
+    now = datetime.utcnow()
+    today = now.date()
     start_date = today - timedelta(days=max(1, min(days, 400)) - 1)
     start_dt = datetime.combine(start_date, datetime.min.time())
+
+    # Auto-close stale sessions (open for > 16 hours and agent is currently offline).
+    # This prevents runaway durations from crashed browsers / missed logouts.
+    stale_cutoff = now - timedelta(hours=16)
+    stale_sessions = (
+        db.query(AgentAttendanceSession)
+        .filter(
+            AgentAttendanceSession.tenant_id == tenant_id,
+            AgentAttendanceSession.agent_id == agent_id,
+            AgentAttendanceSession.ended_at.is_(None),
+            AgentAttendanceSession.started_at < stale_cutoff,
+        )
+        .all()
+    )
+    if stale_sessions:
+        for ss in stale_sessions:
+            # Cap stale session at 16 hours from its start
+            ss.ended_at = ss.started_at + timedelta(hours=16)
+            db.add(ss)
+        db.commit()
 
     sessions = (
         db.query(AgentAttendanceSession)
@@ -213,32 +245,26 @@ async def get_agent_attendance(
         .all()
     )
 
-    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-    tz_name = (
-        (tenant.display_timezone if tenant and getattr(tenant, "display_timezone", None) else None)
-        or "Asia/Karachi"
-    )
-    try:
-        tenant_tz = ZoneInfo(tz_name)
-    except Exception:
-        tenant_tz = ZoneInfo("Asia/Karachi")
-
     by_day: dict[str, AttendanceDayOut] = {}
     for s in sessions:
         start_utc = s.started_at.replace(tzinfo=dt_timezone.utc)
-        day = start_utc.astimezone(tenant_tz).date().isoformat()
+        local_start = start_utc.astimezone(tenant_tz)
+        day = local_start.date().isoformat()
         if day not in by_day:
             by_day[day] = AttendanceDayOut(date=day, total_minutes=0, sessions=[])
-        end_at = s.ended_at or datetime.utcnow()
+        end_at = s.ended_at or now
         minutes = max(0, int((end_at - s.started_at).total_seconds() // 60))
         by_day[day].total_minutes += minutes
         by_day[day].sessions.append(
             AttendanceSessionOut(start_at=s.started_at, end_at=s.ended_at)
         )
 
+    # Sort days chronologically (most recent first for display).
+    sorted_days = sorted(by_day.values(), key=lambda d: d.date, reverse=True)
+
     return AttendanceResponse(
         agent_id=agent_id,
-        days=list(by_day.values()),
+        days=sorted_days,
     )
 
 

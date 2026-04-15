@@ -67,7 +67,8 @@ export default function LoginPage() {
           }
           const agentMe = (await agentMeRes.json()) as { id: number };
           writeAuthAgentId(String(agentMe.id));
-          sessionStorage.removeItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY);
+          // Agent must explicitly set themselves Active after login.
+          sessionStorage.setItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY, '1');
         } else {
           clearAuthAgentId();
         }
