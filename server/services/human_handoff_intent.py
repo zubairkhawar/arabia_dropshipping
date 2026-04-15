@@ -33,23 +33,20 @@ def wants_human_agent(text: str) -> bool:
     s = _nfkc(raw)
     lowered = s.lower()
 
-    # Latin / Roman Urdu (ASCII and common chat spellings)
-    latin_phrases: Iterable[str] = (
-        "support",
-        "agent",
-        "help",
+    # Multi-word phrases: specific enough for safe substring matching
+    phrases: Iterable[str] = (
         "real agent",
         "actual agent",
         "live agent",
         "human agent",
-        "human",
         "talk to human",
         "talk to someone",
         "talk to a person",
         "talk to person",
+        "talk to agent",
         "speak to someone",
-        "speak with",
-        "talk to",
+        "speak with agent",
+        "speak with human",
         "real person",
         "live person",
         "human being",
@@ -57,18 +54,27 @@ def wants_human_agent(text: str) -> bool:
         "customer care",
         "representative",
         "help me talk",
+        "connect me",
+        "transfer me",
         "baat karni hai",
         "baat karna hai",
-        "insaan se",
-        "bande se",
-        "aadmi se",
+        "insaan se baat",
+        "bande se baat",
+        "aadmi se baat",
         "asaal agent",
         "asli agent",
         "sachcha agent",
-        "madad",
     )
-    if any(p in lowered for p in latin_phrases):
+    if any(p in lowered for p in phrases):
         return True
+
+    # Solo keywords only escalate in very short messages (≤ 3 words)
+    # so "madad" alone escalates but "kiya madad kar lo gy" does not.
+    tokens = lowered.split()
+    if len(tokens) <= 3:
+        solo = {"support", "agent", "help", "human", "madad", "insaan"}
+        if any(t in solo for t in tokens):
+            return True
 
     # Arabic script (templates / WhatsApp Arabic)
     if any(

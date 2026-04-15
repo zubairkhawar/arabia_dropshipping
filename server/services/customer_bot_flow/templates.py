@@ -56,14 +56,27 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "greeting": {
         "english": (
-            "Hello. I'm Arabia Dropbot, your assistant for Arabia Dropshipping. How can I help?"
+            "Hello. I'm Arabia Dropbot, your assistant for Arabia Dropshipping. "
+            "Are you a new customer or existing customer?"
         ),
         "arabic": (
-            "مرحبًا، أنا Arabia Dropbot، مساعدك في Arabia Dropshipping. كيف يمكنني مساعدتك؟"
+            "مرحبًا. أنا Arabia Dropbot، مساعدك لـ Arabia Dropshipping. "
+            "هل أنت عميل جديد أم عميل حالي؟"
         ),
         "roman_urdu": (
-            "Hello, main Arabia Dropbot hoon — Arabia Dropshipping ka assistant. Kaise madad karoon?"
+            "Hello. Main Arabia Dropbot hoon, Arabia Dropshipping ka assistant. "
+            "Kya aap new customer hain ya existing customer?"
         ),
+    },
+    "new_customer_welcome": {
+        "english": "Great! How can I help you? Feel free to ask anything.",
+        "arabic": "رائع! كيف يمكنني مساعدتك؟ لا تتردد في طرح أي سؤال.",
+        "roman_urdu": "Zabardast! Main kaise madad kar sakta hoon? Koi bhi sawal pooch sakte hain.",
+    },
+    "existing_customer_welcome": {
+        "english": "Great! How can I help you? Feel free to ask anything.",
+        "arabic": "رائع! كيف يمكنني مساعدتك؟ لا تتردد في طرح أي سؤال.",
+        "roman_urdu": "Zabardast! Main kaise madad kar sakta hoon? Koi bhi sawal pooch sakte hain.",
     },
     "entry": {
         "english": (

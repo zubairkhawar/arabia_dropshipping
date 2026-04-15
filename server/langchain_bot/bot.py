@@ -133,7 +133,8 @@ class ArabiaLangChainBot:
             return t
         if t.endswith("ies") and len(t) > 4:
             t = t[:-3] + "y"
-        for suffix in ("ing", "edly", "ed", "ly", "es", "s"):
+        # Longer suffixes first so "integration" → "integr" (not "integratio")
+        for suffix in ("ation", "tion", "ment", "able", "ible", "ate", "ing", "edly", "ed", "ly", "es", "s"):
             if t.endswith(suffix) and len(t) - len(suffix) >= 3:
                 t = t[: -len(suffix)]
                 break
