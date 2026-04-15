@@ -187,7 +187,8 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
 
     meta = c.conversation_metadata if isinstance(c.conversation_metadata, dict) else {}
     bot_flow = meta.get("bot_flow") if isinstance(meta.get("bot_flow"), dict) else {}
-    is_new_customer = str(bot_flow.get("customer_kind") or "").strip().lower() == "new"
+    # Customer is "new" unless they have been successfully verified through the bot flow.
+    is_new_customer = not bool(bot_flow.get("verified"))
     transfer_meta = meta.get("last_transfer") if isinstance(meta.get("last_transfer"), dict) else {}
     transfer_from_agent_id = transfer_meta.get("from_agent_id")
     transfer_to_agent_id = transfer_meta.get("to_agent_id")

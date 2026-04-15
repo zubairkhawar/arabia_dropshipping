@@ -148,6 +148,17 @@ export function ChatList() {
     return [...list].sort((a, b) => b.id - a.id);
   }, [conversations, view]);
 
+  // Admin views: clear selection when the current selectedId is not in the filtered list.
+  useEffect(() => {
+    if (!isAdminInbox || isAgentInbox) return;
+    if (selectedId == null) return;
+    const inView = filteredConversations.some((c) => c.id === selectedId);
+    if (!inView) {
+      // Select the first conversation in the filtered view, or clear.
+      setSelectedId(filteredConversations[0]?.id ?? null);
+    }
+  }, [filteredConversations, selectedId, isAdminInbox, isAgentInbox, setSelectedId]);
+
   const liveConversations = filteredConversations.filter((c) =>
     isAgentInbox ? c.status === 'active' : c.status === 'active' || c.status === 'transferred',
   );
@@ -557,8 +568,7 @@ export function ChatList() {
                 </p>
                 {filteredConversations.map((conv) => {
                   const isSelected = selectedId === conv.id;
-                  // "New" if last message is from customer (awaiting bot reply or just started),
-                  // "Old" if the bot has already replied.
+                  // "New" = customer not yet verified, "Old" = verification successful.
                   const isNewConv = conv.isNewLead;
                   return (
                     <button
