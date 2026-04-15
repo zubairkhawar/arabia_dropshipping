@@ -26,3 +26,4 @@ pandas
 openpyxl
 xlrd
 pypdf>=4.0.0
+pdfplumber>=0.10.0

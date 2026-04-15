@@ -228,6 +228,26 @@ def _extract_pdf_page_text(page: Any, page_idx: int, src_name: str) -> str:
     return ""
 
 
+def _extract_pdf_pdfplumber(blob: bytes, src_name: str) -> List[str]:
+    """Fallback PDF extraction via pdfplumber (handles CIDFont/Type3 fonts better than pypdf)."""
+    try:
+        import pdfplumber  # type: ignore
+
+        pages: List[str] = []
+        with pdfplumber.open(BytesIO(blob)) as pdf:
+            for i, page in enumerate(pdf.pages):
+                try:
+                    text = page.extract_text() or ""
+                except Exception as e:
+                    logger.warning("KB pdfplumber %s p%d failed: %s", src_name, i + 1, e)
+                    text = ""
+                pages.append(text)
+        return pages
+    except Exception as e:
+        logger.error("pdfplumber extraction failed for %s: %s", src_name, e)
+        return []
+
+
 def _ingest_pdf_blob(
     blob: bytes,
     src: KnowledgeSource,
@@ -256,6 +276,20 @@ def _ingest_pdf_blob(
             len(pages),
             raw_chars,
         )
+        # pypdf often returns empty strings for CIDFont/Type3 PDFs (Google Docs, Canva, etc.)
+        # Fall back to pdfplumber which handles these font encodings correctly.
+        if raw_chars < 50:
+            plumber_pages = _extract_pdf_pdfplumber(blob, src.name)
+            plumber_chars = sum(len(p) for p in plumber_pages)
+            if plumber_chars > raw_chars:
+                logger.info(
+                    "KB PDF %s: pdfplumber recovered %d chars (pypdf had %d)",
+                    src.name,
+                    plumber_chars,
+                    raw_chars,
+                )
+                pages = plumber_pages
+                raw_chars = plumber_chars
         page_chunks: List[Dict[str, Any]] = []
         chunk_idx = 0
         for page_idx, page_text in enumerate(pages, start=1):
@@ -535,7 +569,8 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                         text = _extract_excel_text(blob, src.name)
                         if not text:
                             md["last_error"] = "excel_extract_failed"
-            except Exception:
+            except Exception as exc:
+                logger.error("KB file base64 decode/extract failed for %s: %s", src.name, exc)
                 text = ""
 
     if text:
