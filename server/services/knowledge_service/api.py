@@ -442,6 +442,30 @@ def _extract_docx_text(blob: bytes, source_name: str) -> str:
         return ""
 
 
+def _extract_csv_text(blob: bytes, source_name: str) -> str:
+    """Parse CSV into structured 'Column: Value' rows for better LLM matching."""
+    try:
+        import pandas as pd  # type: ignore
+
+        df = pd.read_csv(BytesIO(blob), encoding_errors="ignore")
+        if df is None or df.empty:
+            return blob.decode("utf-8", errors="ignore")
+        out: List[str] = []
+        if len(df) > MAX_EXCEL_ROWS_PER_SHEET:
+            df = df.head(MAX_EXCEL_ROWS_PER_SHEET)
+        for _, row in df.iterrows():
+            row_parts: List[str] = []
+            for col, val in row.items():
+                if pd.notna(val):
+                    row_parts.append(f"{col}: {val}")
+            if row_parts:
+                out.append(" | ".join(row_parts))
+        return "\n".join(out).strip() or blob.decode("utf-8", errors="ignore")
+    except Exception as exc:
+        logger.warning("CSV pandas parse failed for %s: %s — falling back to raw text", source_name, exc)
+        return blob.decode("utf-8", errors="ignore")
+
+
 def _extract_excel_text(blob: bytes, source_name: str) -> str:
     try:
         import pandas as pd  # type: ignore
@@ -535,10 +559,14 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                     or mime == "application/x-pdf"
                     or filename.endswith(".pdf")
                 )
-                if mime.startswith("text/") or mime in {
+                is_csv = (
+                    mime in {"text/csv", "application/csv"}
+                    or filename.endswith(".csv")
+                )
+                if is_csv:
+                    text = _extract_csv_text(blob, src.name)
+                elif mime.startswith("text/") or mime in {
                     "application/json",
-                    "application/csv",
-                    "text/csv",
                 }:
                     text = blob.decode("utf-8", errors="ignore")
                 elif is_pdf:
@@ -569,6 +597,10 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                         text = _extract_excel_text(blob, src.name)
                         if not text:
                             md["last_error"] = "excel_extract_failed"
+                    elif filename.endswith(".csv"):
+                        text = _extract_csv_text(blob, src.name)
+                        if not text:
+                            md["last_error"] = "csv_extract_failed"
             except Exception as exc:
                 logger.error("KB file base64 decode/extract failed for %s: %s", src.name, exc)
                 text = ""
