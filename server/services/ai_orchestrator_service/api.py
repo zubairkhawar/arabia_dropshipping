@@ -206,7 +206,7 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             ),
             conversation_id=conversation.id if conversation else None,
         )
-        if flow.skip_store_api:
+        if flow.skip_store_api and bot.last_reply_used_kb:
             reply_text = format_kb_reply(bf_lang or detected_language, reply_text)
     else:
         reply_text = flow.reply_text

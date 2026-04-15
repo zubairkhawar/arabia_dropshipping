@@ -1771,6 +1771,22 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             "meta_response": wa_response,
         }
 
+    # Early-commit customer message to close webhook dedup race window.
+    # Without this, Meta retries that arrive during LLM processing pass the
+    # _already_processed_wa_message check and generate duplicate replies.
+    customer_msg = Message(
+        conversation_id=conversation.id,
+        content=text,
+        sender_type="customer",
+        sender_id=None,
+        language="english",
+        created_at=datetime.utcnow(),
+        message_metadata=msg_meta,
+    )
+    db.add(customer_msg)
+    db.commit()
+    db.refresh(customer_msg)
+
     flow = await process_customer_bot_message(
         db=db,
         conversation=conversation,
@@ -1787,6 +1803,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     bf_lang = (flow.merge_metadata.get("bot_flow") or {}).get("lang")
     if isinstance(bf_lang, str) and bf_lang.strip():
         detected_language = bf_lang
+    customer_msg.language = detected_language
 
     if not flow.handled:
         flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
@@ -1807,6 +1824,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             fetch_context=customer_context,
             bot_flow=flow_state,
             conversation_id=conversation.id,
+            exclude_history_message_id=customer_msg.id,
         )
     elif flow.use_ai:
         if flow.skip_store_api:
@@ -1833,8 +1851,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
             ),
             conversation_id=conversation.id,
+            exclude_history_message_id=customer_msg.id,
         )
-        if flow.skip_store_api:
+        if flow.skip_store_api and bot.last_reply_used_kb:
             reply_text = format_kb_reply(bf_lang or detected_language, reply_text)
     else:
         reply_text = flow.reply_text
@@ -1878,15 +1897,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     if not (reply_text or "").strip():
         reply_text = resolve_bot_template(bf_lang or detected_language, "fallback")
 
-    customer_msg = Message(
-        conversation_id=conversation.id,
-        content=text,
-        sender_type="customer",
-        sender_id=None,
-        language=detected_language,
-        created_at=datetime.utcnow(),
-        message_metadata=msg_meta,
-    )
+    # customer_msg was early-committed above for dedup; update final language
+    customer_msg.language = detected_language
     ai_msg = Message(
         conversation_id=conversation.id,
         content=reply_text,

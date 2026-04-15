@@ -26,6 +26,7 @@ class ArabiaLangChainBot:
         self.model_name = model_name or settings.openai_model
         self.temperature = temperature if temperature is not None else settings.openai_temperature
         self.prompt = build_prompt()
+        self.last_reply_used_kb: bool = False
 
     def _build_schedule_context(self, tenant_id: int) -> str:
         sched = (
@@ -288,6 +289,7 @@ class ArabiaLangChainBot:
                 user_message=user_message,
                 min_score=min_score,
             )
+        self.last_reply_used_kb = "Most relevant knowledge excerpts:" in knowledge_context
 
         messages = self.prompt.format_messages(
             current_time=now_utc_iso(),
