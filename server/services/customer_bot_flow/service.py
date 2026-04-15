@@ -98,6 +98,7 @@ def _looks_like_greeting(text: str) -> bool:
         for x in (
             "salam",
             "salaam",
+            "sallam",
             "assalam",
             "asslam",
             "alaikum",
@@ -566,7 +567,7 @@ async def process_customer_bot_message(
     # Sticky language for short/numeric inputs (e.g. menu digits) — but never
     # override on reset commands; those should detect language fresh.
     _stripped_msg = (user_message or "").strip()
-    if not (is_slash_reset_command(_stripped_msg) or wants_bot_flow_reset(_stripped_msg)):
+    if not (is_slash_reset_command(_stripped_msg) or wants_bot_flow_reset(_stripped_msg) or _looks_like_greeting(_stripped_msg)):
         sticky = flow.get("lang")
         if isinstance(sticky, str) and sticky.strip():
             t0 = (user_message or "").strip()

@@ -89,6 +89,7 @@ class AIOrchestrator:
             "mujhe",
             "salam",
             "salaam",
+            "sallam",
             "assalam",
             "assalamu",
             "alaikum",
