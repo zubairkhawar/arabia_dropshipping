@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -418,6 +419,7 @@ def _parse_meta_whatsapp_inbound(payload: Dict[str, Any]) -> Optional[Dict[str, 
                     "from_phone": from_phone,
                     "wa_message_id": wa_message_id,
                     "contact_name": contact_name,
+                    "timestamp": msg.get("timestamp"),
                 }
                 mtype = msg.get("type")
                 if mtype == "text":
@@ -1537,6 +1539,23 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     from_phone = inbound["from_phone"]
     if not from_phone:
         return {"status": "ignored"}
+
+    # Reject stale webhook retries (Meta retries failed webhooks for hours).
+    # Messages older than 2 minutes are almost certainly retries from a prior crash.
+    _wa_ts = inbound.get("timestamp")
+    if _wa_ts is not None:
+        try:
+            age_seconds = time.time() - int(_wa_ts)
+            if age_seconds > 120:
+                logger.info(
+                    "WhatsApp webhook stale (%.0fs old, wa_id=%s) — ignoring",
+                    age_seconds,
+                    inbound.get("wa_message_id", "?"),
+                )
+                return {"status": "ignored", "reason": "stale_webhook"}
+        except (ValueError, TypeError):
+            pass
+
     if inbound.get("kind") == "reaction":
         tenant_id = 1
         store = _get_or_create_default_store(db, tenant_id=tenant_id)
