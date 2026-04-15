@@ -131,7 +131,6 @@ class AIOrchestrator:
             "ji",
             "shukriya",
             "jazakallah",
-            "order",
             "kab",
             "kis",
             "kyun",
