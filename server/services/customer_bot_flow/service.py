@@ -106,7 +106,7 @@ def _looks_like_greeting(text: str) -> bool:
         )
     ):
         return True
-    if blob in ("hi", "hey", "hello", "hi there", "hey there", "namaste"):
+    if blob in ("hi", "hey", "hello", "hi there", "hey there", "namaste", "aoa"):
         return True
     if re.match(r"^good (morning|evening|afternoon)$", blob):
         return True
@@ -877,7 +877,7 @@ async def process_customer_bot_message(
             if _looks_like_greeting(text):
                 return save(
                     {**flow, "step": "conversational"},
-                    _t(flow_lang, MSGS["hello_ack"]),
+                    _t(flow_lang, MSGS["greeting"]),
                 )
             return ai_forward(
                 "[Customer question] " + text,
@@ -894,7 +894,7 @@ async def process_customer_bot_message(
         if _looks_like_greeting(text):
             return save(
                 {**flow, "step": "conversational", "intro_shown": True},
-                _t(flow_lang, MSGS["hello_ack"]),
+                _t(flow_lang, MSGS["greeting"]),
             )
         return ai_forward(
             text,
