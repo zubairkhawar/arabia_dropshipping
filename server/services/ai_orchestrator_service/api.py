@@ -10,7 +10,7 @@ from services.auth_service.models import User
 from services.ai_orchestrator_service.services import AIOrchestrator
 from database import get_db
 from langchain_bot import ArabiaLangChainBot
-from models import Conversation, Message, Tenant
+from models import Conversation, Message, Tenant, TenantSchedule
 from services.customer_bot_flow import (
     append_handoff_agent_line,
     format_kb_reply,
@@ -261,6 +261,25 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             )
             extra = resolve_bot_template(lang, "handoff_unavailable")
             if extra:
+                schedule_line = ""
+                sched = (
+                    db.query(TenantSchedule)
+                    .filter(TenantSchedule.tenant_id == message.tenant_id)
+                    .first()
+                )
+                if sched and sched.working_days and sched.start_time and sched.end_time:
+                    if lang == "arabic":
+                        schedule_line = (
+                            f"🕐 ساعات العمل: {sched.working_days} من {sched.start_time} إلى {sched.end_time}\n"
+                        )
+                    else:
+                        schedule_line = (
+                            f"🕐 Working hours: {sched.working_days}, {sched.start_time} to {sched.end_time}\n"
+                        )
+                try:
+                    extra = extra.format(schedule=schedule_line)
+                except (KeyError, IndexError):
+                    extra = extra.replace("{schedule}", schedule_line)
                 reply_text = f"{(reply_text or '').strip()}\n\n{extra}".strip()
 
     if conversation:

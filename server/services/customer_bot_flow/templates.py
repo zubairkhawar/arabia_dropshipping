@@ -363,14 +363,17 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     "handoff_unavailable": {
         "english": (
             "⚠️ No agents are online right now.\n"
+            "{schedule}"
             "Please try again in a few minutes, or leave your message here and we'll reply when we're back."
         ),
         "arabic": (
             "⚠️ لا يوجد موظفون متصلون حاليًا.\n"
+            "{schedule}"
             "يرجى المحاولة بعد قليل، أو اترك رسالتك هنا وسنرد عند العودة."
         ),
         "roman_urdu": (
             "⚠️ Abhi koi agent online nahi hai.\n"
+            "{schedule}"
             "Kuch dair baad dobara try karein, ya yahin message chhor dein — wapas aate hi jawab dein ge."
         ),
     },

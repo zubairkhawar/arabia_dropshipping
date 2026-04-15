@@ -64,6 +64,18 @@ def wants_human_agent(text: str) -> bool:
         "asaal agent",
         "asli agent",
         "sachcha agent",
+        "try again for support",
+        "need support",
+        "need agent",
+        "need human",
+        "want support",
+        "want agent",
+        "want human",
+        "get support",
+        "get agent",
+        "agent chahiye",
+        "support chahiye",
+        "agent se baat",
     )
     if any(p in lowered for p in phrases):
         return True

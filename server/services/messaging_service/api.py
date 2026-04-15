@@ -18,6 +18,7 @@ from models import (
     Message,
     MessageUserDeletion,
     Store,
+    TenantSchedule,
     User,
 )
 from config import settings
@@ -1912,6 +1913,30 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 bf_lang or detected_language, "handoff_unavailable"
             )
             if extra:
+                schedule_line = ""
+                sched = (
+                    db.query(TenantSchedule)
+                    .filter(TenantSchedule.tenant_id == tenant_id)
+                    .first()
+                )
+                if sched and sched.working_days and sched.start_time and sched.end_time:
+                    _lang = bf_lang or detected_language
+                    if _lang == "arabic":
+                        schedule_line = (
+                            f"🕐 ساعات العمل: {sched.working_days} من {sched.start_time} إلى {sched.end_time}\n"
+                        )
+                    elif _lang == "roman_urdu":
+                        schedule_line = (
+                            f"🕐 Working hours: {sched.working_days}, {sched.start_time} to {sched.end_time}\n"
+                        )
+                    else:
+                        schedule_line = (
+                            f"🕐 Working hours: {sched.working_days}, {sched.start_time} to {sched.end_time}\n"
+                        )
+                try:
+                    extra = extra.format(schedule=schedule_line)
+                except (KeyError, IndexError):
+                    extra = extra.replace("{schedule}", schedule_line)
                 reply_text = f"{(reply_text or '').strip()}\n\n{extra}".strip()
 
     if not (reply_text or "").strip():
@@ -1944,6 +1969,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             conversation.agent_id,
             conversation.id,
             _message_dict_for_ws(db, customer_msg),
+        )
+        await push_inbox_message(
+            db,
+            tenant_id,
+            conversation.agent_id,
+            conversation.id,
+            _message_dict_for_ws(db, ai_msg),
         )
 
     wa_response: Dict[str, Any] | None = None
