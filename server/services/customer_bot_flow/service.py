@@ -122,7 +122,7 @@ def _looks_like_free_text_question(text: str) -> bool:
         return False
     if _looks_like_greeting(s):
         return False
-    if solo_menu_digit(s):
+    if solo_menu_digit(s, "12"):
         return False
     if _parse_choice(
         s,
