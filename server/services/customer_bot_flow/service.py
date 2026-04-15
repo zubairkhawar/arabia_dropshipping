@@ -565,7 +565,8 @@ async def process_customer_bot_message(
         lang = "roman_urdu"
     # Sticky language for short/numeric inputs (e.g. menu digits) — but never
     # override on reset commands; those should detect language fresh.
-    if not is_slash_reset_command((user_message or "").strip()):
+    _stripped_msg = (user_message or "").strip()
+    if not (is_slash_reset_command(_stripped_msg) or wants_bot_flow_reset(_stripped_msg)):
         sticky = flow.get("lang")
         if isinstance(sticky, str) and sticky.strip():
             t0 = (user_message or "").strip()
