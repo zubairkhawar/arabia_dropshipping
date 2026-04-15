@@ -383,17 +383,17 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "kb_wrap": {
         "english": (
-            "💡 Here's what you need to know:\n\n{body}\n\n"
+            "{body}\n\n"
             "📌 Source: https://www.arabiadropship.com\n\n"
             "Type \"support\" to speak with a human agent."
         ),
         "arabic": (
-            "💡 إليك المعلومات:\n\n{body}\n\n"
+            "{body}\n\n"
             "📌 المصدر: https://www.arabiadropship.com\n\n"
             "اكتب \"support\" للتحدث مع موظف."
         ),
         "roman_urdu": (
-            "💡 Yeh information aap ke liye:\n\n{body}\n\n"
+            "{body}\n\n"
             "📌 Source: https://www.arabiadropship.com\n\n"
             "\"support\" likhein human agent se baat karne ke liye."
         ),
