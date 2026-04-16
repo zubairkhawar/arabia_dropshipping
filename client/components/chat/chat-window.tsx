@@ -54,6 +54,7 @@ import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import {
   addDaysToCalendarKey,
   dateKeyInTimeZone,
+  DEFAULT_TENANT_TIMEZONE,
   formatCompactActivity,
   formatTime12hInZone,
   formatWeekdayShortMonthDayInZone,
@@ -231,7 +232,7 @@ const defaultInternalMessages: Message[] = [
     content: 'Hey team, customer on order #12345 is asking about delivery ETA.',
     sender: 'agent',
     senderName: 'You',
-    timestamp: formatTime12hInZone(new Date(), 'UTC'),
+    timestamp: formatTime12hInZone(new Date(), DEFAULT_TENANT_TIMEZONE),
     sentAt: new Date().toISOString(),
   },
   {
@@ -239,7 +240,7 @@ const defaultInternalMessages: Message[] = [
     content: "I'll keep an eye on logistics updates for this one.",
     sender: 'agent',
     senderName: 'Hamza',
-    timestamp: formatTime12hInZone(new Date(Date.now() - 60000), 'UTC'),
+    timestamp: formatTime12hInZone(new Date(Date.now() - 60000), DEFAULT_TENANT_TIMEZONE),
     sentAt: new Date(Date.now() - 60000).toISOString(),
     reactions: [
       { emoji: '👍', userId: 'hamza', userName: 'Hamza', reactedAt: new Date(Date.now() - 120000).toISOString() },
@@ -252,7 +253,7 @@ const defaultInternalMessages: Message[] = [
     content: 'If it escalates, feel free to transfer to me.',
     sender: 'agent',
     senderName: 'Sarah',
-    timestamp: formatTime12hInZone(new Date(Date.now() - 120000), 'UTC'),
+    timestamp: formatTime12hInZone(new Date(Date.now() - 120000), DEFAULT_TENANT_TIMEZONE),
     sentAt: new Date(Date.now() - 120000).toISOString(),
   },
 ];
@@ -4838,8 +4839,11 @@ export function ChatWindow({
       {/* Message Info Modal */}
       {messageInfoId !== null && (() => {
         const targetMessage = messages.find((m) => m.id === messageInfoId) ?? null;
-        const formatReadAt = (d: Date) =>
-          `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()} ${d.getHours() % 12 || 12}:${d.getMinutes().toString().padStart(2, '0')} ${d.getHours() >= 12 ? 'PM' : 'AM'}`;
+        const formatReadAt = (d: Date) => {
+          const datePart = d.toLocaleDateString('en-GB', { timeZone, day: '2-digit', month: '2-digit', year: 'numeric' });
+          const timePart = formatTime12hInZone(d, timeZone);
+          return `${datePart} ${timePart}`;
+        };
 
         if (isInboxPage && !isInternalChat && targetMessage) {
           const sent = targetMessage.sentAt ? new Date(targetMessage.sentAt) : null;
