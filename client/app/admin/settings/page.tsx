@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { AlertTriangle, Clock, Download, Volume2, Users } from 'lucide-react';
+import { Clock, Download, Volume2, Users } from 'lucide-react';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { useToast } from '@/contexts/ToastContext';
@@ -65,9 +65,6 @@ export default function AdminSettings() {
   const [reportMonth, setReportMonth] = useState(() => new Date().getMonth() + 1);
   const [reportYear, setReportYear] = useState(() => new Date().getFullYear());
   const [reportDownloading, setReportDownloading] = useState(false);
-  const [eraseModalOpen, setEraseModalOpen] = useState(false);
-  const [eraseConfirmText, setEraseConfirmText] = useState("");
-  const [eraseBusy, setEraseBusy] = useState(false);
   const [title, setTitle] = useState('');
   const [occasion, setOccasion] = useState('');
   const [startsAt, setStartsAt] = useState('');
@@ -438,60 +435,6 @@ export default function AdminSettings() {
       toast(e instanceof Error ? e.message : 'Failed to save settings');
     } finally {
       setSettingsSaving(false);
-    }
-  };
-
-  const executeEraseAllData = async () => {
-    if (typeof window === "undefined") return;
-    const token = localStorage.getItem("auth_token");
-    if (!token) {
-      toast("Sign in as admin first");
-      return;
-    }
-    if (eraseConfirmText.trim() !== "ERASE_ALL_DATA") {
-      toast('Type ERASE_ALL_DATA exactly to confirm');
-      return;
-    }
-    setEraseBusy(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/tenants/${effectiveTenantId}/erase-all-application-data`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ confirmation: eraseConfirmText.trim() }),
-        },
-      );
-      const body = (await res.json().catch(() => ({}))) as {
-        detail?: string | { msg?: string }[];
-        tables_truncated?: number;
-        admin_recreated?: boolean;
-      };
-      if (!res.ok) {
-        const d = body.detail;
-        const msg =
-          typeof d === "string"
-            ? d
-            : Array.isArray(d)
-              ? d.map((x) => (typeof x === "object" && x && "msg" in x ? String(x.msg) : "")).join("; ")
-              : "Erase failed";
-        throw new Error(msg || "Erase failed");
-      }
-      toast(
-        `Database cleared (${body.tables_truncated ?? "?"} tables). Recreating session…`,
-      );
-      setEraseModalOpen(false);
-      setEraseConfirmText("");
-      setTimeout(() => {
-        window.location.reload();
-      }, 600);
-    } catch (e: unknown) {
-      toast(e instanceof Error ? e.message : "Erase failed");
-    } finally {
-      setEraseBusy(false);
     }
   };
 
@@ -969,80 +912,6 @@ export default function AdminSettings() {
           </button>
         </div>
       </div>
-
-      <div className="rounded-lg border border-red-300 bg-red-50/90 p-6 shadow-sm">
-        <h3 className="font-semibold text-red-900 mb-2 flex items-center gap-2">
-          <AlertTriangle className="w-5 h-5 shrink-0" />
-          Danger zone — erase all application data
-        </h3>
-        <p className="text-sm text-red-900/90 mb-3 leading-relaxed">
-          Permanently deletes <strong>all</strong> rows in the Postgres <code className="text-xs bg-white/80 px-1 rounded">public</code> schema:
-          conversations, messages, agents, teams, knowledge sources, broadcasts, attendance, internal chats, and linked store data.
-          Default tenant (id 1), working-hours schedule, and the admin user from{' '}
-          <code className="text-xs bg-white/80 px-1 rounded">ADMIN_EMAIL</code> /{' '}
-          <code className="text-xs bg-white/80 px-1 rounded">ADMIN_PASSWORD</code> are recreated.
-          Media in <strong>Cloudflare R2</strong> is <strong>not</strong> deleted here — clear that separately.
-        </p>
-        <button
-          type="button"
-          onClick={() => {
-            setEraseConfirmText("");
-            setEraseModalOpen(true);
-          }}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-700 bg-white text-red-800 text-sm font-semibold hover:bg-red-100 transition-colors"
-        >
-          Erase data
-        </button>
-      </div>
-
-      {eraseModalOpen ? (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="erase-data-title"
-        >
-          <div className="w-full max-w-lg rounded-xl border border-border bg-white p-6 shadow-xl">
-            <h4 id="erase-data-title" className="text-lg font-semibold text-text-primary mb-2">
-              Confirm full database erase
-            </h4>
-            <p className="text-sm text-text-secondary mb-4 leading-relaxed">
-              This cannot be undone. Type{' '}
-              <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">ERASE_ALL_DATA</code>{' '}
-              below, then confirm.
-            </p>
-            <input
-              type="text"
-              value={eraseConfirmText}
-              onChange={(e) => setEraseConfirmText(e.target.value)}
-              autoComplete="off"
-              placeholder="ERASE_ALL_DATA"
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-500 mb-4"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                disabled={eraseBusy}
-                onClick={() => {
-                  setEraseModalOpen(false);
-                  setEraseConfirmText("");
-                }}
-                className="px-4 py-2 rounded-lg border border-border text-sm text-text-primary hover:bg-muted/50 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={eraseBusy || eraseConfirmText.trim() !== "ERASE_ALL_DATA"}
-                onClick={() => void executeEraseAllData()}
-                className="px-4 py-2 rounded-lg bg-red-700 text-white text-sm font-semibold hover:bg-red-800 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {eraseBusy ? "Erasing…" : "Erase everything"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
