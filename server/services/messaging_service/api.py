@@ -101,6 +101,7 @@ class ConversationSummary(BaseModel):
     last_activity_at: Optional[datetime] = None
     unread_count: int = 0
     is_new_customer: bool = False
+    last_handler_agent_name: Optional[str] = None
     transfer_from_agent_id: Optional[int] = None
     transfer_from_agent_name: Optional[str] = None
     transfer_to_agent_id: Optional[int] = None
@@ -190,6 +191,13 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
     bot_flow = meta.get("bot_flow") if isinstance(meta.get("bot_flow"), dict) else {}
     # Customer is "new" unless they have been successfully verified through the bot flow.
     is_new_customer = not bool(bot_flow.get("verified"))
+    # When agent_id is cleared (send-to-AI / reset), fall back to last_handler from metadata.
+    last_handler_meta = meta.get("last_handler") if isinstance(meta.get("last_handler"), dict) else {}
+    last_handler_agent_name = (
+        last_handler_meta.get("agent_name")
+        if isinstance(last_handler_meta.get("agent_name"), str)
+        else None
+    )
     transfer_meta = meta.get("last_transfer") if isinstance(meta.get("last_transfer"), dict) else {}
     transfer_from_agent_id = transfer_meta.get("from_agent_id")
     transfer_to_agent_id = transfer_meta.get("to_agent_id")
@@ -208,6 +216,7 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
         last_activity_at=last_msg.created_at if last_msg else c.updated_at,
         unread_count=unread_count,
         is_new_customer=is_new_customer,
+        last_handler_agent_name=last_handler_agent_name,
         transfer_from_agent_id=transfer_from_agent_id if isinstance(transfer_from_agent_id, int) else None,
         transfer_from_agent_name=transfer_meta.get("from_agent_name")
         if isinstance(transfer_meta.get("from_agent_name"), str)
@@ -1233,6 +1242,18 @@ async def send_conversation_to_ai(
     )
     db.add(handoff_msg)
     db.add(greeting_msg)
+
+    # Preserve the last handler info in metadata before clearing agent_id,
+    # so the admin panel can still show who handled this conversation.
+    if conversation.agent_id is not None:
+        prev_agent = db.query(Agent).filter(Agent.id == conversation.agent_id).first()
+        meta = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
+        meta["last_handler"] = {
+            "agent_id": conversation.agent_id,
+            "agent_name": (prev_agent.name if prev_agent else transfer_by_name).strip(),
+            "at": datetime.utcnow().isoformat(),
+        }
+        conversation.conversation_metadata = meta
 
     conversation.agent_id = None
     conversation.status = "closed"

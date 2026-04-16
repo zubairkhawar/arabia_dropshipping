@@ -53,7 +53,11 @@ function ContextPanel() {
           <div className="flex items-center justify-between">
             <span className="text-text-secondary">Handler</span>
             <span className="font-semibold text-text-primary">
-              {selected.handlerType === 'ai' ? 'AI' : selected.handlerName || 'Agent'}
+              {selected.handlerName
+                ? selected.handlerName
+                : selected.handlerType === 'ai'
+                  ? 'AI Bot'
+                  : 'Agent'}
             </span>
           </div>
           {(selected.transferredFromAgentName || selected.transferredToAgentName || transferEvents.length > 0) && (

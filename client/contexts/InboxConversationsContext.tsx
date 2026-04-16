@@ -115,6 +115,7 @@ interface ConversationSummaryApi {
   agent_id?: number | null;
   unread_count?: number;
   is_new_customer?: boolean;
+  last_handler_agent_name?: string | null;
   transfer_from_agent_id?: number | null;
   transfer_from_agent_name?: string | null;
   transfer_to_agent_id?: number | null;
@@ -250,7 +251,9 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       const aid = currentAgentId ?? readAuthAgentId();
       const handlerAgentId = c.agent_id != null ? String(c.agent_id) : undefined;
       const handlerName =
-        handlerAgentId != null ? agents.find((a) => a.id === handlerAgentId)?.name : undefined;
+        handlerAgentId != null
+          ? agents.find((a) => a.id === handlerAgentId)?.name
+          : (c.last_handler_agent_name ?? undefined);
       // Show as "transferred" for the prior handler when they no longer own the thread.
       // (Do not require transfer_to !== agent_id — after a successful handoff both match the new assignee.)
       const transferredOut =
