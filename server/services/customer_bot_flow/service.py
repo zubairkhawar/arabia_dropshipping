@@ -56,6 +56,10 @@ def format_kb_reply(lang: str, ai_body: str, source: Optional[str] = None) -> st
     body = re.sub(r"\n*📌[^\n]*", "", body).strip()
     body = re.sub(r'\n*(?:Type "support"|Or type "support"|"support" likhein|اكتب "support"|أو اكتب "support")[^\n]*', "", body, flags=re.IGNORECASE).strip()
     body = re.sub(r"\n*(?:If you need more information|You can also visit|Agar aapko mazeed|Aap hamari website|إذا كنت بحاجة|يمكنك أيضاً زيارة)[^\n]*", "", body, flags=re.IGNORECASE).strip()
+    # Strip LLM-generated "contact support" / "raabta karein" closings that duplicate the footer
+    body = re.sub(r"\n*(?:.*?customer support se raabta.*|.*?support se raabta.*|.*?contact (?:our )?(?:customer )?support.*|.*?reach out to (?:our )?(?:customer )?support.*|.*?hamari support team.*|.*?support team se.*)", "", body, flags=re.IGNORECASE).strip()
+    # Strip "feel free to ask" / "befikr hokar poochein" type closings from LLM
+    body = re.sub(r"\n*(?:.*?feel free to (?:ask|reach|contact).*|.*?befikr hokar pooch.*|.*?mazeed sawalat.*pooch.*)", "", body, flags=re.IGNORECASE).strip()
     if not body:
         return body
     return _t(lang, MSGS["kb_wrap"]).format(body=body)

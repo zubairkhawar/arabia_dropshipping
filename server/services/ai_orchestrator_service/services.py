@@ -144,6 +144,92 @@ class AIOrchestrator:
             "kyun",
             "q",
             "qa",
+            # Common short Roman Urdu words / connectors
+            "k",
+            "ka",
+            "ki",
+            "ke",
+            "kay",
+            "ko",
+            "se",
+            "pe",
+            "par",
+            "ya",
+            "aur",
+            "or",
+            "bhi",
+            "toh",
+            "to",
+            "na",
+            "wo",
+            "woh",
+            "ye",
+            "yeh",
+            "jo",
+            "ab",
+            "abhi",
+            # Verbs / question words
+            "btao",
+            "batao",
+            "bataen",
+            "batayen",
+            "btaen",
+            "batain",
+            "btain",
+            "hota",
+            "hoti",
+            "hoga",
+            "hogi",
+            "tha",
+            "thi",
+            "gaya",
+            "gayi",
+            "dena",
+            "dedo",
+            "lena",
+            "lelo",
+            "chahiye",
+            "chaiye",
+            "chahte",
+            "sakta",
+            "sakti",
+            "sakte",
+            "kitna",
+            "kitne",
+            "kitni",
+            "kaise",
+            "konsa",
+            "konsi",
+            "kaunsa",
+            "kaunsi",
+            # Domain-common
+            "paisa",
+            "paise",
+            "wala",
+            "wali",
+            "wale",
+            "kaam",
+            "zaroorat",
+            "zarurat",
+            "madad",
+            "masla",
+            "maslay",
+            "problem",
+            "lagta",
+            "lagti",
+            "lagay",
+            "lagaen",
+            "milta",
+            "milti",
+            "mila",
+            "mili",
+            "ata",
+            "ati",
+            "aye",
+            "ayega",
+            "ayegi",
+            "samajh",
+            "samjh",
         }
         roman_ur_bigrams = {
             ("kya", "haal"),
@@ -154,6 +240,21 @@ class AIOrchestrator:
             ("kaise", "ho"),
             ("ap", "ka"),
             ("aap", "ka"),
+            ("k", "baare"),
+            ("ke", "baare"),
+            ("k", "charges"),
+            ("k", "return"),
+            ("return", "charges"),
+            ("mujhe", "btao"),
+            ("mujhe", "batao"),
+            ("ye", "btao"),
+            ("ye", "batao"),
+        }
+
+        # Short connectors only score when combined with other Roman Urdu tokens.
+        _roman_ur_weak: Set[str] = {
+            "k", "ka", "ki", "ke", "kay", "ko", "se", "pe", "par",
+            "ya", "or", "to", "na", "ye", "jo", "ab", "ho",
         }
 
         roman_score = 0
@@ -161,7 +262,7 @@ class AIOrchestrator:
 
         for token in tokens:
             if token in roman_ur_words:
-                roman_score += 2
+                roman_score += 1 if token in _roman_ur_weak else 2
             # lightweight english hints
             if token in {
                 "hello",
@@ -186,11 +287,19 @@ class AIOrchestrator:
             if pair in roman_ur_bigrams:
                 roman_score += 3
 
-        # Strong pattern for the user's examples:
-        # "kya haal hain", "kya kr rhy ho"
+        # Strong pattern boosts
         if "kya" in token_set and ("haal" in token_set or "kr" in token_set or "kar" in token_set):
             roman_score += 3
         if {"rhy", "ho"} <= token_set or {"rahe", "ho"} <= token_set:
+            roman_score += 2
+        # "btao" / "batao" is a strong Roman Urdu signal
+        if token_set & {"btao", "batao", "bataen", "batayen", "btaen"}:
+            roman_score += 3
+        # "k" / "ke" / "kay" adjacent to a noun is a Roman Urdu possessive pattern
+        if token_set & {"k", "ke", "kay"} and token_set & {"charges", "return", "baare", "order", "tracking", "delivery", "price", "rate"}:
+            roman_score += 3
+        # "aur" combined with anything else Roman Urdu
+        if "aur" in token_set and token_set & roman_ur_words - _roman_ur_weak - {"aur"}:
             roman_score += 2
 
         if roman_score >= max(2, english_score + 1):
