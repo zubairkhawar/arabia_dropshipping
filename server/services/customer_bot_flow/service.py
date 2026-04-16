@@ -824,7 +824,9 @@ async def process_customer_bot_message(
             "step": "existing_awaiting_mobile",
             "lang": flow_lang,
         }
-        return save(f, _t(flow_lang, MSGS["ask_mobile"]))
+        confirm = _t(flow_lang, MSGS["email_verified_success"])
+        ask_mobile = _t(flow_lang, MSGS["ask_mobile"])
+        return save(f, f"{confirm}\n\n{ask_mobile}")
 
     if step == "existing_awaiting_mobile":
         pending_email = (flow.get("pending_email") or "").strip().lower()

@@ -249,6 +249,11 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "رمز التحقق غير صحيح أو منتهي الصلاحية. حاول مرة أخرى.",
         "roman_urdu": "Verification code ghalat hai ya expire ho gaya. Dobara try karein.",
     },
+    "email_verified_success": {
+        "english": "✅ Email verified successfully! Now please provide your mobile number.",
+        "roman_urdu": "✅ Email verify ho gaya! Ab apna mobile number dein.",
+        "arabic": "✅ تم التحقق من البريد الإلكتروني بنجاح! الرجاء تقديم رقم هاتفك المحمول.",
+    },
     "ask_mobile": {
         "english": "Please provide your mobile number 📱",
         "arabic": "يرجى إدخال رقم الجوال 📱",
