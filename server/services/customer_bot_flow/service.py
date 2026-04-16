@@ -299,7 +299,7 @@ def _migrate_legacy_bot_flow(flow: Dict[str, Any]) -> Dict[str, Any]:
     if not flow:
         return {"step": "conversational", "intro_shown": False}
     step = str(flow.get("step") or "")
-    if step in ("awaiting_customer_type", "entry", "new_main_menu"):
+    if step in ("entry", "new_main_menu"):
         out = {**flow, "step": "conversational"}
         out.pop("customer_kind", None)
         return out
