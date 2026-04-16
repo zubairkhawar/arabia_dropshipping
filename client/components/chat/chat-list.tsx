@@ -135,18 +135,20 @@ export function ChatList() {
   const filteredConversations = useMemo(() => {
     let list = conversations;
 
-    if (view === 'bot') {
-      // AI Bot: conversations handled by bot, not yet escalated to agent
-      list = list.filter((c) => c.handlerType === 'ai' && c.status === 'active');
-    } else if (view === 'live') {
-      // Live Now: conversations where a real agent is actively handling
-      list = list.filter((c) => c.handlerType === 'agent' && c.status === 'active');
-    } else if (view === 'closed') {
-      list = list.filter((c) => c.status === 'resolved');
+    // Only apply view filters on admin pages — agent inbox shows all conversations
+    // and sub-filters them into live/closed/transferred sections below.
+    if (!isAgentInbox) {
+      if (view === 'bot') {
+        list = list.filter((c) => c.handlerType === 'ai' && c.status === 'active');
+      } else if (view === 'live') {
+        list = list.filter((c) => c.handlerType === 'agent' && c.status === 'active');
+      } else if (view === 'closed') {
+        list = list.filter((c) => c.status === 'resolved');
+      }
     }
 
     return [...list].sort((a, b) => b.id - a.id);
-  }, [conversations, view]);
+  }, [conversations, view, isAgentInbox]);
 
   // Clear selection when the selected conversation is not in the current view.
   // For agents: the conversation may no longer be assigned (e.g. after customer "reset").
