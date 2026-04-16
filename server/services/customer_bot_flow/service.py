@@ -54,7 +54,8 @@ def format_kb_reply(lang: str, ai_body: str, source: Optional[str] = None) -> st
     body = (ai_body or "").strip()
     # Strip source/footer lines the LLM may have copied from conversation history
     body = re.sub(r"\n*📌[^\n]*", "", body).strip()
-    body = re.sub(r'\n*(?:Type "support"|"support" likhein|اكتب "support")[^\n]*', "", body, flags=re.IGNORECASE).strip()
+    body = re.sub(r'\n*(?:Type "support"|Or type "support"|"support" likhein|اكتب "support"|أو اكتب "support")[^\n]*', "", body, flags=re.IGNORECASE).strip()
+    body = re.sub(r"\n*(?:If you need more information|You can also visit|Agar aapko mazeed|Aap hamari website|إذا كنت بحاجة|يمكنك أيضاً زيارة)[^\n]*", "", body, flags=re.IGNORECASE).strip()
     if not body:
         return body
     return _t(lang, MSGS["kb_wrap"]).format(body=body)

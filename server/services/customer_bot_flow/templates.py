@@ -400,18 +400,21 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     "kb_wrap": {
         "english": (
             "{body}\n\n"
-            "📌 Source: https://www.arabiadropship.com\n\n"
-            "Type \"support\" to speak with a human agent."
+            "If you need more information or assistance, feel free to ask.\n"
+            "You can also visit our website at https://www.arabiadropship.com\n"
+            "Or type \"support\" to speak with a human agent."
         ),
         "arabic": (
             "{body}\n\n"
-            "📌 المصدر: https://www.arabiadropship.com\n\n"
-            "اكتب \"support\" للتحدث مع موظف."
+            "إذا كنت بحاجة إلى مزيد من المعلومات أو المساعدة، لا تتردد في السؤال.\n"
+            "يمكنك أيضاً زيارة موقعنا: https://www.arabiadropship.com\n"
+            "أو اكتب \"support\" للتحدث مع موظف."
         ),
         "roman_urdu": (
             "{body}\n\n"
-            "📌 Source: https://www.arabiadropship.com\n\n"
-            "\"support\" likhein human agent se baat karne ke liye."
+            "Agar aapko mazeed information ya madad chahiye, befikr hokar poochein.\n"
+            "Aap hamari website bhi visit kar sakte hain: https://www.arabiadropship.com\n"
+            "Ya \"support\" likhein human agent se baat karne ke liye."
         ),
     },
     "unknown_info": {
