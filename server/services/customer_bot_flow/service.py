@@ -138,6 +138,46 @@ def _looks_like_greeting(text: str) -> bool:
     return False
 
 
+def _is_natural_language(text: str) -> bool:
+    """True when the input is clearly a sentence/question, not structured data (email/code/phone)."""
+    s = (text or "").strip()
+    if len(s) < 8:
+        return False
+    words = s.split()
+    if len(words) < 3:
+        return False
+    alpha = sum(1 for c in s if c.isalpha() or "\u0600" <= c <= "\u06FF")
+    return alpha > len(s) * 0.4
+
+
+def _wants_new_customer_path(text: str) -> bool:
+    """Detect when a customer says 'I'm new / I don't want to verify / skip verification'."""
+    s = (text or "").strip().lower()
+    s = re.sub(r"[^\w\u0600-\u06FF\s]", " ", s)
+    markers = (
+        "new customer", "i am new", "i m new", "im new",
+        "naya customer", "naye customer", "new hoon", "new hon",
+        "mein new", "main new",
+        "don't want to verify", "dont want to verify",
+        "skip verification", "no verification",
+        "verification nhi", "verify nhi", "verification nahi", "verify nahi",
+    )
+    return any(m in s for m in markers)
+
+
+def _bail_to_conversational(flow: Dict[str, Any], flow_lang: str) -> Dict[str, Any]:
+    """Clear verification state and return to conversational step."""
+    return {
+        **flow,
+        "step": "conversational",
+        "pending_email": None,
+        "pending_mobile": None,
+        "verify_reason": None,
+        "pending_order_ref": None,
+        "lang": flow_lang,
+    }
+
+
 def _looks_like_free_text_question(text: str) -> bool:
     """
     Detect likely FAQ/free-text requests at the entry step so we don't hard-loop
@@ -772,6 +812,12 @@ async def process_customer_bot_message(
         return ai_forward(text, nf, skip_api=True)
 
     if step == "existing_awaiting_email":
+        if _wants_new_customer_path(text):
+            nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
+            return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+        if _is_natural_language(text) and not _is_likely_email(text):
+            nf = _bail_to_conversational(flow, flow_lang)
+            return ai_forward(text, nf, skip_api=True)
         email = (text or "").strip().lower()
         if not _is_likely_email(email):
             return save(flow, _t(flow_lang, MSGS["email_invalid"]))
@@ -790,6 +836,12 @@ async def process_customer_bot_message(
         return save(f, _t(flow_lang, MSGS["code_sent"]).format(email=email))
 
     if step == "existing_awaiting_verification_code":
+        if _wants_new_customer_path(text):
+            nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
+            return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+        if _is_natural_language(text):
+            nf = _bail_to_conversational(flow, flow_lang)
+            return ai_forward(text, nf, skip_api=True)
         code = (text or "").strip()
         pending_email = (flow.get("pending_email") or "").strip().lower()
         if not pending_email:
@@ -827,6 +879,12 @@ async def process_customer_bot_message(
         return save(f, _t(flow_lang, MSGS["email_verified_success"]))
 
     if step == "existing_awaiting_mobile":
+        if _wants_new_customer_path(text):
+            nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
+            return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+        if _is_natural_language(text):
+            nf = _bail_to_conversational(flow, flow_lang)
+            return ai_forward(text, nf, skip_api=True)
         pending_email = (flow.get("pending_email") or "").strip().lower()
         mobile_raw = (text or "").strip()
         if not pending_email:
@@ -836,24 +894,7 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(f, _t(flow_lang, MSGS["ask_email"]))
-        # Don't show country-format error for normal questions/sentences while awaiting mobile.
-        digit_count = len(re.sub(r"\D+", "", mobile_raw))
-        if digit_count < 7:
-            if re.search(r"[A-Za-z\u0600-\u06FF]", mobile_raw or ""):
-                logger.info(
-                    "Verification flow: exiting mobile step for free-text query from %s",
-                    pending_email,
-                )
-                nf = {
-                    **flow,
-                    "step": "conversational",
-                    "pending_email": None,
-                    "pending_mobile": None,
-                    "verify_reason": None,
-                    "pending_order_ref": None,
-                    "lang": flow_lang,
-                }
-                return ai_forward(mobile_raw, nf, skip_api=_default_skip_store_api(nf))
+        if len(mobile_raw) < 7:
             return save(flow, _t(flow_lang, MSGS["ask_mobile"]))
         mobile = _normalize_phone(mobile_raw)
         if mobile is None:
@@ -949,6 +990,11 @@ async def process_customer_bot_message(
 
     if step == "conversational":
         kind = flow.get("customer_kind")
+
+        # Let customer switch to "new" path at any time
+        if kind == "existing" and not flow.get("verified") and _wants_new_customer_path(text):
+            nf = {**flow, "step": "conversational", "customer_kind": "new", "lang": flow_lang}
+            return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
 
         # Greeting: if customer_kind not yet set, ask new/existing; otherwise just ack
         if _looks_like_greeting(text):
