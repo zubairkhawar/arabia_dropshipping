@@ -775,7 +775,9 @@ async def process_customer_bot_message(
         email = (text or "").strip().lower()
         if not _is_likely_email(email):
             return save(flow, _t(flow_lang, MSGS["email_invalid"]))
+        logger.info("Verification flow: sending code to %s", email)
         sent = await store_client.send_verification_code(email)
+        logger.info("Verification flow: send_verification_code result for %s = %s", email, sent)
         if not sent:
             return save(flow, _t(flow_lang, MSGS["verify_send_error"]))
         f = {
@@ -799,13 +801,21 @@ async def process_customer_bot_message(
             return save(f, _t(flow_lang, MSGS["ask_email"]))
         low = code.lower()
         if low in ("resend", "resend code", "code resend"):
+            logger.info("Verification flow: resending code to %s", pending_email)
             sent = await store_client.send_verification_code(pending_email)
+            logger.info(
+                "Verification flow: resend send_verification_code result for %s = %s",
+                pending_email,
+                sent,
+            )
             if not sent:
                 return save(flow, _t(flow_lang, MSGS["verify_send_error"]))
             return save(flow, _t(flow_lang, MSGS["code_sent"]).format(email=pending_email))
         if len(code) < 4:
             return save(flow, _t(flow_lang, MSGS["verify"]).format(email=pending_email))
+        logger.info("Verification flow: verifying code for %s", pending_email)
         verified = await store_client.verify_code(pending_email, code)
+        logger.info("Verification flow: verify_code result for %s = %s", pending_email, verified)
         if not verified:
             return save(flow, _t(flow_lang, MSGS["verify_invalid_code"]))
         f = {

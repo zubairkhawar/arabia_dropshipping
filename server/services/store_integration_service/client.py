@@ -48,6 +48,7 @@ class StoreIntegrationClient:
         """
         e = (email or "").strip().lower()
         if not e:
+            logger.warning("send_verification_code called with empty email")
             return False
         if not self.base_url:
             logger.info("No CLIENT_API_BASE_URL; sending verification code via SMTP for %s", e)
@@ -56,12 +57,21 @@ class StoreIntegrationClient:
             async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
                 resp = await client.post("/customers/send-verification-code", json={"email": e})
                 if resp.status_code >= 400:
+                    logger.warning(
+                        "send_verification_code API failed for %s: status=%s body=%s",
+                        e,
+                        resp.status_code,
+                        (resp.text or "")[:300],
+                    )
                     return False
                 payload = resp.json() if resp.content else {}
                 if isinstance(payload, dict) and payload.get("success") is False:
+                    logger.warning("send_verification_code API returned success=false for %s", e)
                     return False
+                logger.info("send_verification_code API success for %s", e)
                 return True
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            logger.error("send_verification_code API error for %s: %s", e, exc)
             return False
 
     async def verify_code(self, email: str, code: str) -> bool:
@@ -73,6 +83,7 @@ class StoreIntegrationClient:
         e = (email or "").strip().lower()
         c = (code or "").strip()
         if not e or not c:
+            logger.warning("verify_code called with missing email/code")
             return False
         if not self.base_url:
             return verify_code_local(e, c)
@@ -80,17 +91,28 @@ class StoreIntegrationClient:
             async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
                 resp = await client.post("/customers/verify-code", json={"email": e, "code": c})
                 if resp.status_code >= 400:
+                    logger.warning(
+                        "verify_code API failed for %s: status=%s body=%s",
+                        e,
+                        resp.status_code,
+                        (resp.text or "")[:300],
+                    )
                     return False
                 payload = resp.json() if resp.content else {}
                 if not isinstance(payload, dict):
+                    logger.warning("verify_code API returned non-dict payload for %s", e)
                     return False
                 # Contract can be {"verified": true} or {"success": true, ...}
                 if payload.get("verified") is True:
+                    logger.info("verify_code API verified=true for %s", e)
                     return True
                 if payload.get("success") is True and payload.get("verified") is not False:
+                    logger.info("verify_code API success=true accepted for %s", e)
                     return True
+                logger.info("verify_code API did not verify for %s", e)
                 return False
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            logger.error("verify_code API error for %s: %s", e, exc)
             return False
 
     async def get_customer_by_email_mobile(self, email: str, mobile: str) -> Optional[Dict[str, Any]]:
