@@ -386,7 +386,7 @@ def _needs_account_verification(flow: Dict[str, Any]) -> bool:
 
 def _reset_bot_flow(lang_code: str) -> Dict[str, Any]:
     return {
-        "step": "conversational",
+        "step": "awaiting_customer_type",
         "intro_shown": True,
         "lang": lang_code,
         "verified": False,
