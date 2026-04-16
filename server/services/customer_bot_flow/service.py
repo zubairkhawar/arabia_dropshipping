@@ -221,7 +221,56 @@ def _looks_like_order_status_question(text: str) -> bool:
     t = (text or "").strip().lower()
     if len(t) < 6:
         return False
-    # Ignore obvious FAQ/company-info prompts (not "where is my order" — that stays order flow).
+
+    # ── Policy / FAQ / hypothetical patterns ──
+    # These mention "order" in a general/hypothetical sense, NOT "check MY specific order."
+    # They take priority over everything else — if the message is clearly a policy
+    # question we must NOT route to verification regardless of other markers.
+    policy_markers = (
+        "does arabia",
+        "do arabia",
+        "arabia provide",
+        "compensation",
+        "penalty",
+        "any reason",
+        "for any reason",
+        "if my order is not",
+        "if order is not",
+        "if the order",
+        "if an order",
+        "not shipped",
+        "not delivered",
+        "cancel policy",
+        "cancellation",
+        "return policy",
+        "return charges",
+        "refund policy",
+        "refund",
+        "shipping policy",
+        "shipping cost",
+        "how long does",
+        "how much",
+        "how many days",
+        "kitne din",
+        "policy",
+        "commission",
+        "protection",
+        "guarantee",
+        "seller protection",
+        "seller invoice",
+        # Roman Urdu policy patterns
+        "kya arabia",
+        "arabia kya",
+        "kya hota hai",
+        "kya milta",
+        "kaise hota",
+        "agar order",
+        "agar mera order",
+    )
+    if any(m in t for m in policy_markers):
+        return False
+
+    # ── General FAQ / info prompts ──
     info_markers = (
         "what is",
         "what markets",
