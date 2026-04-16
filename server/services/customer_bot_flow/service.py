@@ -824,9 +824,7 @@ async def process_customer_bot_message(
             "step": "existing_awaiting_mobile",
             "lang": flow_lang,
         }
-        confirm = _t(flow_lang, MSGS["email_verified_success"])
-        ask_mobile = _t(flow_lang, MSGS["ask_mobile"])
-        return save(f, f"{confirm}\n\n{ask_mobile}")
+        return save(f, _t(flow_lang, MSGS["email_verified_success"]))
 
     if step == "existing_awaiting_mobile":
         pending_email = (flow.get("pending_email") or "").strip().lower()
@@ -838,7 +836,24 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(f, _t(flow_lang, MSGS["ask_email"]))
-        if len(mobile_raw) < 7:
+        # Don't show country-format error for normal questions/sentences while awaiting mobile.
+        digit_count = len(re.sub(r"\D+", "", mobile_raw))
+        if digit_count < 7:
+            if re.search(r"[A-Za-z\u0600-\u06FF]", mobile_raw or ""):
+                logger.info(
+                    "Verification flow: exiting mobile step for free-text query from %s",
+                    pending_email,
+                )
+                nf = {
+                    **flow,
+                    "step": "conversational",
+                    "pending_email": None,
+                    "pending_mobile": None,
+                    "verify_reason": None,
+                    "pending_order_ref": None,
+                    "lang": flow_lang,
+                }
+                return ai_forward(mobile_raw, nf, skip_api=_default_skip_store_api(nf))
             return save(flow, _t(flow_lang, MSGS["ask_mobile"]))
         mobile = _normalize_phone(mobile_raw)
         if mobile is None:
