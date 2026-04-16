@@ -1,8 +1,12 @@
+import logging
 from typing import Optional, List, Dict, Any
 
 import httpx
 
 from config import settings
+from services.verification_service import send_verification_code_local, verify_code_local
+
+logger = logging.getLogger(__name__)
 
 
 class StoreIntegrationClient:
@@ -40,12 +44,14 @@ class StoreIntegrationClient:
         """
         POST /customers/send-verification-code
         Body: {"email": "..."}
+        Falls back to local SMTP when no external API is configured.
         """
-        if not self.base_url:
-            return False
         e = (email or "").strip().lower()
         if not e:
             return False
+        if not self.base_url:
+            logger.info("No CLIENT_API_BASE_URL; sending verification code via SMTP for %s", e)
+            return send_verification_code_local(e)
         try:
             async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
                 resp = await client.post("/customers/send-verification-code", json={"email": e})
@@ -62,13 +68,14 @@ class StoreIntegrationClient:
         """
         POST /customers/verify-code
         Body: {"email": "...", "code": "..."}
+        Falls back to local in-memory store when no external API is configured.
         """
-        if not self.base_url:
-            return False
         e = (email or "").strip().lower()
         c = (code or "").strip()
         if not e or not c:
             return False
+        if not self.base_url:
+            return verify_code_local(e, c)
         try:
             async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
                 resp = await client.post("/customers/verify-code", json={"email": e, "code": c})
