@@ -1,15 +1,31 @@
+import logging
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from database import get_db
-from models import Agent, Tenant, TenantSchedule
+from config import hydrate_openai_api_key_from_db, settings, set_openai_api_key_override
+from database import SessionLocal, engine, get_db
+from models import Agent, Tenant, TenantSchedule, User
 from services.auth_service.api import get_current_user
-from services.auth_service.models import User
+from services.auth_service.services import get_password_hash
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# PostGIS / system-ish tables that may appear in public schema — never truncate these.
+_PG_PUBLIC_SKIP_TABLES = frozenset(
+    {
+        "spatial_ref_sys",
+        "geography_columns",
+        "geometry_columns",
+        "raster_columns",
+        "raster_overviews",
+    }
+)
 
 
 @router.get("/")
@@ -242,3 +258,165 @@ async def put_schedule(
         sched.end_time = payload.end_time
     db.commit()
     return payload
+
+
+class EraseAllApplicationDataIn(BaseModel):
+    """Must match exactly (case-sensitive) to run the destructive erase."""
+
+    confirmation: str = Field(..., min_length=1, max_length=64)
+
+
+def _public_tables_to_truncate() -> list[str]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname = 'public' ORDER BY tablename"
+            )
+        ).fetchall()
+    names = [r[0] for r in rows if r[0] not in _PG_PUBLIC_SKIP_TABLES]
+    return names
+
+
+def _truncate_all_public_tables() -> int:
+    names = _public_tables_to_truncate()
+    if not names:
+        return 0
+    quoted = ", ".join(f'"{n}"' for n in names)
+    with engine.begin() as conn:
+        conn.execute(text(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"))
+    return len(names)
+
+
+def _reseed_default_tenant_and_admin(db: Session) -> dict:
+    """
+    Recreate tenant id=1, default online schedule, and bootstrap admin from env
+    (same spirit as main.ensure_admin_user).
+    """
+    admin_created = False
+    tenant = db.query(Tenant).filter(Tenant.id == 1).first()
+    if tenant is None:
+        tenant = Tenant(
+            id=1,
+            name="Default Tenant",
+            domain=None,
+            display_timezone="Asia/Karachi",
+            is_active=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(tenant)
+    else:
+        tenant.name = "Default Tenant"
+        tenant.domain = None
+        tenant.display_timezone = "Asia/Karachi"
+        tenant.is_active = True
+        tenant.updated_at = datetime.utcnow()
+
+    sched = db.query(TenantSchedule).filter(TenantSchedule.tenant_id == 1).first()
+    if sched is None:
+        db.add(
+            TenantSchedule(
+                tenant_id=1,
+                working_days=[1, 2, 3, 4, 5, 6],
+                start_time="09:00",
+                end_time="18:00",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+    else:
+        sched.working_days = [1, 2, 3, 4, 5, 6]
+        sched.start_time = "09:00"
+        sched.end_time = "18:00"
+        sched.updated_at = datetime.utcnow()
+
+    if settings.admin_email and settings.admin_password:
+        existing = db.query(User).filter(User.email == settings.admin_email).first()
+        if existing is None:
+            db.add(
+                User(
+                    tenant_id=1,
+                    email=settings.admin_email,
+                    full_name="Arabia Admin",
+                    role="admin",
+                    hashed_password=get_password_hash(settings.admin_password),
+                    is_active=True,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+            )
+            admin_created = True
+
+    db.commit()
+    return {"admin_recreated": admin_created}
+
+
+@router.post("/{tenant_id}/erase-all-application-data")
+async def erase_all_application_data(
+    tenant_id: int,
+    payload: EraseAllApplicationDataIn,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Nuclear option for staging / QA: truncate every application table in `public`,
+    then recreate default tenant (id=1), default schedule, and admin user from env.
+
+    Requires tenant admin JWT and exact confirmation phrase.
+    Only supported on PostgreSQL. R2 / Cloudflare must be cleared separately.
+    """
+    _require_tenant_admin(current_user, tenant_id)
+    if (payload.confirmation or "").strip() != "ERASE_ALL_DATA":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Confirmation must be exactly "ERASE_ALL_DATA"',
+        )
+    raw_url = (settings.database_url or "").lower()
+    if not (raw_url.startswith("postgresql") or raw_url.startswith("postgres://")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Erase is only supported for PostgreSQL (Render Postgres)",
+        )
+    if not settings.admin_email or not settings.admin_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Set ADMIN_EMAIL and ADMIN_PASSWORD on the server before using erase "
+            "(they are used to recreate the admin user).",
+        )
+
+    try:
+        n_tables = _truncate_all_public_tables()
+    except Exception as exc:
+        logger.exception("erase-all-application-data: truncate failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database truncate failed: {exc!s}"[:500],
+        ) from exc
+
+    db2 = SessionLocal()
+    try:
+        meta = _reseed_default_tenant_and_admin(db2)
+    except Exception as exc:
+        logger.exception("erase-all-application-data: reseed failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Reseed after erase failed: {exc!s}"[:500],
+        ) from exc
+    finally:
+        db2.close()
+
+    set_openai_api_key_override(None)
+    hydrate_openai_api_key_from_db()
+
+    logger.warning(
+        "erase-all-application-data completed by admin user_id=%s email=%s tenant_id=%s tables=%s",
+        getattr(current_user, "id", "?"),
+        getattr(current_user, "email", "?"),
+        tenant_id,
+        n_tables,
+    )
+    return {
+        "ok": True,
+        "tables_truncated": n_tables,
+        "admin_recreated": meta.get("admin_recreated", False),
+    }
