@@ -239,6 +239,46 @@ def _is_likely_email(text: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", s))
 
 
+def _normalize_phone(raw: str) -> Optional[str]:
+    """
+    Normalize phone numbers from Pakistan (92), UAE (971), Saudi Arabia (966).
+    Returns the normalized string or None when the number doesn't belong to any
+    of the three supported countries.
+
+    Pakistan  → local format  03XXXXXXXXX  (11 digits)
+    UAE       → international 971XXXXXXXX  (10-12 digits)
+    Saudi     → international 966XXXXXXXXX (12 digits)
+    """
+    s = re.sub(r"[\s\-().]+", "", (raw or "").strip())
+    if s.startswith("+"):
+        s = s[1:]
+    if s.startswith("00"):
+        s = s[2:]
+    if not s.isdigit():
+        return None
+
+    # --- Pakistan (92) ---
+    # International: 923XXXXXXXXX (12 digits)
+    if s.startswith("92") and len(s) == 12 and s[2] == "3":
+        return "0" + s[2:]
+    # Local with leading 0: 03XXXXXXXXX (11 digits)
+    if s.startswith("03") and len(s) == 11:
+        return s
+    # Bare local (e.g. from 003XXXXXXXXX after stripping 00): 3XXXXXXXXX (10 digits)
+    if s.startswith("3") and len(s) == 10:
+        return "0" + s
+
+    # --- UAE (971) ---
+    if s.startswith("971") and 10 <= len(s) <= 12:
+        return s
+
+    # --- Saudi Arabia (966) ---
+    if s.startswith("966") and 12 <= len(s) <= 13:
+        return s
+
+    return None
+
+
 def _verified_at_iso() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -778,7 +818,7 @@ async def process_customer_bot_message(
 
     if step == "existing_awaiting_mobile":
         pending_email = (flow.get("pending_email") or "").strip().lower()
-        mobile = (text or "").strip()
+        mobile_raw = (text or "").strip()
         if not pending_email:
             f = {
                 **flow,
@@ -786,8 +826,11 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(f, _t(flow_lang, MSGS["ask_email"]))
-        if len(mobile) < 7:
+        if len(mobile_raw) < 7:
             return save(flow, _t(flow_lang, MSGS["ask_mobile"]))
+        mobile = _normalize_phone(mobile_raw)
+        if mobile is None:
+            return save(flow, _t(flow_lang, MSGS["mobile_unsupported_country"]))
         customer = await store_client.get_customer_by_email_mobile(pending_email, mobile)
         if not customer:
             return save(flow, _t(flow_lang, MSGS["customer_not_found_after_verify"]))

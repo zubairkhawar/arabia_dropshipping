@@ -254,6 +254,29 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "يرجى إدخال رقم الجوال 📱",
         "roman_urdu": "Apna mobile number bhejein 📱",
     },
+    "mobile_unsupported_country": {
+        "english": (
+            "We only support phone numbers from Pakistan, UAE, and Saudi Arabia.\n\n"
+            "🇵🇰 Pakistan: 03XXXXXXXXX or +923XXXXXXXXX\n"
+            "🇦🇪 UAE: 971XXXXXXXXX\n"
+            "🇸🇦 Saudi Arabia: 966XXXXXXXXX\n\n"
+            "Please send a valid mobile number."
+        ),
+        "arabic": (
+            "نحن ندعم أرقام الهاتف من باكستان والإمارات والسعودية فقط.\n\n"
+            "🇵🇰 باكستان: 03XXXXXXXXX أو +923XXXXXXXXX\n"
+            "🇦🇪 الإمارات: 971XXXXXXXXX\n"
+            "🇸🇦 السعودية: 966XXXXXXXXX\n\n"
+            "يرجى إرسال رقم جوال صحيح."
+        ),
+        "roman_urdu": (
+            "Hum sirf Pakistan, UAE aur Saudi Arabia ke numbers support karte hain.\n\n"
+            "🇵🇰 Pakistan: 03XXXXXXXXX ya +923XXXXXXXXX\n"
+            "🇦🇪 UAE: 971XXXXXXXXX\n"
+            "🇸🇦 Saudi Arabia: 966XXXXXXXXX\n\n"
+            "Please sahih mobile number bhejein."
+        ),
+    },
     "customer_not_found_after_verify": {
         "english": "We could not find a customer with this email and mobile. Please check and send your mobile number again.",
         "arabic": "لم نعثر على عميل بهذا البريد والجوال. يرجى التحقق وإرسال رقم الجوال مرة أخرى.",
