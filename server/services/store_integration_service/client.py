@@ -63,16 +63,25 @@ class StoreIntegrationClient:
                         resp.status_code,
                         (resp.text or "")[:300],
                     )
-                    return False
+                    logger.info(
+                        "Falling back to local SMTP verification code for %s after API failure",
+                        e,
+                    )
+                    return send_verification_code_local(e)
                 payload = resp.json() if resp.content else {}
                 if isinstance(payload, dict) and payload.get("success") is False:
                     logger.warning("send_verification_code API returned success=false for %s", e)
-                    return False
+                    logger.info(
+                        "Falling back to local SMTP verification code for %s after API success=false",
+                        e,
+                    )
+                    return send_verification_code_local(e)
                 logger.info("send_verification_code API success for %s", e)
                 return True
         except httpx.HTTPError as exc:
             logger.error("send_verification_code API error for %s: %s", e, exc)
-            return False
+            logger.info("Falling back to local SMTP verification code for %s after API exception", e)
+            return send_verification_code_local(e)
 
     async def verify_code(self, email: str, code: str) -> bool:
         """
@@ -97,11 +106,13 @@ class StoreIntegrationClient:
                         resp.status_code,
                         (resp.text or "")[:300],
                     )
-                    return False
+                    logger.info("Falling back to local verify_code for %s after API failure", e)
+                    return verify_code_local(e, c)
                 payload = resp.json() if resp.content else {}
                 if not isinstance(payload, dict):
                     logger.warning("verify_code API returned non-dict payload for %s", e)
-                    return False
+                    logger.info("Falling back to local verify_code for %s after invalid API payload", e)
+                    return verify_code_local(e, c)
                 # Contract can be {"verified": true} or {"success": true, ...}
                 if payload.get("verified") is True:
                     logger.info("verify_code API verified=true for %s", e)
@@ -109,11 +120,15 @@ class StoreIntegrationClient:
                 if payload.get("success") is True and payload.get("verified") is not False:
                     logger.info("verify_code API success=true accepted for %s", e)
                     return True
-                logger.info("verify_code API did not verify for %s", e)
-                return False
+                logger.info(
+                    "verify_code API did not verify for %s; trying local fallback before reject",
+                    e,
+                )
+                return verify_code_local(e, c)
         except httpx.HTTPError as exc:
             logger.error("verify_code API error for %s: %s", e, exc)
-            return False
+            logger.info("Falling back to local verify_code for %s after API exception", e)
+            return verify_code_local(e, c)
 
     async def get_customer_by_email_mobile(self, email: str, mobile: str) -> Optional[Dict[str, Any]]:
         """
