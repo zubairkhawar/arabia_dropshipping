@@ -148,16 +148,25 @@ export function ChatList() {
     return [...list].sort((a, b) => b.id - a.id);
   }, [conversations, view]);
 
-  // Admin views: clear selection when the current selectedId is not in the filtered list.
+  // Clear selection when the selected conversation is not in the current view.
+  // For agents: the conversation may no longer be assigned (e.g. after customer "reset").
+  // For admin: the conversation may not match the active filter (bot/live/closed).
   useEffect(() => {
-    if (!isAdminInbox || isAgentInbox) return;
     if (selectedId == null) return;
-    const inView = filteredConversations.some((c) => c.id === selectedId);
-    if (!inView) {
-      // Select the first conversation in the filtered view, or clear.
-      setSelectedId(filteredConversations[0]?.id ?? null);
+    if (isAgentInbox) {
+      // Skip while the initial conversation list is still loading.
+      if (inboxConv?.isLoading) return;
+      const inList = conversations.some((c) => c.id === selectedId);
+      if (!inList) {
+        setSelectedId(conversations[0]?.id ?? null);
+      }
+    } else if (isAdminInbox) {
+      const inView = filteredConversations.some((c) => c.id === selectedId);
+      if (!inView) {
+        setSelectedId(filteredConversations[0]?.id ?? null);
+      }
     }
-  }, [filteredConversations, selectedId, isAdminInbox, isAgentInbox, setSelectedId]);
+  }, [filteredConversations, conversations, selectedId, isAdminInbox, isAgentInbox, setSelectedId, inboxConv?.isLoading]);
 
   const liveConversations = filteredConversations.filter((c) =>
     isAgentInbox ? c.status === 'active' : c.status === 'active' || c.status === 'transferred',
