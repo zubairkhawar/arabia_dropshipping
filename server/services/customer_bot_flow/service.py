@@ -666,6 +666,113 @@ def _format_trending_product_detail(_lang: str, p: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _extract_sourcing_product_name(text: str) -> Optional[str]:
+    """
+    Best-effort product name extraction from sourcing messages.
+    e.g. "muje seoul cream chaie" → "seoul cream"
+    """
+    t = (text or "").strip()
+    if not t:
+        return None
+    low = t.lower()
+    # Strip common prefixes
+    low = re.sub(
+        r"^(?:muje|mujhe|mjy|mujhay|i want|i need|main|mein)\s+",
+        "",
+        low,
+    ).strip()
+    # Strip common suffixes
+    low = re.sub(
+        r"\s+(?:chahiye|chaiye|chahie|chaie|mangta|mangti|chahte|"
+        r"local market.*|se.*chahiye|from local.*|mil sakta.*|mil skta.*|"
+        r"piece.*|pieces.*|pcs.*|unit.*|units.*|qty.*)$",
+        "",
+        low,
+    ).strip()
+    # Strip filler words
+    low = re.sub(
+        r"\b(?:ye|yeh|wo|woh|ek|ik|is|ka|ki|ke|ko|se|mein|hai|app|aap)\b",
+        "",
+        low,
+    ).strip()
+    low = re.sub(r"\s+", " ", low).strip()
+    # If what remains is too short or too long, give up
+    if not low or len(low) < 3 or len(low) > 80:
+        return None
+    # Don't return if it's just generic words
+    generic = {"product", "products", "item", "items", "order", "rate", "price", "bulk"}
+    if low in generic:
+        return None
+    return low
+
+
+def _wants_product_sourcing(text: str) -> bool:
+    """
+    Detect product sourcing, bulk order, or wholesale inquiry that requires agent handoff.
+    Examples: "muje seoul cream chaie", "500 piece chahiye", "local market se", "bulk order"
+    """
+    t = (text or "").strip().lower()
+    if not t or len(t) < 6:
+        return False
+    flat = re.sub(r"[^\w\u0600-\u06FF\s]", " ", t)
+    flat = re.sub(r"\s+", " ", flat).strip()
+
+    # Strong sourcing / bulk phrases — immediate match
+    strong_markers = (
+        "local market",
+        "bulk order",
+        "wholesale",
+        "wholesale price",
+        "wholesale rate",
+        "source product",
+        "source karo",
+        "source kardo",
+        "source kar do",
+        "arrange kar do",
+        "arrange kardo",
+        "arrange karo",
+        "mangwa do",
+        "mangwao",
+        "mangwa dein",
+        "kahan se milay ga",
+        "kahan se milega",
+        "kaha se milega",
+        "kahan milega",
+    )
+    if any(m in flat for m in strong_markers):
+        return True
+
+    # Quantity patterns: "500 piece", "100 units", "50 pcs" etc.
+    has_quantity = bool(re.search(r"\b\d{2,}\s*(?:piece|pieces|pcs|unit|units|qty)\b", flat))
+    # Product-want signals
+    want_markers = (
+        "chahiye", "chaiye", "chahie", "chaie", "chaie",
+        "chahte", "mangta", "mangti",
+        "rate batao", "rate btao", "rate batain", "rate btain",
+        "rate bata", "price batao", "price btao",
+        "price bata do", "rate bata do",
+        "kitne ka hai", "kitne ka",
+        "kitnay ka", "kitna rate",
+    )
+    has_want = any(m in flat for m in want_markers)
+
+    if has_quantity:
+        return True
+    if has_quantity and has_want:
+        return True
+
+    # "product chahiye" / "[product name] chahiye" + implies sourcing when message is short enough
+    # and NOT a general question (no "kya", "how", "?")
+    if has_want and "?" not in t:
+        # Check if the message mentions a specific product (not a general phrase)
+        general_words = {"information", "help", "madad", "maloomat", "details", "jankari", "kya", "how", "what", "question", "sawal"}
+        tokens = set(flat.split())
+        if not tokens & general_words:
+            return True
+
+    return False
+
+
 def _wants_trending_products(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t or len(t) > 220:
@@ -678,6 +785,9 @@ def _wants_trending_products(text: str) -> bool:
         "bestseller",
         "browse product",
         "show product",
+        "show me product",
+        "give product",
+        "give me product",
         "popular product",
         "top product",
         "tranding",
@@ -685,14 +795,23 @@ def _wants_trending_products(text: str) -> bool:
         "popular items",
         "trending product",
         "products dekh",
+        "product dekh",
         "product dikha",
         "product dikhao",
-        "dikhao products",
-        "naye products",
+        "dikhao product",
+        "naye product",
         "new arrivals",
         "hot product",
+        "give trending",
+        "show trending",
+        "products btao",
+        "products batao",
+        "product btao",
+        "product batao",
     )
-    return any(m in flat for m in markers)
+    # Normalize plural→singular for broader matching
+    flat_singular = flat.replace("products", "product")
+    return any(m in flat for m in markers) or any(m in flat_singular for m in markers)
 
 
 def _looks_like_account_question(text: str) -> bool:
@@ -802,6 +921,7 @@ def _flow_is_tabula_rasa(flow: Dict[str, Any]) -> bool:
         "existing_verified_menu",
         "trending_awaiting_country",
         "trending_showing_products",
+        "sourcing_collecting_details",
     ):
         return False
     if step == "conversational":
@@ -1118,6 +1238,55 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(nf, _t(flow_lang, MSGS["ask_email"]))
+        # Trending products intent at the entry menu — jump straight to trending flow
+        if _wants_trending_products(text):
+            nf = {
+                **flow,
+                "step": "trending_awaiting_country",
+                "customer_kind": flow.get("customer_kind") or "new",
+                "intro_shown": True,
+                "lang": flow_lang,
+            }
+            return save(nf, _t(flow_lang, MSGS["trending_ask_country"]))
+
+        # Product sourcing at entry menu — collect details then hand off
+        if _wants_product_sourcing(text):
+            product_hint = _extract_sourcing_product_name(text)
+            has_bulk = bool(re.search(
+                r"\b\d{2,}\s*(?:piece|pieces|pcs|unit|units|qty)\b",
+                text.lower(),
+            ))
+            if has_bulk:
+                nf = {
+                    **flow,
+                    "step": "awaiting_agent",
+                    "customer_kind": "new",
+                    "intro_shown": True,
+                    "pending_handoff_team": TEAM_NEW_CUSTOMER,
+                    "sourcing_product_name": product_hint,
+                    "lang": flow_lang,
+                }
+                return save(
+                    nf,
+                    _t(flow_lang, MSGS["sourcing_bulk_handoff"]),
+                    team=TEAM_NEW_CUSTOMER,
+                    esc=True,
+                )
+            nf = {
+                **flow,
+                "step": "sourcing_collecting_details",
+                "customer_kind": "new",
+                "intro_shown": True,
+                "sourcing_product_name": product_hint,
+                "lang": flow_lang,
+            }
+            if product_hint:
+                return save(
+                    nf,
+                    _t(flow_lang, MSGS["sourcing_with_product"]).format(product=product_hint),
+                )
+            return save(nf, _t(flow_lang, MSGS["sourcing_collect_details"]))
+
         # Free-text that isn't a choice → treat as new customer and answer directly
         nf = {
             **flow,
@@ -1140,25 +1309,23 @@ async def process_customer_bot_message(
         items_filtered = _filter_trending_items_by_category(items_all, wanted_category)
         items = items_filtered[:TRENDING_WA_MAX]
         if not items:
-            nf = {**flow, "step": "conversational", "lang": flow_lang}
+            # Stay in trending_awaiting_country so the user can pick another country
+            nf = {**flow, "step": "trending_awaiting_country", "lang": flow_lang}
             nf.pop("trending_country", None)
             nf.pop("trending_products_cache", None)
             nf.pop("trending_products_all", None)
             nf.pop("trending_category", None)
             if wanted_category:
-                return save(
-                    nf,
-                    _t(flow_lang, MSGS["trending_no_products_category"]).format(
-                        country=_trending_footer_country_label(cc),
-                        category=wanted_category,
-                    ),
+                no_msg = _t(flow_lang, MSGS["trending_no_products_category"]).format(
+                    country=_trending_footer_country_label(cc),
+                    category=wanted_category,
                 )
-            return save(
-                nf,
-                _t(flow_lang, MSGS["trending_no_products"]).format(
+            else:
+                no_msg = _t(flow_lang, MSGS["trending_no_products"]).format(
                     country=_trending_footer_country_label(cc)
-                ),
-            )
+                )
+            retry = _t(flow_lang, MSGS["trending_country_retry"])
+            return save(nf, f"{no_msg}\n\n{retry}")
         nf = {
             **flow,
             "step": "trending_showing_products",
@@ -1297,6 +1464,35 @@ async def process_customer_bot_message(
             return ai_forward(hint + text, nf, skip_api=_default_skip_store_api(nf))
 
         return save(flow, _t(flow_lang, MSGS["trending_product_not_matched"]))
+
+    if step == "sourcing_collecting_details":
+        # Customer is providing product details for sourcing — collect and hand off
+        # Any message here is treated as additional details; hand off to agent
+        sourcing_info = flow.get("sourcing_product_name") or ""
+        team = TEAM_NEW_CUSTOMER
+        if flow.get("verified"):
+            team = flow.get("experience_team") or TEAM_BEGINNER
+
+        # Check if this is a bulk quantity message
+        has_bulk = bool(re.search(r"\b\d{2,}\s*(?:piece|pieces|pcs|unit|units|qty)\b", text.lower()))
+        if has_bulk:
+            template_key = "sourcing_bulk_handoff"
+        else:
+            template_key = "sourcing_handoff"
+
+        nf = {
+            **flow,
+            "step": "awaiting_agent",
+            "intro_shown": True,
+            "pending_handoff_team": team,
+            "lang": flow_lang,
+        }
+        return save(
+            nf,
+            _t(flow_lang, MSGS[template_key]),
+            team=team,
+            esc=True,
+        )
 
     if step == "existing_awaiting_email":
         if _wants_new_customer_path(text):
@@ -1486,6 +1682,48 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(nf, _t(flow_lang, MSGS["trending_ask_country"]))
+
+        # Product sourcing / bulk order detection → collect details then hand off
+        if _wants_product_sourcing(text):
+            # Try to extract a product name from the message
+            product_hint = _extract_sourcing_product_name(text)
+            # If message already has quantity (bulk), skip collection → hand off directly
+            has_bulk = bool(re.search(
+                r"\b\d{2,}\s*(?:piece|pieces|pcs|unit|units|qty)\b",
+                text.lower(),
+            ))
+            if has_bulk:
+                team = TEAM_NEW_CUSTOMER
+                if flow.get("verified"):
+                    team = flow.get("experience_team") or TEAM_BEGINNER
+                nf = {
+                    **flow,
+                    "step": "awaiting_agent",
+                    "intro_shown": True,
+                    "pending_handoff_team": team,
+                    "sourcing_product_name": product_hint,
+                    "lang": flow_lang,
+                }
+                return save(
+                    nf,
+                    _t(flow_lang, MSGS["sourcing_bulk_handoff"]),
+                    team=team,
+                    esc=True,
+                )
+            # Otherwise ask for details before handoff
+            nf = {
+                **flow,
+                "step": "sourcing_collecting_details",
+                "intro_shown": True,
+                "sourcing_product_name": product_hint,
+                "lang": flow_lang,
+            }
+            if product_hint:
+                return save(
+                    nf,
+                    _t(flow_lang, MSGS["sourcing_with_product"]).format(product=product_hint),
+                )
+            return save(nf, _t(flow_lang, MSGS["sourcing_collect_details"]))
 
         # Let customer switch to "new" path at any time
         if kind == "existing" and not flow.get("verified") and _wants_new_customer_path(text):

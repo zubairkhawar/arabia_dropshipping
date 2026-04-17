@@ -551,14 +551,113 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": "🔥 {country} ke trending {category} picks:",
     },
     "trending_no_products": {
-        "english": "No trending products are listed for {country} yet. Try another country or ask me anything else.",
-        "arabic": "لا توجد منتجات رائجة مسجّلة لـ {country} حتى الآن. جرّب دولة أخرى أو اسألني أي شيء آخر.",
-        "roman_urdu": "Abhi {country} ke liye koi trending product list nahi hai. Doosri country try karein ya koi aur sawal pooch lein.",
+        "english": "No trending products are listed for {country} yet.",
+        "arabic": "لا توجد منتجات رائجة مسجّلة لـ {country} حتى الآن.",
+        "roman_urdu": "Abhi {country} ke liye koi trending product list nahi hai.",
     },
     "trending_no_products_category": {
         "english": "No trending {category} products are listed for {country} yet. Try another category/country or ask me anything else.",
         "arabic": "لا توجد منتجات {category} رائجة مسجّلة لـ {country} حالياً. جرّب فئة/دولة أخرى أو اسألني أي شيء آخر.",
         "roman_urdu": "Abhi {country} mein {category} category ke trending products list nahi hain. Doosri category/country try karein ya koi aur sawal pooch lein.",
+    },
+    "sourcing_collect_details": {
+        "english": (
+            "Thank you for your interest in sourcing a product! 📦\n\n"
+            "Please share the following details so our support team can assist you:\n\n"
+            "📷 Product picture (if available)\n"
+            "📝 Product name\n"
+            "🔢 Required quantity\n\n"
+            "Once you share these details, I will connect you with a support agent "
+            "who will help you with pricing and availability."
+        ),
+        "arabic": (
+            "شكرًا لاهتمامك بتوريد منتج! 📦\n\n"
+            "يرجى مشاركة التفاصيل التالية حتى يتمكن فريق الدعم من مساعدتك:\n\n"
+            "📷 صورة المنتج (إن وجدت)\n"
+            "📝 اسم المنتج\n"
+            "🔢 الكمية المطلوبة\n\n"
+            "بمجرد مشاركة هذه التفاصيل، سأوصلك بأحد موظفي الدعم "
+            "للمساعدة في الأسعار والتوفر."
+        ),
+        "roman_urdu": (
+            "Product sourcing mein interest ke liye shukriya! 📦\n\n"
+            "Hamari support team ki madad ke liye yeh details share karein:\n\n"
+            "📷 Product ki picture (agar available ho)\n"
+            "📝 Product ka naam\n"
+            "🔢 Kitni quantity chahiye\n\n"
+            "Yeh details milne ke baad main aapko support agent se connect kar doonga "
+            "jo pricing aur availability mein madad karega."
+        ),
+    },
+    "sourcing_with_product": {
+        "english": (
+            "Thank you for your interest in sourcing {product}! 📦\n\n"
+            "Please also share:\n\n"
+            "📷 Product picture (if available)\n"
+            "🔢 Required quantity\n\n"
+            "Once you share these details, I will connect you with a support agent "
+            "who will help you with pricing and availability."
+        ),
+        "arabic": (
+            "شكرًا لاهتمامك بتوريد {product}! 📦\n\n"
+            "يرجى أيضاً مشاركة:\n\n"
+            "📷 صورة المنتج (إن وجدت)\n"
+            "🔢 الكمية المطلوبة\n\n"
+            "بمجرد مشاركة هذه التفاصيل، سأوصلك بأحد موظفي الدعم "
+            "للمساعدة في الأسعار والتوفر."
+        ),
+        "roman_urdu": (
+            "{product} sourcing mein interest ke liye shukriya! 📦\n\n"
+            "Yeh bhi share karein:\n\n"
+            "📷 Product ki picture (agar available ho)\n"
+            "🔢 Kitni quantity chahiye\n\n"
+            "Yeh details milne ke baad main aapko support agent se connect kar doonga "
+            "jo pricing aur availability mein madad karega."
+        ),
+    },
+    "sourcing_handoff": {
+        "english": (
+            "Thank you for providing the details! 🙏\n\n"
+            "I am now connecting you with a support agent who will assist you with "
+            "pricing, availability, and your order. Please wait a moment."
+        ),
+        "arabic": (
+            "شكرًا لتقديم التفاصيل! 🙏\n\n"
+            "أقوم الآن بتوصيلك بموظف دعم سيساعدك في "
+            "الأسعار والتوفر وطلبك. يرجى الانتظار لحظة."
+        ),
+        "roman_urdu": (
+            "Details share karne ka shukriya! 🙏\n\n"
+            "Main ab aapko support agent se connect kar raha hoon jo "
+            "pricing, availability, aur aapke order mein madad karega. "
+            "Thora intezar karein."
+        ),
+    },
+    "sourcing_bulk_handoff": {
+        "english": (
+            "Thank you for your bulk order inquiry! 📦\n\n"
+            "For your order, our support team will provide you with:\n\n"
+            "• Wholesale pricing\n"
+            "• Bulk shipping rates\n"
+            "• Estimated delivery timeline\n\n"
+            "I am connecting you with a support agent now. Please wait a moment."
+        ),
+        "arabic": (
+            "شكرًا لاستفسارك عن الطلب بالجملة! 📦\n\n"
+            "لطلبك، سيقدم لك فريق الدعم:\n\n"
+            "• أسعار الجملة\n"
+            "• أسعار الشحن بالجملة\n"
+            "• الجدول الزمني المتوقع للتسليم\n\n"
+            "أقوم بتوصيلك بموظف دعم الآن. يرجى الانتظار لحظة."
+        ),
+        "roman_urdu": (
+            "Bulk order inquiry ke liye shukriya! 📦\n\n"
+            "Aapke order ke liye hamari support team yeh provide karegi:\n\n"
+            "• Wholesale pricing\n"
+            "• Bulk shipping rates\n"
+            "• Estimated delivery timeline\n\n"
+            "Main ab aapko support agent se connect kar raha hoon. Thora intezar karein."
+        ),
     },
     "fallback": {
         "english": (
