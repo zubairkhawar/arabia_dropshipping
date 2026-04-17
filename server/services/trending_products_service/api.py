@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
@@ -64,6 +64,44 @@ def _resolve_image_url(row: TrendingProduct) -> Optional[str]:
     return None
 
 
+def _normalize_image_lists(
+    image_urls: Optional[List[str]],
+    image_keys: Optional[List[str]],
+) -> tuple[list[str], list[str]]:
+    urls = [u.strip() for u in (image_urls or []) if isinstance(u, str) and u.strip()]
+    keys = [k.strip() for k in (image_keys or []) if isinstance(k, str) and k.strip()]
+    return urls, keys
+
+
+def _resolve_image_urls(row: TrendingProduct) -> list[str]:
+    out: list[str] = []
+    raw_urls: Any = getattr(row, "image_urls", None)
+    if isinstance(raw_urls, list):
+        out.extend(str(u).strip() for u in raw_urls if str(u).strip())
+    if row.image_url and row.image_url.strip():
+        primary = row.image_url.strip()
+        if primary not in out:
+            out.insert(0, primary)
+    if out:
+        return out
+    raw_keys: Any = getattr(row, "image_keys", None)
+    keys: list[str] = []
+    if isinstance(raw_keys, list):
+        keys.extend(str(k).strip() for k in raw_keys if str(k).strip())
+    if row.image_key and row.image_key.strip():
+        primary_key = row.image_key.strip()
+        if primary_key not in keys:
+            keys.insert(0, primary_key)
+    resolved: list[str] = []
+    for k in keys:
+        if is_r2_configured():
+            try:
+                resolved.append(presign_get(k, settings.r2_presign_get_seconds))
+            except Exception as e:
+                logger.warning("trending product presign failed for key %s: %s", k, e)
+    return resolved
+
+
 class TrendingProductOut(BaseModel):
     id: int
     tenant_id: int
@@ -75,6 +113,9 @@ class TrendingProductOut(BaseModel):
     image_url: Optional[str] = None
     image_key: Optional[str] = None
     image_display_url: Optional[str] = None
+    image_urls: List[str] = []
+    image_keys: List[str] = []
+    image_display_urls: List[str] = []
     description: Optional[str] = None
     display_order: int
     is_active: bool
@@ -88,6 +129,11 @@ class TrendingProductOut(BaseModel):
 def _to_out(row: TrendingProduct) -> TrendingProductOut:
     pr = row.price
     price_f = float(pr) if pr is not None else 0.0
+    image_urls = _resolve_image_urls(row)
+    raw_keys = getattr(row, "image_keys", None)
+    image_keys = [str(k).strip() for k in raw_keys if str(k).strip()] if isinstance(raw_keys, list) else []
+    if row.image_key and row.image_key.strip() and row.image_key.strip() not in image_keys:
+        image_keys.insert(0, row.image_key.strip())
     return TrendingProductOut(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -99,6 +145,9 @@ def _to_out(row: TrendingProduct) -> TrendingProductOut:
         image_url=row.image_url,
         image_key=row.image_key,
         image_display_url=_resolve_image_url(row),
+        image_urls=image_urls,
+        image_keys=image_keys,
+        image_display_urls=image_urls,
         description=row.description,
         display_order=row.display_order,
         is_active=bool(row.is_active),
@@ -120,6 +169,8 @@ class TrendingProductCreate(BaseModel):
     category: str = Field(..., min_length=1, max_length=80)
     image_url: Optional[str] = None
     image_key: Optional[str] = Field(None, max_length=255)
+    image_urls: Optional[List[str]] = None
+    image_keys: Optional[List[str]] = None
     description: Optional[str] = None
     display_order: int = Field(default=1, ge=1, le=100)
     is_active: bool = True
@@ -133,6 +184,8 @@ class TrendingProductUpdate(BaseModel):
     category: Optional[str] = Field(None, min_length=1, max_length=80)
     image_url: Optional[str] = None
     image_key: Optional[str] = Field(None, max_length=255)
+    image_urls: Optional[List[str]] = None
+    image_keys: Optional[List[str]] = None
     description: Optional[str] = None
     display_order: Optional[int] = Field(None, ge=1, le=100)
     is_active: Optional[bool] = None
@@ -184,9 +237,15 @@ async def create_trending_product(
     cty, cur, cat = _validate_country_currency_category(
         payload.country, payload.currency, payload.category
     )
+    norm_urls, norm_keys = _normalize_image_lists(payload.image_urls, payload.image_keys)
     ik = (payload.image_key or "").strip()
-    if not ik:
-        raise HTTPException(status_code=400, detail="Product image is required (upload an image first)")
+    iu = (payload.image_url or "").strip()
+    if iu and iu not in norm_urls:
+        norm_urls.insert(0, iu)
+    if ik and ik not in norm_keys:
+        norm_keys.insert(0, ik)
+    if not norm_keys:
+        raise HTTPException(status_code=400, detail="At least one product image is required")
     row = TrendingProduct(
         tenant_id=current_user.tenant_id,
         country=cty,
@@ -194,8 +253,10 @@ async def create_trending_product(
         price=payload.price if payload.price is not None else Decimal("0"),
         currency=cur,
         category=cat,
-        image_url=(payload.image_url or "").strip() or None,
-        image_key=(payload.image_key or "").strip() or None,
+        image_url=(norm_urls[0] if norm_urls else None),
+        image_key=(norm_keys[0] if norm_keys else None),
+        image_urls=norm_urls or None,
+        image_keys=norm_keys or None,
         description=(payload.description or "").strip() or None,
         display_order=payload.display_order,
         is_active=payload.is_active,
@@ -227,7 +288,10 @@ async def update_trending_product(
     if not row:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    old_key = (row.image_key or "").strip() or None
+    old_keys = [str(k).strip() for k in (getattr(row, "image_keys", None) or []) if str(k).strip()]
+    old_primary_key = (row.image_key or "").strip()
+    if old_primary_key and old_primary_key not in old_keys:
+        old_keys.insert(0, old_primary_key)
 
     if payload.country is not None or payload.currency is not None or payload.category is not None:
         cty = payload.country if payload.country is not None else row.country
@@ -258,16 +322,36 @@ async def update_trending_product(
                 detail="Product image cannot be removed; upload a new image.",
             )
         row.image_key = new_key
+    if payload.image_keys is not None:
+        norm_keys = [k.strip() for k in payload.image_keys if isinstance(k, str) and k.strip()]
+        if not norm_keys:
+            raise HTTPException(status_code=400, detail="At least one product image is required")
+        row.image_keys = norm_keys
+        row.image_key = norm_keys[0]
     if payload.image_url is not None:
         row.image_url = (payload.image_url or "").strip() or None
+    if payload.image_urls is not None:
+        norm_urls = [u.strip() for u in payload.image_urls if isinstance(u, str) and u.strip()]
+        row.image_urls = norm_urls or None
+        if norm_urls:
+            row.image_url = norm_urls[0]
+    if new_key is not None:
+        existing_keys = [str(k).strip() for k in (getattr(row, "image_keys", None) or []) if str(k).strip()]
+        if new_key not in existing_keys:
+            existing_keys.insert(0, new_key)
+            row.image_keys = existing_keys
 
     row.updated_at = datetime.utcnow()
     db.add(row)
     db.commit()
     db.refresh(row)
 
-    if new_key is not None and old_key and old_key != new_key:
-        delete_object(old_key)
+    new_keys = [str(k).strip() for k in (getattr(row, "image_keys", None) or []) if str(k).strip()]
+    if row.image_key and row.image_key.strip() and row.image_key.strip() not in new_keys:
+        new_keys.insert(0, row.image_key.strip())
+    for k in old_keys:
+        if k and k not in new_keys:
+            delete_object(k)
 
     return _to_out(row)
 
@@ -289,11 +373,14 @@ async def delete_trending_product(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Product not found")
-    key = (row.image_key or "").strip()
+    keys = [str(k).strip() for k in (getattr(row, "image_keys", None) or []) if str(k).strip()]
+    primary = (row.image_key or "").strip()
+    if primary and primary not in keys:
+        keys.insert(0, primary)
     db.delete(row)
     db.commit()
-    if key:
-        delete_object(key)
+    for k in keys:
+        delete_object(k)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -309,6 +396,7 @@ class TrendingProductPublicOut(BaseModel):
     category: str
     description: Optional[str] = None
     image_url: Optional[str] = None
+    image_urls: List[str] = []
 
 
 @public_router.get("/trending-products", response_model=List[TrendingProductPublicOut])
@@ -344,6 +432,7 @@ def public_list_trending_products(
                 category=r.category,
                 description=(r.description or "").strip() or None,
                 image_url=_resolve_image_url(r),
+                image_urls=_resolve_image_urls(r),
             )
         )
     return out

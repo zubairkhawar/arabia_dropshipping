@@ -309,6 +309,31 @@ def ensure_dm_team_message_metadata_json() -> None:
     add_metadata("team_channel_messages")
 
 
+def ensure_trending_product_image_arrays() -> None:
+    """Add image_urls/image_keys JSONB columns for multi-image trending products."""
+    try:
+        insp = inspect(engine)
+        if "trending_products" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("trending_products")}
+    except Exception:
+        return
+
+    stmts: list[str] = []
+    if "image_urls" not in cols:
+        stmts.append("ALTER TABLE trending_products ADD COLUMN image_urls JSONB")
+    if "image_keys" not in cols:
+        stmts.append("ALTER TABLE trending_products ADD COLUMN image_keys JSONB")
+    if not stmts:
+        return
+    try:
+        with engine.begin() as conn:
+            for s in stmts:
+                conn.execute(text(s))
+    except Exception:
+        pass
+
+
 def get_db():
     db = SessionLocal()
     try:

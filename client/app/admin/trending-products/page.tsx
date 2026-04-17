@@ -57,6 +57,9 @@ interface TrendingProductRow {
   image_url: string | null;
   image_key: string | null;
   image_display_url: string | null;
+  image_urls?: string[];
+  image_keys?: string[];
+  image_display_urls?: string[];
   description: string | null;
   display_order: number;
   is_active: boolean;
@@ -94,10 +97,10 @@ export default function AdminTrendingProductsPage() {
   const [formActive, setFormActive] = useState(true);
   const [formTrending, setFormTrending] = useState(true);
   const [formDesc, setFormDesc] = useState('');
-  const [formImageKey, setFormImageKey] = useState<string | null>(null);
-  const [formImageUrl, setFormImageUrl] = useState<string | null>(null);
-  const [formImagePreview, setFormImagePreview] = useState<string | null>(null);
-  const [formFile, setFormFile] = useState<File | null>(null);
+  const [formImageKeys, setFormImageKeys] = useState<string[]>([]);
+  const [formImageUrls, setFormImageUrls] = useState<string[]>([]);
+  const [formImagePreviews, setFormImagePreviews] = useState<string[]>([]);
+  const [formFiles, setFormFiles] = useState<File[]>([]);
   const [uploadDragOver, setUploadDragOver] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<TrendingProductRow | null>(null);
@@ -162,10 +165,10 @@ export default function AdminTrendingProductsPage() {
     setFormActive(true);
     setFormTrending(true);
     setFormDesc('');
-    setFormImageKey(null);
-    setFormImageUrl(null);
-    setFormImagePreview(null);
-    setFormFile(null);
+    setFormImageKeys([]);
+    setFormImageUrls([]);
+    setFormImagePreviews([]);
+    setFormFiles([]);
     setFormOpen(true);
   };
 
@@ -179,68 +182,85 @@ export default function AdminTrendingProductsPage() {
     setFormActive(row.is_active);
     setFormTrending(row.is_active);
     setFormDesc(row.description || '');
-    setFormImageKey(row.image_key);
-    setFormImageUrl(row.image_url);
-    setFormImagePreview(row.image_display_url || row.image_url);
-    setFormFile(null);
+    const existingKeys = Array.isArray(row.image_keys) && row.image_keys.length
+      ? row.image_keys.filter(Boolean)
+      : (row.image_key ? [row.image_key] : []);
+    const existingUrls = Array.isArray(row.image_urls) && row.image_urls.length
+      ? row.image_urls.filter(Boolean)
+      : (row.image_url ? [row.image_url] : []);
+    const existingPreviewUrls = Array.isArray(row.image_display_urls) && row.image_display_urls.length
+      ? row.image_display_urls.filter(Boolean)
+      : (row.image_display_url ? [row.image_display_url] : existingUrls);
+    setFormImageKeys(existingKeys);
+    setFormImageUrls(existingUrls);
+    setFormImagePreviews(existingPreviewUrls);
+    setFormFiles([]);
     setFormOpen(true);
   };
 
-  const uploadImageIfNeeded = async (): Promise<{ image_key: string | null; image_url: string | null }> => {
-    if (!formFile) {
-      return { image_key: formImageKey, image_url: formImageUrl };
+  const uploadImagesIfNeeded = async (): Promise<{ image_keys: string[]; image_urls: string[] }> => {
+    if (!formFiles.length) {
+      return { image_keys: formImageKeys, image_urls: formImageUrls };
     }
-    const fd = new FormData();
-    fd.append('country', editing?.country ?? country);
-    fd.append('file', formFile);
-    const res = await fetch(`${API_BASE}/api/upload/product-image`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}` },
-      body: fd,
-    });
-    // Backward-compatible fallback: older backend builds may not expose /product-image yet.
-    if (res.status === 404) {
-      const signRes = await fetch(`${API_BASE}/api/upload/sign`, {
+    const keys: string[] = [...formImageKeys];
+    const urls: string[] = [...formImageUrls];
+    for (const formFile of formFiles) {
+      const fd = new FormData();
+      fd.append('country', editing?.country ?? country);
+      fd.append('file', formFile);
+      const res = await fetch(`${API_BASE}/api/upload/product-image`, {
         method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'image',
-          content_type: formFile.type || 'application/octet-stream',
-          size_bytes: formFile.size,
-        }),
+        headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}` },
+        body: fd,
       });
-      if (!signRes.ok) {
-        const err = await signRes.json().catch(() => ({}));
-        const msg =
-          typeof (err as { detail?: string }).detail === 'string'
-            ? (err as { detail: string }).detail
-            : 'Upload failed';
+      // Backward-compatible fallback: older backend builds may not expose /product-image yet.
+      if (res.status === 404) {
+        const signRes = await fetch(`${API_BASE}/api/upload/sign`, {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'image',
+            content_type: formFile.type || 'application/octet-stream',
+            size_bytes: formFile.size,
+          }),
+        });
+        if (!signRes.ok) {
+          const err = await signRes.json().catch(() => ({}));
+          const msg =
+            typeof (err as { detail?: string }).detail === 'string'
+              ? (err as { detail: string }).detail
+              : 'Upload failed';
+          throw new Error(msg);
+        }
+        const signed = (await signRes.json()) as UploadSignOut;
+        const putRes = await fetch(signed.upload_url, {
+          method: 'PUT',
+          headers: { 'Content-Type': formFile.type || 'application/octet-stream' },
+          body: formFile,
+        });
+        if (!putRes.ok) {
+          throw new Error('Upload failed');
+        }
+        keys.push(signed.object_key);
+        continue;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const msg = typeof (err as { detail?: string }).detail === 'string' ? (err as { detail: string }).detail : 'Upload failed';
         throw new Error(msg);
       }
-      const signed = (await signRes.json()) as UploadSignOut;
-      const putRes = await fetch(signed.upload_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': formFile.type || 'application/octet-stream' },
-        body: formFile,
-      });
-      if (!putRes.ok) {
-        throw new Error('Upload failed');
-      }
-      return { image_key: signed.object_key, image_url: null };
+      const out = (await res.json()) as {
+        object_key: string;
+        image_url: string | null;
+        image_display_url: string | null;
+      };
+      keys.push(out.object_key);
+      const maybeUrl = (out.image_url || '').trim();
+      if (maybeUrl) urls.push(maybeUrl);
     }
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      const msg = typeof (err as { detail?: string }).detail === 'string' ? (err as { detail: string }).detail : 'Upload failed';
-      throw new Error(msg);
-    }
-    const out = (await res.json()) as {
-      object_key: string;
-      image_url: string | null;
-      image_display_url: string | null;
-    };
     return {
-      image_key: out.object_key,
-      image_url: (out.image_url || '').trim() || null,
+      image_keys: keys,
+      image_urls: urls,
     };
   };
 
@@ -260,8 +280,8 @@ export default function AdminTrendingProductsPage() {
       toast('Product name is required');
       return;
     }
-    if (!editing && !formFile && !formImageKey) {
-      toast('Product image is required');
+    if (!editing && !formFiles.length && !formImageKeys.length) {
+      toast('At least one product image is required');
       return;
     }
     const parsedOrder = parseInt(formOrder, 10);
@@ -271,15 +291,17 @@ export default function AdminTrendingProductsPage() {
         : 1;
     setSaving(true);
     try {
-      const { image_key, image_url } = await uploadImageIfNeeded();
+      const { image_keys, image_urls } = await uploadImagesIfNeeded();
       const body = {
         country: editing?.country ?? country,
         product_name: name,
         price: priceNum,
         currency: formCurrency,
         category: formCategory,
-        image_key: image_key ?? undefined,
-        image_url: image_url ?? undefined,
+        image_keys: image_keys.length ? image_keys : undefined,
+        image_key: image_keys[0] ?? undefined,
+        image_urls: image_urls.length ? image_urls : undefined,
+        image_url: image_urls[0] ?? undefined,
         description: formDesc.trim() || null,
         display_order: order,
         is_active: formActive && formTrending,
@@ -569,7 +591,7 @@ export default function AdminTrendingProductsPage() {
                       aria-label="Toggle status"
                       onClick={() => setFormActive((v) => !v)}
                       className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
-                        formActive ? 'bg-emerald-500' : 'bg-gray-300'
+                        formActive ? 'bg-primary' : 'bg-gray-300'
                       }`}
                     >
                       <span
@@ -589,7 +611,7 @@ export default function AdminTrendingProductsPage() {
                       aria-label="Toggle trending"
                       onClick={() => setFormTrending((v) => !v)}
                       className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
-                        formTrending ? 'bg-blue-500' : 'bg-gray-300'
+                        formTrending ? 'bg-primary' : 'bg-gray-300'
                       }`}
                     >
                       <span
@@ -602,7 +624,7 @@ export default function AdminTrendingProductsPage() {
                 </div>
               </div>
               <div>
-                <span className="text-xs font-medium text-text-secondary">Product Image *</span>
+                <span className="text-xs font-medium text-text-secondary">Product Images *</span>
                 <label
                   className={`mt-2 flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed p-6 text-center transition-colors ${
                     uploadDragOver ? 'border-blue-500 bg-blue-50' : 'border-border bg-scaffold'
@@ -615,32 +637,41 @@ export default function AdminTrendingProductsPage() {
                   onDrop={(e) => {
                     e.preventDefault();
                     setUploadDragOver(false);
-                    const f = e.dataTransfer.files?.[0];
-                    setFormFile(f ?? null);
-                    if (f) setFormImagePreview(URL.createObjectURL(f));
+                    const dropped = Array.from(e.dataTransfer.files || []);
+                    const next = dropped.filter((f) => f.type.startsWith('image/'));
+                    if (!next.length) return;
+                    setFormFiles((prev) => [...prev, ...next]);
+                    setFormImagePreviews((prev) => [...prev, ...next.map((f) => URL.createObjectURL(f))]);
                   }}
                 >
                   <input
                     type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    accept="image/jpg,image/jpeg,image/png,image/heic,image/heif"
+                    multiple
                     className="hidden"
                     onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      setFormFile(f ?? null);
-                      if (f) setFormImagePreview(URL.createObjectURL(f));
+                      const selected = Array.from(e.target.files || []);
+                      if (!selected.length) return;
+                      setFormFiles((prev) => [...prev, ...selected]);
+                      setFormImagePreviews((prev) => [...prev, ...selected.map((f) => URL.createObjectURL(f))]);
+                      e.currentTarget.value = '';
                     }}
                   />
                   <div className="text-base font-semibold text-text-primary">Upload files</div>
                   <div className="mt-1 text-sm text-text-secondary">Drag & drop or click to browse.</div>
-                  <div className="mt-1 text-xs text-text-muted">JPG, JPEG, PNG, GIF, WEBP</div>
+                  <div className="mt-1 text-xs text-text-muted">JPG, JPEG, PNG, HEIC</div>
                   <div className="mt-2 text-xs text-text-muted">
-                    {formFile ? `Selected: ${formFile.name}` : 'No file chosen'}
+                    {formFiles.length ? `${formFiles.length} new image(s) selected` : 'No new files selected'}
                   </div>
                 </label>
-                {formImagePreview && (
-                  <div className="mt-2 rounded-lg border border-border overflow-hidden bg-scaffold max-h-48 flex items-center justify-center">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={formImagePreview} alt="" className="max-h-48 w-auto object-contain" />
+                {formImagePreviews.length > 0 && (
+                  <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {formImagePreviews.map((src, idx) => (
+                      <div key={`${src}-${idx}`} className="rounded-lg border border-border overflow-hidden bg-scaffold h-24 flex items-center justify-center">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={src} alt="" className="h-full w-full object-cover" />
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

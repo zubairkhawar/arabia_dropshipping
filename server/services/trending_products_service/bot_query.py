@@ -26,6 +26,35 @@ def resolve_trending_image_url(row: TrendingProduct) -> Optional[str]:
     return None
 
 
+def resolve_trending_image_urls(row: TrendingProduct) -> List[str]:
+    out: List[str] = []
+    raw_urls = getattr(row, "image_urls", None)
+    if isinstance(raw_urls, list):
+        out.extend(str(u).strip() for u in raw_urls if str(u).strip())
+    if row.image_url and row.image_url.strip():
+        primary = row.image_url.strip()
+        if primary not in out:
+            out.insert(0, primary)
+    if out:
+        return out
+    raw_keys = getattr(row, "image_keys", None)
+    keys: List[str] = []
+    if isinstance(raw_keys, list):
+        keys.extend(str(k).strip() for k in raw_keys if str(k).strip())
+    if row.image_key and row.image_key.strip():
+        primary_key = row.image_key.strip()
+        if primary_key not in keys:
+            keys.insert(0, primary_key)
+    resolved: List[str] = []
+    for key in keys:
+        if is_r2_configured():
+            try:
+                resolved.append(presign_get(key, settings.r2_presign_get_seconds))
+            except Exception as e:
+                logger.warning("trending image presign failed: %s", e)
+    return resolved
+
+
 def list_active_trending_for_country(
     db: Session,
     tenant_id: int,
@@ -54,6 +83,7 @@ def list_active_trending_for_country(
                 "category": r.category,
                 "description": (r.description or "").strip(),
                 "image_url": resolve_trending_image_url(r) or "",
+                "image_urls": resolve_trending_image_urls(r),
             }
         )
     return out

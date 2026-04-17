@@ -19,6 +19,7 @@ from database import (
     ensure_message_enhancements,
     ensure_dm_team_message_metadata_json,
     ensure_pgvector_extension,
+    ensure_trending_product_image_arrays,
 )
 from models import Tenant, User
 from services.auth_service.services import get_password_hash
@@ -107,6 +108,7 @@ async def lifespan(app: FastAPI):
     ensure_tenant_agent_management_columns()
     ensure_message_enhancements()
     ensure_dm_team_message_metadata_json()
+    ensure_trending_product_image_arrays()
     ensure_pgvector_extension()
     ensure_admin_user()
     hydrate_openai_api_key_from_db()

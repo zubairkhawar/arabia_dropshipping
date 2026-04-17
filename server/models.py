@@ -475,6 +475,8 @@ class TrendingProduct(Base):
     category = Column(String(80), nullable=False)
     image_url = Column(Text, nullable=True)
     image_key = Column(String(255), nullable=True)
+    image_urls = Column(JSON, nullable=True)
+    image_keys = Column(JSON, nullable=True)
     description = Column(Text, nullable=True)
     display_order = Column(Integer, nullable=False, default=1)
     is_active = Column(Boolean, nullable=False, default=True)
