@@ -14,6 +14,40 @@ from langchain_bot.context_format import (
 )
 from langchain_bot.prompts import build_prompt, normalize_context_text, now_utc_iso
 
+KB_QUERY_SYNONYMS: Dict[str, List[str]] = {
+    "kitny": ["how", "many", "count"],
+    "kitne": ["how", "many", "count"],
+    "countries": ["country", "market", "coverage"],
+    "country": ["countries", "market", "coverage"],
+    "konsi": ["which", "active", "market"],
+    "kon": ["which", "active", "market"],
+    "successful": ["active", "performance", "dispatch"],
+    "success": ["active", "performance", "dispatch"],
+    "reliable": ["trusted", "performance", "dispatch", "sellers"],
+    "bharosa": ["trusted", "reliable", "performance"],
+    "confirmation": ["confirm", "whatsapp", "attempt", "proof", "screenshot"],
+    "confirm": ["confirmation", "attempt", "proof", "screenshot"],
+    "timing": ["attempt", "times", "response", "order"],
+    "time": ["timing", "attempt", "delivery"],
+    "transparent": ["transparency", "proof", "screenshot", "dashboard"],
+    "proof": ["screenshot", "documented", "confirmation"],
+    "charges": ["pricing", "charge", "aed", "sar", "pkr"],
+    "charge": ["charges", "pricing", "aed", "sar", "pkr"],
+    "service": ["services", "offered", "available"],
+    "pak": ["pakistan"],
+    "ksa": ["saudi", "saudiarabia", "market"],
+    "uae": ["emirates", "market"],
+    "qatar": ["coming", "soon", "market"],
+}
+
+KB_QUERY_PHRASE_HINTS: Dict[str, List[str]] = {
+    "confirmation service": ["whatsapp", "order", "confirmation", "pricing"],
+    "support number": ["contact", "support", "whatsapp", "agent"],
+    "confirmation timing": ["attempt", "times", "screenshot", "proof"],
+    "success rate": ["performance", "dispatch", "delivered", "sellers"],
+    "active countries": ["market", "coverage", "uae", "saudi", "pakistan", "qatar"],
+}
+
 
 class ArabiaLangChainBot:
     """
@@ -142,10 +176,23 @@ class ArabiaLangChainBot:
 
     def _normalized_query_tokens(self, text: str) -> set[str]:
         out: set[str] = set()
-        for tok in (text or "").lower().split():
+        raw = (text or "").lower()
+        for tok in raw.split():
             nt = self._normalize_token(tok)
             if len(nt) > 2:
                 out.add(nt)
+                for synonym in KB_QUERY_SYNONYMS.get(nt, []):
+                    ns = self._normalize_token(synonym)
+                    if len(ns) > 2:
+                        out.add(ns)
+
+        normalized_raw = " ".join(raw.split())
+        for phrase, hints in KB_QUERY_PHRASE_HINTS.items():
+            if phrase in normalized_raw:
+                for hint in hints:
+                    nh = self._normalize_token(hint)
+                    if len(nh) > 2:
+                        out.add(nh)
         return out
 
     def _score_chunk_overlap(self, tokens: set[str], chunk_text: str) -> int:
@@ -156,7 +203,16 @@ class ArabiaLangChainBot:
             for tok in re.split(r"\W+", (chunk_text or "").lower())
             if tok
         }
-        return sum(1 for t in tokens if t and t in chunk_tokens)
+        overlap = sum(1 for t in tokens if t and t in chunk_tokens)
+        chunk_l = (chunk_text or "").lower()
+        boost = 0
+        if "confirmation" in chunk_l and ("whatsapp" in chunk_l or "screenshot" in chunk_l):
+            boost += 2
+        if "market coverage" in chunk_l or ("active" in chunk_l and "coming soon" in chunk_l):
+            boost += 2
+        if "98.4% on-time dispatch" in chunk_l or "12k+ sellers" in chunk_l:
+            boost += 2
+        return overlap + boost
 
     def _chunk_text_value(self, chunk: Any) -> str:
         if isinstance(chunk, str):
