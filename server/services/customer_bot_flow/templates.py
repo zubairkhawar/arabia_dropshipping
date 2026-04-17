@@ -545,10 +545,20 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "🔥 منتجات رائجة في {country}:",
         "roman_urdu": "🔥 {country} ke trending picks:",
     },
+    "trending_header_category": {
+        "english": "🔥 Trending {category} picks for {country}:",
+        "arabic": "🔥 منتجات {category} الرائجة في {country}:",
+        "roman_urdu": "🔥 {country} ke trending {category} picks:",
+    },
     "trending_no_products": {
         "english": "No trending products are listed for {country} yet. Try another country or ask me anything else.",
         "arabic": "لا توجد منتجات رائجة مسجّلة لـ {country} حتى الآن. جرّب دولة أخرى أو اسألني أي شيء آخر.",
         "roman_urdu": "Abhi {country} ke liye koi trending product list nahi hai. Doosri country try karein ya koi aur sawal pooch lein.",
+    },
+    "trending_no_products_category": {
+        "english": "No trending {category} products are listed for {country} yet. Try another category/country or ask me anything else.",
+        "arabic": "لا توجد منتجات {category} رائجة مسجّلة لـ {country} حالياً. جرّب فئة/دولة أخرى أو اسألني أي شيء آخر.",
+        "roman_urdu": "Abhi {country} mein {category} category ke trending products list nahi hain. Doosri category/country try karein ya koi aur sawal pooch lein.",
     },
     "fallback": {
         "english": (

@@ -468,6 +468,28 @@ def _default_skip_store_api(f: Dict[str, Any]) -> bool:
 
 
 TRENDING_WA_MAX = 8
+TRENDING_CATEGORY_ALIASES: Dict[str, tuple[str, ...]] = {
+    "Electronics": ("electronics", "electronic", "gadgets", "gadget", "mobile", "phone"),
+    "Fashion": ("fashion", "clothes", "clothing", "apparel"),
+    "Beauty": ("beauty", "makeup", "cosmetics", "skin care", "skincare"),
+    "Home & Living": ("home", "living", "home decor", "furniture"),
+    "Toys & Games": ("toys", "games", "toy"),
+    "Sports & Outdoors": ("sports", "outdoor", "fitness"),
+    "Pets": ("pets", "pet", "pet care"),
+    "Automotive": ("automotive", "car", "bike", "vehicle"),
+    "Baby & Kids": ("baby", "kids", "children"),
+    "Books & Media": ("books", "media", "book"),
+    "Office & Stationery": ("office", "stationery", "school supplies"),
+    "Groceries & Food": ("groceries", "grocery", "food", "snacks"),
+    "Health & Wellness": ("health", "wellness", "supplements"),
+    "Jewelry & Watches": ("jewelry", "jewellery", "watches", "watch"),
+    "Luggage & Travel": ("luggage", "travel", "bag", "bags"),
+    "Tools & Home Improvement": ("tools", "home improvement", "hardware"),
+    "Garden & Outdoor": ("garden", "gardening"),
+    "Musical Instruments": ("musical", "instruments", "instrument"),
+    "Art & Crafts": ("art", "crafts", "craft"),
+    "Party & Occasion": ("party", "occasion", "decorations"),
+}
 
 
 def _trending_footer_country_label(country_code: str) -> str:
@@ -475,6 +497,26 @@ def _trending_footer_country_label(country_code: str) -> str:
     if c == "PK":
         return "Pakistan"
     return c
+
+
+def _parse_trending_category(text: str) -> Optional[str]:
+    s = (text or "").strip().lower()
+    if not s:
+        return None
+    for category, aliases in TRENDING_CATEGORY_ALIASES.items():
+        if category.lower() in s:
+            return category
+        for a in aliases:
+            if a in s:
+                return category
+    return None
+
+
+def _filter_trending_items_by_category(items: List[Dict[str, Any]], category: Optional[str]) -> List[Dict[str, Any]]:
+    if not category:
+        return items
+    c = category.strip().lower()
+    return [it for it in items if str(it.get("category") or "").strip().lower() == c]
 
 
 def _parse_trending_country_reply(text: str) -> Optional[str]:
@@ -529,12 +571,20 @@ def _wa_caption_for_trending_row(it: Dict[str, Any]) -> str:
     return f"📦 {name}"
 
 
-def _trending_inbox_and_web_body(lang: str, country: str, items: List[Dict[str, Any]]) -> str:
+def _trending_inbox_and_web_body(
+    lang: str,
+    country: str,
+    items: List[Dict[str, Any]],
+    category: Optional[str] = None,
+) -> str:
     if not items:
         return _t(lang, MSGS["trending_no_products"]).format(
             country=_trending_footer_country_label(country)
         )
-    lines = [_t(lang, MSGS["trending_header"]).format(country=country)]
+    if category:
+        lines = [_t(lang, MSGS["trending_header_category"]).format(country=country, category=category)]
+    else:
+        lines = [_t(lang, MSGS["trending_header"]).format(country=country)]
     for i, it in enumerate(items, start=1):
         nm = str(it.get("product_name") or "").strip()
         pb = _trending_price_bit(it)
@@ -1085,12 +1135,24 @@ async def process_customer_bot_message(
         cc = _parse_trending_country_reply(text)
         if not cc:
             return save(flow, _t(flow_lang, MSGS["trending_country_retry"]))
+        wanted_category = _parse_trending_category(text)
         items_all = list_active_trending_for_country(db, tenant_id, cc)
-        items = items_all[:TRENDING_WA_MAX]
+        items_filtered = _filter_trending_items_by_category(items_all, wanted_category)
+        items = items_filtered[:TRENDING_WA_MAX]
         if not items:
             nf = {**flow, "step": "conversational", "lang": flow_lang}
             nf.pop("trending_country", None)
             nf.pop("trending_products_cache", None)
+            nf.pop("trending_products_all", None)
+            nf.pop("trending_category", None)
+            if wanted_category:
+                return save(
+                    nf,
+                    _t(flow_lang, MSGS["trending_no_products_category"]).format(
+                        country=_trending_footer_country_label(cc),
+                        category=wanted_category,
+                    ),
+                )
             return save(
                 nf,
                 _t(flow_lang, MSGS["trending_no_products"]).format(
@@ -1102,9 +1164,11 @@ async def process_customer_bot_message(
             "step": "trending_showing_products",
             "lang": flow_lang,
             "trending_country": cc,
+            "trending_category": wanted_category,
+            "trending_products_all": items_all,
             "trending_products_cache": items,
         }
-        body = _trending_inbox_and_web_body(flow_lang, cc, items)
+        body = _trending_inbox_and_web_body(flow_lang, cc, items, wanted_category)
         footer = _t(flow_lang, MSGS["trending_after_images_footer"]).format(
             country=_trending_footer_country_label(cc)
         )
@@ -1131,10 +1195,15 @@ async def process_customer_bot_message(
     if step == "trending_showing_products":
         cache_raw = flow.get("trending_products_cache")
         cache: List[Dict[str, Any]] = cache_raw if isinstance(cache_raw, list) else []
+        all_raw = flow.get("trending_products_all")
+        all_items: List[Dict[str, Any]] = all_raw if isinstance(all_raw, list) else cache
+        wanted_category = _parse_trending_category(text)
         if not cache:
             nf = {**flow, "step": "conversational", "lang": flow_lang}
             nf.pop("trending_country", None)
             nf.pop("trending_products_cache", None)
+            nf.pop("trending_products_all", None)
+            nf.pop("trending_category", None)
             return save(nf, _t(flow_lang, MSGS["trending_product_not_matched"]))
 
         if _wants_trending_products(text):
@@ -1145,7 +1214,39 @@ async def process_customer_bot_message(
             }
             nf.pop("trending_country", None)
             nf.pop("trending_products_cache", None)
+            nf.pop("trending_products_all", None)
+            nf.pop("trending_category", None)
             return save(nf, _t(flow_lang, MSGS["trending_ask_country"]))
+
+        if wanted_category:
+            cc = str(flow.get("trending_country") or "").strip().upper()
+            next_items = _filter_trending_items_by_category(all_items, wanted_category)[:TRENDING_WA_MAX]
+            if not next_items:
+                return save(
+                    flow,
+                    _t(flow_lang, MSGS["trending_no_products_category"]).format(
+                        country=_trending_footer_country_label(cc),
+                        category=wanted_category,
+                    ),
+                )
+            nf = {
+                **flow,
+                "step": "trending_showing_products",
+                "lang": flow_lang,
+                "trending_category": wanted_category,
+                "trending_products_cache": next_items,
+                "trending_products_all": all_items,
+            }
+            body = _trending_inbox_and_web_body(flow_lang, cc, next_items, wanted_category)
+            if ch == "whatsapp":
+                wa_list: List[Dict[str, str]] = []
+                for it in next_items:
+                    url = (it.get("image_url") or "").strip()
+                    if url:
+                        wa_list.append({"image_url": url, "caption": _wa_caption_for_trending_row(it)})
+                if wa_list:
+                    return save(nf, body, wa_images=wa_list, wa_text_after=None)
+            return save(nf, body)
 
         picked = _select_trending_product_from_cache(cache, text)
         if picked:
@@ -1153,6 +1254,8 @@ async def process_customer_bot_message(
             nf = {**flow, "step": "conversational", "lang": flow_lang}
             nf.pop("trending_country", None)
             nf.pop("trending_products_cache", None)
+            nf.pop("trending_products_all", None)
+            nf.pop("trending_category", None)
             url = (picked.get("image_url") or "").strip()
             nm = str(picked.get("product_name") or "").strip()
             pb = _trending_price_bit(picked)
