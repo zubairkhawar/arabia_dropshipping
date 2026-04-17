@@ -1,6 +1,9 @@
 from datetime import datetime
+import json
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote_plus
+from urllib.request import Request, urlopen
 
 from langchain_openai import ChatOpenAI
 from sqlalchemy import desc
@@ -160,6 +163,123 @@ class ArabiaLangChainBot:
                 ]
             )
         return "\n".join(items)
+
+    def _load_knowledge_rows(self, tenant_id: int, max_items: int = 8) -> List[KnowledgeSource]:
+        return (
+            self.db.query(KnowledgeSource)
+            .filter(
+                KnowledgeSource.tenant_id == tenant_id,
+                KnowledgeSource.status == "ready",
+            )
+            .order_by(KnowledgeSource.updated_at.desc())
+            .limit(max_items)
+            .all()
+        )
+
+    def _fetch_text_url(self, url: str, timeout_s: int = 6) -> str:
+        try:
+            req = Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; ArabiaBot/1.0)",
+                    "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+                },
+            )
+            with urlopen(req, timeout=timeout_s) as resp:  # noqa: S310
+                raw = resp.read(200_000).decode("utf-8", errors="ignore")
+            # Basic HTML cleanup without extra deps.
+            cleaned = re.sub(r"(?is)<script.*?>.*?</script>", " ", raw)
+            cleaned = re.sub(r"(?is)<style.*?>.*?</style>", " ", cleaned)
+            cleaned = re.sub(r"(?s)<[^>]+>", " ", cleaned)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            return cleaned[:5000]
+        except Exception:
+            return ""
+
+    def _crawl_configured_urls_context(self, rows: List[KnowledgeSource], user_message: str) -> str:
+        tokens = self._normalized_query_tokens(user_message)
+        urls: List[str] = []
+        for src in rows:
+            metadata = src.knowledge_metadata or {}
+            u = (src.url or "").strip()
+            if src.type == "url" and u:
+                urls.append(u)
+            alt = metadata.get("url")
+            if isinstance(alt, str) and alt.strip():
+                urls.append(alt.strip())
+        # Safe defaults for brand-owned pages if KB URLs are sparse.
+        urls.extend(
+            [
+                "https://www.arabiadropship.com/",
+                "https://www.arabiadropship.com/services",
+                "https://www.arabiadropship.com/faq",
+                "https://www.agency.arabiadropship.com/",
+            ]
+        )
+        deduped: List[str] = []
+        seen = set()
+        for u in urls:
+            if u and u not in seen:
+                seen.add(u)
+                deduped.append(u)
+
+        scored: List[tuple[int, str]] = []
+        for u in deduped[:8]:
+            txt = self._fetch_text_url(u)
+            if not txt:
+                continue
+            score = self._score_chunk_overlap(tokens, txt)
+            if score < 2:
+                continue
+            scored.append((score, f"[Crawled {u}] {txt[:700]}"))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = [c for _, c in scored[:4]]
+        if not top:
+            return ""
+        return "\n".join(["Website crawl excerpts:", *[f"- {x}" for x in top]])
+
+    def _web_search_context(self, user_message: str) -> str:
+        """
+        Lightweight web-search fallback (no paid API key):
+        DuckDuckGo instant answer endpoint with Arabia context.
+        """
+        q = f"Arabia Dropshipping {user_message}".strip()
+        endpoint = (
+            "https://api.duckduckgo.com/?q="
+            + quote_plus(q)
+            + "&format=json&no_redirect=1&no_html=1"
+        )
+        try:
+            req = Request(endpoint, headers={"User-Agent": "Mozilla/5.0 (compatible; ArabiaBot/1.0)"})
+            with urlopen(req, timeout=6) as resp:  # noqa: S310
+                payload = json.loads(resp.read(120_000).decode("utf-8", errors="ignore"))
+        except Exception:
+            return ""
+
+        lines: List[str] = []
+        abstract = (payload.get("AbstractText") or "").strip()
+        if abstract:
+            src = (payload.get("AbstractURL") or "").strip()
+            if src:
+                lines.append(f"- [Web search {src}] {abstract}")
+            else:
+                lines.append(f"- [Web search] {abstract}")
+
+        related = payload.get("RelatedTopics")
+        if isinstance(related, list):
+            for item in related[:5]:
+                if not isinstance(item, dict):
+                    continue
+                text = (item.get("Text") or "").strip()
+                first_url = (item.get("FirstURL") or "").strip()
+                if text:
+                    tag = f"[Web search {first_url}]" if first_url else "[Web search]"
+                    lines.append(f"- {tag} {text}")
+                if len(lines) >= 4:
+                    break
+        if not lines:
+            return ""
+        return "\n".join(["Web search excerpts:", *lines[:4]])
 
     def _normalize_token(self, token: str) -> str:
         t = re.sub(r"[^a-z0-9]", "", (token or "").lower()).strip()
@@ -335,6 +455,7 @@ class ArabiaLangChainBot:
         schedule_context = self._build_schedule_context(tenant_id)
         broadcast_context = self._build_active_broadcast_context(tenant_id)
         min_score = max(0, int(getattr(settings, "kb_min_score", 1) or 0))
+        rows = self._load_knowledge_rows(tenant_id)
         if bool(getattr(settings, "kb_use_embeddings", False)):
             knowledge_context = self._build_knowledge_context_embeddings(
                 tenant_id,
@@ -346,7 +467,16 @@ class ArabiaLangChainBot:
                 user_message=user_message,
                 min_score=min_score,
             )
-        self.last_reply_used_kb = "Most relevant knowledge excerpts:" in knowledge_context
+        kb_hit = "Most relevant knowledge excerpts:" in knowledge_context
+        self.last_reply_used_kb = kb_hit
+        if not kb_hit:
+            crawl_context = self._crawl_configured_urls_context(rows, user_message)
+            if crawl_context:
+                knowledge_context = f"{knowledge_context}\n\n{crawl_context}".strip()
+            else:
+                web_context = self._web_search_context(user_message)
+                if web_context:
+                    knowledge_context = f"{knowledge_context}\n\n{web_context}".strip()
 
         messages = self.prompt.format_messages(
             current_time=now_utc_iso(),
@@ -362,6 +492,13 @@ class ArabiaLangChainBot:
         )
         response = await llm.ainvoke(messages)
         content = getattr(response, "content", None)
-        if isinstance(content, str):
-            return content.strip()
-        return str(response).strip()
+        out = content.strip() if isinstance(content, str) else str(response).strip()
+        if out:
+            return out
+        # Final fallback when KB/crawl/web all fail or model returns empty.
+        lang = (language or "").strip().lower()
+        if lang == "roman_urdu":
+            return "Mujhe is bare mein zyada maloomat nahi hai. Agar chahein to main aapko human agent se connect kar sakta hoon."
+        if lang == "arabic":
+            return "لا تتوفر لدي معلومات كافية حول هذا الموضوع حاليا. إذا رغبت، يمكنني توصيلك بموظف دعم بشري."
+        return "I don't have much information about this at the moment. If you'd like, I can connect you with a human agent."

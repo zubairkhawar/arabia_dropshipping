@@ -278,7 +278,9 @@ def _deterministic_kb_answer(text: str, lang: str) -> Optional[str]:
     asks_activate_confirmation = asks_confirmation and _contains_any(
         "activate", "activated", "activation", "activate kar", "activate karwa",
         "karwaen", "karwain", "kese activated", "kaise activated",
-        "service kese", "service kaise", "confirmation service kese", "confirmation service kaise",
+        "service kese", "service kesy", "service kaise", "confirmation service kese",
+        "confirmation service kesy", "confirmation service kaise",
+        "on karna", "start karna", "shuru karna", "tarika", "tareeqa", "process",
     )
     if asks_activate_confirmation:
         if lang == "english":

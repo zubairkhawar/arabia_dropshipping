@@ -661,16 +661,16 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "fallback": {
         "english": (
-            "I didn’t catch that 🤔\n"
-            "Ask your question in one message, or type \"agent\" for a human."
+            "Sorry, I could not fully understand that.\n"
+            "Please ask your question again in one message, or type \"agent\" to speak with a human."
         ),
         "arabic": (
-            "لم أفهم ذلك 🤔\n"
-            "اكتب سؤالك في رسالة واحدة، أو اكتب \"agent\" للتحدث مع موظف."
+            "عذرا، لم أتمكن من فهم سؤالك بالكامل.\n"
+            "يرجى كتابة سؤالك مرة أخرى في رسالة واحدة، أو اكتب \"agent\" للتحدث مع موظف."
         ),
         "roman_urdu": (
-            "Samajh nahi aaya 🤔\n"
-            "Apna sawal ek message mein likhein, ya insaan ke liye \"agent\" likhein."
+            "Maaf kijiye, main aapki baat samajh nahi paya.\n"
+            "Kya aap apna sawal dobara ek message mein pooch sakte hain? Ya \"agent\" likh kar human support se baat kar sakte hain."
         ),
     },
 }
