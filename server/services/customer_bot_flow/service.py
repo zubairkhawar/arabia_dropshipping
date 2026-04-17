@@ -246,6 +246,80 @@ def _deterministic_kb_answer(text: str, lang: str) -> Optional[str]:
     def _contains_any(*parts: str) -> bool:
         return any(p in t for p in parts)
 
+    # Intent priority: confirmation topics MUST win over country coverage.
+    confirmation_markers = (
+        "confirmation", "confirm", "order confirm", "confirm service",
+        "call confirmation", "whatsapp confirmation", "order confirmation",
+    )
+    asks_confirmation = _contains_any(*confirmation_markers)
+    asks_confirmation_service = asks_confirmation and _contains_any(
+        "service", "charges", "charge", "facility", "timing", "proof", "transparent",
+        "whatsapp", "activate", "activated", "activation", "karwa", "karwaen", "karwain",
+    )
+    asks_confirmation_charges = asks_confirmation and _contains_any(
+        "charges", "charge", "rate", "pricing", "per order", "cost", "kia charges", "kia charge"
+    )
+    if asks_confirmation_charges:
+        if lang == "english":
+            return (
+                "Arabia WhatsApp Order Confirmation charges are: UAE = 1 AED per order, KSA = 2 SAR per order "
+                "(whether confirmed or canceled). Pakistan does not currently have this confirmation service."
+            )
+        if lang == "arabic":
+            return (
+                "رسوم خدمة تأكيد الطلبات عبر واتساب هي: الإمارات 1 درهم لكل طلب، والسعودية 2 ريال لكل طلب "
+                "(سواء تم التأكيد أو الإلغاء). هذه الخدمة غير متاحة حاليا في باكستان."
+            )
+        return (
+            "Arabia WhatsApp order confirmation charges: UAE mein 1 AED per order, KSA mein 2 SAR per order "
+            "(confirm ya cancel dono surat mein). Pakistan mein filhaal yeh confirmation service available nahi hai."
+        )
+
+    asks_activate_confirmation = asks_confirmation and _contains_any(
+        "activate", "activated", "activation", "activate kar", "activate karwa",
+        "karwaen", "karwain", "kese activated", "kaise activated",
+        "service kese", "service kaise", "confirmation service kese", "confirmation service kaise",
+    )
+    if asks_activate_confirmation:
+        if lang == "english":
+            return "To activate Order Confirmation service, please contact Customer Support. They will guide you through activation. No separate upfront activation payment step is required."
+        if lang == "arabic":
+            return "لتفعيل خدمة تأكيد الطلبات، يرجى التواصل مع فريق دعم العملاء. سيقومون بإرشادك لخطوات التفعيل، ولا توجد خطوة دفع مبدئية منفصلة للتفعيل."
+        return "Confirmation service activate karwane ke liye Customer Support se rabta karein. Team aapko activation process guide karegi. Is ke liye koi alag upfront activation payment step required nahi hota."
+
+    asks_reliability = _contains_any("reliable", "bharosa", "trust", "trusted", "authentic")
+    if asks_reliability and _contains_any("arabia"):
+        if lang == "english":
+            return "Yes, Arabia Dropship is reliable. It has delivered 10M+ COD orders, serves 12K+ sellers, and reports 98.4% on-time dispatch with 12+ courier partners."
+        if lang == "arabic":
+            return "نعم، Arabia Dropship منصة موثوقة. تم تسليم أكثر من 10 ملايين طلب COD، وتخدم أكثر من 12 ألف بائع، مع معدل شحن في الوقت المحدد 98.4% عبر أكثر من 12 شركة شحن."
+        return "Ji, Arabia Dropship reliable hai. Platform ne 10M+ COD orders deliver kiye hain, 12K+ sellers ko serve karta hai, aur 98.4% on-time dispatch rate report karta hai (12+ courier partners ke sath)."
+
+    asks_confirmation_timing = _contains_any("confirmation timing", "kitny time", "kitne time", "3 attempt", "3 attempts", "how many attempts")
+    asks_confirmation_proof = _contains_any("proof", "screenshot", "transparent", "transparency", "koi proof", "call confirmation", "whatsapp confirmation")
+    if asks_confirmation and (asks_confirmation_timing or asks_confirmation_proof):
+        if lang == "english":
+            return (
+                "Arabia confirms orders via WhatsApp (not phone calls). A total of 3 confirmation attempts are made at different times, "
+                "and each attempt is documented with screenshot proof for transparency. You can view the proof in your dashboard under Orders > Order Confirmation."
+            )
+        if lang == "arabic":
+            return (
+                "تتم عملية تأكيد الطلبات عبر واتساب (وليس مكالمات هاتفية). يتم إجراء 3 محاولات في أوقات مختلفة، "
+                "وكل محاولة موثقة بلقطة شاشة لضمان الشفافية. ويمكنك مشاهدة الإثبات من لوحة التحكم: الطلبات > تأكيد الطلب."
+            )
+        return (
+            "Arabia order confirmation WhatsApp ke zariye hoti hai (phone call se nahi). Total 3 attempts mukhtalif times par ki jati hain, "
+            "aur har attempt ka screenshot proof upload hota hai transparency ke liye. Proof dashboard mein Orders > Order Confirmation section mein milta hai."
+        )
+
+    if asks_confirmation_service:
+        if lang == "english":
+            return "Arabia provides WhatsApp Order Confirmation service in UAE and KSA. Pakistan market does not currently have this service."
+        if lang == "arabic":
+            return "تقدم Arabia خدمة تأكيد الطلبات عبر واتساب في الإمارات والسعودية. هذه الخدمة غير متاحة حاليا في سوق باكستان."
+        return "Arabia WhatsApp order confirmation service UAE aur KSA mein deta hai. Pakistan market mein yeh service filhaal available nahi hai."
+
     asks_countries = (
         _contains_any("kitny countr", "kitne countr", "which countr", "market coverage", "active countries")
         or (_contains_any("uae", "ksa", "pak", "pakistan", "qatar") and _contains_any("active", "work", "service", "operate"))
@@ -264,66 +338,6 @@ def _deterministic_kb_answer(text: str, lang: str) -> Optional[str]:
         return (
             "Arabia Dropship abhi 3 countries mein active kaam kar raha hai: UAE, KSA aur Pakistan. "
             "Qatar 4th market hai jo jald operational ho jayegi."
-        )
-
-    asks_confirmation_service = _contains_any("confirmation") and _contains_any("service", "charges", "charge", "facility", "timing", "proof", "transparent", "whatsapp")
-    if asks_confirmation_service:
-        if _contains_any("pak", "pakistan"):
-            if lang == "english":
-                return "Order Confirmation service is currently available only in UAE and KSA. It is not available for Pakistan market right now."
-            if lang == "arabic":
-                return "خدمة تأكيد الطلبات متاحة حاليا فقط في الإمارات والسعودية، وهي غير متاحة حاليا لسوق باكستان."
-            return "Order confirmation service filhaal sirf UAE aur KSA mein available hai. Pakistan market mein yeh service abhi available nahi hai."
-
-    asks_confirmation_charges = _contains_any("confirmation") and _contains_any("charges", "charge", "rate", "pricing", "per order", "cost")
-    if asks_confirmation_charges:
-        if lang == "english":
-            return (
-                "Arabia WhatsApp Order Confirmation charges are: UAE = 1 AED per order, KSA = 2 SAR per order "
-                "(whether confirmed or canceled). Pakistan does not currently have this confirmation service."
-            )
-        if lang == "arabic":
-            return (
-                "رسوم خدمة تأكيد الطلبات عبر واتساب هي: الإمارات 1 درهم لكل طلب، والسعودية 2 ريال لكل طلب "
-                "(سواء تم التأكيد أو الإلغاء). هذه الخدمة غير متاحة حاليا في باكستان."
-            )
-        return (
-            "Arabia WhatsApp order confirmation charges: UAE mein 1 AED per order, KSA mein 2 SAR per order "
-            "(confirm ya cancel dono surat mein). Pakistan mein filhaal yeh confirmation service available nahi hai."
-        )
-
-    asks_activate_confirmation = _contains_any("activate", "activated", "activation", "activate kar", "service kese", "service kaise", "confirmation service kese")
-    if asks_activate_confirmation and _contains_any("confirmation"):
-        if lang == "english":
-            return "To activate Order Confirmation service, please contact Customer Support. They will guide you through activation. No separate upfront activation payment step is required."
-        if lang == "arabic":
-            return "لتفعيل خدمة تأكيد الطلبات، يرجى التواصل مع فريق دعم العملاء. سيقومون بإرشادك لخطوات التفعيل، ولا توجد خطوة دفع مبدئية منفصلة للتفعيل."
-        return "Confirmation service activate karwane ke liye Customer Support se rabta karein. Team aapko activation process guide karegi. Is ke liye koi alag upfront activation payment step required nahi hota."
-
-    asks_reliability = _contains_any("reliable", "bharosa", "trust", "trusted", "authentic")
-    if asks_reliability and _contains_any("arabia"):
-        if lang == "english":
-            return "Yes, Arabia Dropship is reliable. It has delivered 10M+ COD orders, serves 12K+ sellers, and reports 98.4% on-time dispatch with 12+ courier partners."
-        if lang == "arabic":
-            return "نعم، Arabia Dropship منصة موثوقة. تم تسليم أكثر من 10 ملايين طلب COD، وتخدم أكثر من 12 ألف بائع، مع معدل شحن في الوقت المحدد 98.4% عبر أكثر من 12 شركة شحن."
-        return "Ji, Arabia Dropship reliable hai. Platform ne 10M+ COD orders deliver kiye hain, 12K+ sellers ko serve karta hai, aur 98.4% on-time dispatch rate report karta hai (12+ courier partners ke sath)."
-
-    asks_confirmation_timing = _contains_any("confirmation timing", "kitny time", "kitne time", "3 attempt", "3 attempts", "how many attempts")
-    asks_confirmation_proof = _contains_any("proof", "screenshot", "transparent", "transparency", "koi proof", "call confirmation", "whatsapp confirmation")
-    if _contains_any("confirmation") and (asks_confirmation_timing or asks_confirmation_proof):
-        if lang == "english":
-            return (
-                "Arabia confirms orders via WhatsApp (not phone calls). A total of 3 confirmation attempts are made at different times, "
-                "and each attempt is documented with screenshot proof for transparency. You can view the proof in your dashboard under Orders > Order Confirmation."
-            )
-        if lang == "arabic":
-            return (
-                "تتم عملية تأكيد الطلبات عبر واتساب (وليس مكالمات هاتفية). يتم إجراء 3 محاولات في أوقات مختلفة، "
-                "وكل محاولة موثقة بلقطة شاشة لضمان الشفافية. ويمكنك مشاهدة الإثبات من لوحة التحكم: الطلبات > تأكيد الطلب."
-            )
-        return (
-            "Arabia order confirmation WhatsApp ke zariye hoti hai (phone call se nahi). Total 3 attempts mukhtalif times par ki jati hain, "
-            "aur har attempt ka screenshot proof upload hota hai transparency ke liye. Proof dashboard mein Orders > Order Confirmation section mein milta hai."
         )
 
     return None
