@@ -62,6 +62,12 @@ interface TrendingProductRow {
   is_active: boolean;
 }
 
+interface UploadSignOut {
+  upload_url: string;
+  object_key: string;
+  expires_in: number;
+}
+
 function authHeaders(): HeadersInit {
   const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
   const h: Record<string, string> = { Accept: 'application/json' };
@@ -186,6 +192,36 @@ export default function AdminTrendingProductsPage() {
       headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}` },
       body: fd,
     });
+    // Backward-compatible fallback: older backend builds may not expose /product-image yet.
+    if (res.status === 404) {
+      const signRes = await fetch(`${API_BASE}/api/upload/sign`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'image',
+          content_type: formFile.type || 'application/octet-stream',
+          size_bytes: formFile.size,
+        }),
+      });
+      if (!signRes.ok) {
+        const err = await signRes.json().catch(() => ({}));
+        const msg =
+          typeof (err as { detail?: string }).detail === 'string'
+            ? (err as { detail: string }).detail
+            : 'Upload failed';
+        throw new Error(msg);
+      }
+      const signed = (await signRes.json()) as UploadSignOut;
+      const putRes = await fetch(signed.upload_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': formFile.type || 'application/octet-stream' },
+        body: formFile,
+      });
+      if (!putRes.ok) {
+        throw new Error('Upload failed');
+      }
+      return { image_key: signed.object_key, image_url: null };
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       const msg = typeof (err as { detail?: string }).detail === 'string' ? (err as { detail: string }).detail : 'Upload failed';
