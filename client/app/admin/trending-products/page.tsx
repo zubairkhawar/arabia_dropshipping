@@ -92,11 +92,13 @@ export default function AdminTrendingProductsPage() {
   const [formCategory, setFormCategory] = useState<string>(CATEGORIES[0]);
   const [formOrder, setFormOrder] = useState('1');
   const [formActive, setFormActive] = useState(true);
+  const [formTrending, setFormTrending] = useState(true);
   const [formDesc, setFormDesc] = useState('');
   const [formImageKey, setFormImageKey] = useState<string | null>(null);
   const [formImageUrl, setFormImageUrl] = useState<string | null>(null);
   const [formImagePreview, setFormImagePreview] = useState<string | null>(null);
   const [formFile, setFormFile] = useState<File | null>(null);
+  const [uploadDragOver, setUploadDragOver] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<TrendingProductRow | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -158,6 +160,7 @@ export default function AdminTrendingProductsPage() {
     const nextOrder = items.length ? Math.min(100, Math.max(...items.map((i) => i.display_order)) + 1) : 1;
     setFormOrder(String(nextOrder));
     setFormActive(true);
+    setFormTrending(true);
     setFormDesc('');
     setFormImageKey(null);
     setFormImageUrl(null);
@@ -174,6 +177,7 @@ export default function AdminTrendingProductsPage() {
     setFormCategory(row.category);
     setFormOrder(String(row.display_order));
     setFormActive(row.is_active);
+    setFormTrending(row.is_active);
     setFormDesc(row.description || '');
     setFormImageKey(row.image_key);
     setFormImageUrl(row.image_url);
@@ -278,7 +282,7 @@ export default function AdminTrendingProductsPage() {
         image_url: image_url ?? undefined,
         description: formDesc.trim() || null,
         display_order: order,
-        is_active: formActive,
+        is_active: formActive && formTrending,
       };
       if (editing) {
         const res = await fetch(`${API_BASE}/api/admin/trending-products/${editing.id}`, {
@@ -555,31 +559,84 @@ export default function AdminTrendingProductsPage() {
                   </select>
                 </label>
               </div>
-              <div>
-                <span className="text-xs font-medium text-text-secondary">Trending</span>
-                <div className="mt-2 flex gap-4 text-sm">
-                  <label className="inline-flex items-center gap-2 cursor-pointer">
-                    <input type="radio" checked={formActive} onChange={() => setFormActive(true)} />
-                    Trending
-                  </label>
-                  <label className="inline-flex items-center gap-2 cursor-pointer">
-                    <input type="radio" checked={!formActive} onChange={() => setFormActive(false)} />
-                    Not Trending
-                  </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="rounded-lg border border-border bg-scaffold p-3">
+                  <div className="text-xs font-medium text-text-secondary">Status</div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="text-sm text-text-primary">{formActive ? 'Active' : 'Inactive'}</span>
+                    <button
+                      type="button"
+                      aria-label="Toggle status"
+                      onClick={() => setFormActive((v) => !v)}
+                      className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                        formActive ? 'bg-emerald-500' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                          formActive ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border bg-scaffold p-3">
+                  <div className="text-xs font-medium text-text-secondary">Trending</div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="text-sm text-text-primary">{formTrending ? 'On' : 'Off'}</span>
+                    <button
+                      type="button"
+                      aria-label="Toggle trending"
+                      onClick={() => setFormTrending((v) => !v)}
+                      className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                        formTrending ? 'bg-blue-500' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                          formTrending ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
               </div>
               <div>
                 <span className="text-xs font-medium text-text-secondary">Product Image *</span>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif"
-                  className="mt-1 block w-full text-sm"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
+                <label
+                  className={`mt-2 flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed p-6 text-center transition-colors ${
+                    uploadDragOver ? 'border-blue-500 bg-blue-50' : 'border-border bg-scaffold'
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setUploadDragOver(true);
+                  }}
+                  onDragLeave={() => setUploadDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setUploadDragOver(false);
+                    const f = e.dataTransfer.files?.[0];
                     setFormFile(f ?? null);
                     if (f) setFormImagePreview(URL.createObjectURL(f));
                   }}
-                />
+                >
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      setFormFile(f ?? null);
+                      if (f) setFormImagePreview(URL.createObjectURL(f));
+                    }}
+                  />
+                  <div className="text-base font-semibold text-text-primary">Upload files</div>
+                  <div className="mt-1 text-sm text-text-secondary">Drag & drop or click to browse.</div>
+                  <div className="mt-1 text-xs text-text-muted">JPG, JPEG, PNG, GIF, WEBP</div>
+                  <div className="mt-2 text-xs text-text-muted">
+                    {formFile ? `Selected: ${formFile.name}` : 'No file chosen'}
+                  </div>
+                </label>
                 {formImagePreview && (
                   <div className="mt-2 rounded-lg border border-border overflow-hidden bg-scaffold max-h-48 flex items-center justify-center">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
