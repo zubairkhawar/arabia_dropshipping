@@ -143,6 +143,8 @@ export default function AdminTrendingProductsPage() {
       (p) =>
         p.product_name.toLowerCase().includes(q) ||
         p.category.toLowerCase().includes(q) ||
+        (p.description || '').toLowerCase().includes(q) ||
+        p.currency.toLowerCase().includes(q) ||
         String(p.price).includes(q),
     );
   }, [items, search]);
@@ -335,10 +337,7 @@ export default function AdminTrendingProductsPage() {
   return (
     <div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto w-full">
       <div className="rounded-lg border border-border bg-panel p-5 shadow-sm">
-        <h1 className="text-xl font-semibold text-text-primary">Trending Products Management</h1>
-        <p className="text-sm text-text-secondary mt-1">
-          Manage products shown when customers ask for trending items (by country).
-        </p>
+        <h1 className="text-xl font-semibold text-text-primary">Product Management</h1>
       </div>
 
       <div className="flex flex-wrap gap-2 border-b border-border pb-3">

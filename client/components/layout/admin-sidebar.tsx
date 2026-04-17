@@ -40,7 +40,7 @@ const conversationsViews: SidebarLink[] = [
 
 const bottomSection: SidebarLink[] = [
   { icon: FolderCog, label: 'Knowledge Base', path: '/admin/knowledge-base' },
-  { icon: ShoppingBag, label: 'Trending Products', path: '/admin/trending-products' },
+  { icon: ShoppingBag, label: 'Products', path: '/admin/trending-products' },
   { icon: Settings, label: 'Settings', path: '/admin/settings' },
 ];
 
