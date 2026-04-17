@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     r2_bucket_name: Optional[str] = None
     r2_presign_put_seconds: int = 60
     r2_presign_get_seconds: int = 3600
+    # Optional public base for R2 (e.g. https://pub-xxxxx.r2.dev or custom domain). Used for stored image URLs.
+    r2_public_base_url: Optional[str] = None
     
     # JWT
     jwt_secret_key: str

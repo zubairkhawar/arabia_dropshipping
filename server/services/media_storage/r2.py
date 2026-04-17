@@ -76,6 +76,19 @@ def validate_upload_request(
     raise ValueError("type must be voice, image, or file")
 
 
+def trending_product_object_key(country_folder: str, ext: str) -> str:
+    """
+    R2 key under arabia-media-style prefix: trending-products/{uae|ksa|pk}/<uuid><ext>
+    """
+    day = datetime.now(timezone.utc).strftime("%Y%m%d")
+    uid = uuid.uuid4().hex
+    folder = (country_folder or "uae").strip().lower()
+    if folder not in ("uae", "ksa", "pk"):
+        folder = "uae"
+    e = ext if ext.startswith(".") else f".{ext}" if ext else ".jpg"
+    return f"trending-products/{folder}/{day}_{uid}{e}"
+
+
 def new_object_key(kind: str, ext: str) -> str:
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     uid = uuid.uuid4().hex

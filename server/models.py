@@ -2,7 +2,7 @@
 Centralized database models for Arabia Dropshipping
 All models are defined here to avoid circular imports
 """
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint, Numeric
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -458,4 +458,25 @@ class InternalDmMemberReadState(Base):
     conversation_id = Column(Integer, ForeignKey("internal_dm_conversations.id"), nullable=False, index=True)
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
     last_read_message_id = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TrendingProduct(Base):
+    """Country-scoped trending products for customer bot / marketing surfaces."""
+
+    __tablename__ = "trending_products"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True, default=1)
+    country = Column(String(10), nullable=False, index=True)  # UAE | KSA | PK
+    product_name = Column(String(255), nullable=False)
+    price = Column(Numeric(10, 2), nullable=False)
+    currency = Column(String(5), nullable=False)
+    category = Column(String(80), nullable=False)
+    image_url = Column(Text, nullable=True)
+    image_key = Column(String(255), nullable=True)
+    description = Column(Text, nullable=True)
+    display_order = Column(Integer, nullable=False, default=1)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

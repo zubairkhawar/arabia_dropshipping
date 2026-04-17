@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   FolderCog,
   ChevronDown,
+  ShoppingBag,
 } from 'lucide-react';
 import { useSidebar } from '@/contexts/SidebarContext';
 import Image from 'next/image';
@@ -39,6 +40,7 @@ const conversationsViews: SidebarLink[] = [
 
 const bottomSection: SidebarLink[] = [
   { icon: FolderCog, label: 'Knowledge Base', path: '/admin/knowledge-base' },
+  { icon: ShoppingBag, label: 'Trending Products', path: '/admin/trending-products' },
   { icon: Settings, label: 'Settings', path: '/admin/settings' },
 ];
 
