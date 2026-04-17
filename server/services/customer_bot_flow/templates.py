@@ -445,6 +445,32 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Ya \"support\" likhein human agent se baat karne ke liye."
         ),
     },
+    "kb_wrap_agency": {
+        "english": (
+            "{body}\n\n"
+            "For more details, visit our Agency Partnership Program:\n"
+            "https://www.agency.arabiadropship.com/\n\n"
+            "If you need more information or assistance, feel free to ask.\n"
+            "You can also visit our website at https://www.arabiadropship.com\n"
+            "Or type \"support\" to speak with a human agent."
+        ),
+        "arabic": (
+            "{body}\n\n"
+            "لمزيد من التفاصيل، قم بزيارة برنامج شراكة الوكالة:\n"
+            "https://www.agency.arabiadropship.com/\n\n"
+            "إذا كنت بحاجة إلى مزيد من المعلومات أو المساعدة، لا تتردد في السؤال.\n"
+            "يمكنك أيضاً زيارة موقعنا: https://www.arabiadropship.com\n"
+            "أو اكتب \"support\" للتحدث مع موظف."
+        ),
+        "roman_urdu": (
+            "{body}\n\n"
+            "Mazeed details ke liye hamara Agency Partnership Program dekhein:\n"
+            "https://www.agency.arabiadropship.com/\n\n"
+            "Agar aapko mazeed information ya madad chahiye, befikr hokar poochein.\n"
+            "Aap hamari website bhi visit kar sakte hain: https://www.arabiadropship.com\n"
+            "Ya \"support\" likhein human agent se baat karne ke liye."
+        ),
+    },
     "unknown_info": {
         "english": 'I don\'t have that information. Type "agent" to speak with a human.',
         "arabic": "لا تتوفر لدي هذه المعلومة. اكتب \"agent\" للتحدث مع موظف.",
@@ -454,6 +480,75 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "english": "Browse products section is available. You can also type your question.",
         "arabic": "يمكنك تصفح قسم المنتجات. ويمكنك أيضاً كتابة سؤالك.",
         "roman_urdu": "Aap products browse kar sakte hain. Ya apna sawal likh dein.",
+    },
+    "trending_ask_country": {
+        "english": (
+            "Which country's trending products would you like to see?\n\n"
+            "1️⃣ 🇸🇦 KSA (Saudi Arabia)\n"
+            "2️⃣ 🇦🇪 UAE\n"
+            "3️⃣ 🇵🇰 Pakistan\n\n"
+            "Reply with the number (1–3) or the country name."
+        ),
+        "arabic": (
+            "ما هي دولة المنتجات الرائجة التي تريد رؤيتها؟\n\n"
+            "1️⃣ 🇸🇦 السعودية (KSA)\n"
+            "2️⃣ 🇦🇪 الإمارات (UAE)\n"
+            "3️⃣ 🇵🇰 باكستان (Pakistan)\n\n"
+            "أرسل الرقم (1–3) أو اسم الدولة."
+        ),
+        "roman_urdu": (
+            "Aap kis country ke trending products dekhna chahte hain?\n\n"
+            "1️⃣ 🇸🇦 KSA (Saudi Arabia)\n"
+            "2️⃣ 🇦🇪 UAE\n"
+            "3️⃣ 🇵🇰 Pakistan\n\n"
+            "1–3 mein se number ya country name likhein."
+        ),
+    },
+    "trending_country_retry": {
+        "english": "Please choose one: 1 = KSA 🇸🇦, 2 = UAE 🇦🇪, 3 = Pakistan 🇵🇰 (or type KSA / UAE / PK).",
+        "arabic": "يرجى اختيار: 1 = السعودية 🇸🇦، 2 = الإمارات 🇦🇪، 3 = باكستان 🇵🇰 (أو اكتب KSA / UAE / PK).",
+        "roman_urdu": "Please choose: 1 = KSA 🇸🇦, 2 = UAE 🇦🇪, 3 = Pakistan 🇵🇰 (ya KSA / UAE / PK likhein).",
+    },
+    "trending_after_images_footer": {
+        "english": (
+            "These are the current trending products in {country}! 🔥\n\n"
+            "Want details on a specific product? Type the product name (or its number from the list).\n\n"
+            "Or type your question anytime."
+        ),
+        "arabic": (
+            "هذه المنتجات الرائجة الحالية في {country}! 🔥\n\n"
+            "تريد تفاصيل عن منتج معيّن؟ اكتب اسم المنتج (أو رقمه من القائمة).\n\n"
+            "أو اكتب سؤالك في أي وقت."
+        ),
+        "roman_urdu": (
+            "Yeh {country} ke current trending products hain! 🔥\n\n"
+            "Kisi product ki detail chahiye? Product ka naam likhein (ya list ka number).\n\n"
+            "Ya kabhi bhi apna sawal likhein."
+        ),
+    },
+    "trending_product_not_matched": {
+        "english": (
+            "I couldn’t match that to one of the trending products I just showed. "
+            "Try the exact product name, a number from the list (1–8), or type \"agent\" for a human."
+        ),
+        "arabic": (
+            "لم أستطع ربط ذلك بأحد المنتجات الرائجة التي عرضتها للتو. "
+            "جرّب اسم المنتج بدقة، أو رقماً من القائمة (1–8)، أو اكتب \"agent\" للتحدث مع موظف."
+        ),
+        "roman_urdu": (
+            "Isay abhi dikhaye gaye trending products se match nahi kar saka. "
+            "Exact naam try karein, list ka number (1–8), ya \"agent\" likhein human ke liye."
+        ),
+    },
+    "trending_header": {
+        "english": "🔥 Trending picks for {country}:",
+        "arabic": "🔥 منتجات رائجة في {country}:",
+        "roman_urdu": "🔥 {country} ke trending picks:",
+    },
+    "trending_no_products": {
+        "english": "No trending products are listed for {country} yet. Try another country or ask me anything else.",
+        "arabic": "لا توجد منتجات رائجة مسجّلة لـ {country} حتى الآن. جرّب دولة أخرى أو اسألني أي شيء آخر.",
+        "roman_urdu": "Abhi {country} ke liye koi trending product list nahi hai. Doosri country try karein ya koi aur sawal pooch lein.",
     },
     "fallback": {
         "english": (

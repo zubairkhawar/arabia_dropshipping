@@ -6,12 +6,13 @@ Team routing uses Agent.team values: new_customer, beginner, intermediate, exper
 """
 from __future__ import annotations
 
+import difflib
 import logging
 import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from services.ai_orchestrator_service.services import (
     _extract_order_id_from_message,
 )
 from services.store_integration_service.client import StoreIntegrationClient
+from services.trending_products_service.bot_query import list_active_trending_for_country
 from services.human_handoff_intent import (
     is_slash_reset_command,
     solo_menu_digit,
@@ -49,6 +51,19 @@ def _t(lang: str, table: Dict[str, str]) -> str:
     return table.get(lang) or table.get("english") or next(iter(table.values()))
 
 
+def _is_agency_topic(text: str) -> bool:
+    """Return True when the reply body is about the Agency Partnership Program."""
+    t = (text or "").lower()
+    return bool(
+        re.search(r"\bagency\b", t)
+        or re.search(r"\bpartnership\s+program\b", t)
+        or re.search(r"\bcommission\b", t)
+        or re.search(r"\breferral\b", t)
+        or re.search(r"\bagent\s+partner\b", t)
+        or "agency.arabiadropship" in t
+    )
+
+
 def format_kb_reply(lang: str, ai_body: str, source: Optional[str] = None) -> str:
     """Wrap a knowledge/AI answer (KB turns). Source line is always the public website in templates."""
     body = (ai_body or "").strip()
@@ -60,9 +75,12 @@ def format_kb_reply(lang: str, ai_body: str, source: Optional[str] = None) -> st
     body = re.sub(r"\n*(?:.*?customer support se raabta.*|.*?support se raabta.*|.*?contact (?:our )?(?:customer )?support.*|.*?reach out to (?:our )?(?:customer )?support.*|.*?hamari support team.*|.*?support team se.*)", "", body, flags=re.IGNORECASE).strip()
     # Strip "feel free to ask" / "befikr hokar poochein" type closings from LLM
     body = re.sub(r"\n*(?:.*?feel free to (?:ask|reach|contact).*|.*?befikr hokar pooch.*|.*?mazeed sawalat.*pooch.*)", "", body, flags=re.IGNORECASE).strip()
+    # Strip agency link if LLM already included it (the footer will add it properly)
+    body = re.sub(r"\n*(?:.*?agency\.arabiadropship\.com[^\n]*)", "", body, flags=re.IGNORECASE).strip()
     if not body:
         return body
-    return _t(lang, MSGS["kb_wrap"]).format(body=body)
+    template_key = "kb_wrap_agency" if _is_agency_topic(body) else "kb_wrap"
+    return _t(lang, MSGS[template_key]).format(body=body)
 
 
 def _normalize_meta(conv: Conversation) -> Dict[str, Any]:
@@ -449,6 +467,184 @@ def _default_skip_store_api(f: Dict[str, Any]) -> bool:
     return True
 
 
+TRENDING_WA_MAX = 8
+
+
+def _trending_footer_country_label(country_code: str) -> str:
+    c = (country_code or "").strip().upper()
+    if c == "PK":
+        return "Pakistan"
+    return c
+
+
+def _parse_trending_country_reply(text: str) -> Optional[str]:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    t = unicodedata.normalize("NFKC", raw).lower()
+    t = t.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    # Menu order: 1 = KSA, 2 = UAE, 3 = Pakistan
+    if t == "1":
+        return "KSA"
+    if t == "2":
+        return "UAE"
+    if t == "3":
+        return "PK"
+    if t in ("971",):
+        return "UAE"
+    if t in ("966",):
+        return "KSA"
+    if t in ("92",):
+        return "PK"
+    if t in ("uae",):
+        return "UAE"
+    if t in ("ksa", "pk"):
+        return t.upper()
+    if "uae" in t or "emirates" in t or "dubai" in t or "abu dhabi" in t:
+        return "UAE"
+    if "ksa" in t or "saudi" in t or "riyadh" in t or "jeddah" in t:
+        return "KSA"
+    if "pakistan" in t or "lahore" in t or "karachi" in t:
+        return "PK"
+    if t == "sa" and len(t) <= 3:
+        return "KSA"
+    return None
+
+
+def _trending_price_bit(it: Dict[str, Any]) -> str:
+    pr = float(it.get("price") or 0)
+    cur = str(it.get("currency") or "").strip()
+    if pr > 0 and cur:
+        if pr == int(pr):
+            return f"{pr:g} {cur}"
+        return f"{pr} {cur}"
+    return ""
+
+
+def _wa_caption_for_trending_row(it: Dict[str, Any]) -> str:
+    name = str(it.get("product_name") or "").strip()
+    pb = _trending_price_bit(it)
+    if pb:
+        return f"📦 {name}\n💰 {pb}"
+    return f"📦 {name}"
+
+
+def _trending_inbox_and_web_body(lang: str, country: str, items: List[Dict[str, Any]]) -> str:
+    if not items:
+        return _t(lang, MSGS["trending_no_products"]).format(
+            country=_trending_footer_country_label(country)
+        )
+    lines = [_t(lang, MSGS["trending_header"]).format(country=country)]
+    for i, it in enumerate(items, start=1):
+        nm = str(it.get("product_name") or "").strip()
+        pb = _trending_price_bit(it)
+        price_suffix = f" — {pb}" if pb else ""
+        cat = str(it.get("category") or "").strip()
+        desc = str(it.get("description") or "").strip()
+        img = (it.get("image_url") or "").strip()
+        lines.append(f"{i}) {nm}{price_suffix}\n   {cat}")
+        if desc:
+            lines.append(f"   {desc}")
+        if img:
+            lines.append(f"   📷 {img}")
+    return "\n\n".join(lines)
+
+
+def _strip_trending_detail_query(text: str) -> str:
+    s = (text or "").strip()
+    s = re.sub(
+        r"(?i)^(?:tell me about|details on|detail on|info on|more about|what about|about)\s+",
+        "",
+        s,
+    ).strip()
+    return s
+
+
+def _select_trending_product_from_cache(
+    cache: List[Dict[str, Any]], text: str
+) -> Optional[Dict[str, Any]]:
+    if not cache or not (text or "").strip():
+        return None
+    raw = text.strip()
+    t_norm = unicodedata.normalize("NFKC", raw).lower()
+    t_norm = t_norm.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    query = _strip_trending_detail_query(t_norm)
+
+    if re.fullmatch(r"\d+", query):
+        idx = int(query) - 1
+        if 0 <= idx < len(cache):
+            return cache[idx]
+
+    if query:
+        for row in cache:
+            nm = str(row.get("product_name") or "").strip().lower()
+            if nm and (nm in query or query in nm):
+                return row
+
+        name_lowers = [str(x.get("product_name") or "").strip().lower() for x in cache]
+        name_lowers = [n for n in name_lowers if n]
+        best = difflib.get_close_matches(query, name_lowers, n=1, cutoff=0.55)
+        if best:
+            for row in cache:
+                if str(row.get("product_name") or "").strip().lower() == best[0]:
+                    return row
+
+        qflat = re.sub(r"[^\w\u0600-\u06FF\s]", " ", query)
+        qflat = re.sub(r"\s+", " ", qflat).strip()
+        for row in cache:
+            desc = str(row.get("description") or "").strip().lower()
+            if len(desc) >= 10 and qflat and qflat in desc:
+                return row
+    return None
+
+
+def _format_trending_product_detail(_lang: str, p: Dict[str, Any]) -> str:
+    nm = str(p.get("product_name") or "").strip()
+    cat = str(p.get("category") or "").strip()
+    desc = str(p.get("description") or "").strip()
+    pb = _trending_price_bit(p)
+    img = (p.get("image_url") or "").strip()
+    parts: List[str] = [f"📦 {nm}"]
+    if cat:
+        parts.append(f"📂 {cat}")
+    if pb:
+        parts.append(f"💰 {pb}")
+    if desc:
+        parts.append(desc)
+    if img:
+        parts.append(f"📷 {img}")
+    return "\n".join(parts)
+
+
+def _wants_trending_products(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t or len(t) > 220:
+        return False
+    flat = t.replace("\n", " ")
+    markers = (
+        "trending",
+        "trend ",
+        "best seller",
+        "bestseller",
+        "browse product",
+        "show product",
+        "popular product",
+        "top product",
+        "tranding",
+        "mashhoor",
+        "popular items",
+        "trending product",
+        "products dekh",
+        "product dikha",
+        "product dikhao",
+        "dikhao products",
+        "naye products",
+        "new arrivals",
+        "hot product",
+    )
+    return any(m in flat for m in markers)
+
+
 def _looks_like_account_question(text: str) -> bool:
     """Invoice / account area — requires verification like order lookups."""
     t = (text or "").strip().lower()
@@ -554,6 +750,8 @@ def _flow_is_tabula_rasa(flow: Dict[str, Any]) -> bool:
         "awaiting_agent",
         "new_main_menu",
         "existing_verified_menu",
+        "trending_awaiting_country",
+        "trending_showing_products",
     ):
         return False
     if step == "conversational":
@@ -654,6 +852,10 @@ class BotFlowResult:
     escalate: bool
     handled: bool
     """False means caller should use legacy behavior (e.g. human agent owns chat)."""
+    whatsapp_image_outbound: Optional[List[Dict[str, str]]] = None
+    """Each item: {"image_url": str, "caption": str} for Meta image messages (WhatsApp only)."""
+    whatsapp_text_after_images: Optional[str] = None
+    """When set with whatsapp_image_outbound, sent as the text message after images on WhatsApp."""
 
 
 async def process_customer_bot_message(
@@ -664,6 +866,7 @@ async def process_customer_bot_message(
     tenant_id: int,
     orchestrator: AIOrchestrator,
     phone: Optional[str] = None,
+    channel: str = "web",
 ) -> BotFlowResult:
     if conversation is None:
         return BotFlowResult(
@@ -675,6 +878,8 @@ async def process_customer_bot_message(
             assign_team=None,
             escalate=await orchestrator.should_escalate(user_message),
             handled=False,
+            whatsapp_image_outbound=None,
+            whatsapp_text_after_images=None,
         )
 
     if conversation.agent_id is not None:
@@ -687,6 +892,8 @@ async def process_customer_bot_message(
             assign_team=None,
             escalate=False,
             handled=False,
+            whatsapp_image_outbound=None,
+            whatsapp_text_after_images=None,
         )
 
     meta = _normalize_meta(conversation)
@@ -722,6 +929,8 @@ async def process_customer_bot_message(
         team: Optional[str] = None,
         esc: bool = False,
         skip_api: Optional[bool] = None,
+        wa_images: Optional[List[Dict[str, str]]] = None,
+        wa_text_after: Optional[str] = None,
     ):
         f["lang"] = flow_lang
         if skip_api is None:
@@ -735,6 +944,8 @@ async def process_customer_bot_message(
             assign_team=team,
             escalate=esc,
             handled=True,
+            whatsapp_image_outbound=wa_images,
+            whatsapp_text_after_images=wa_text_after,
         )
 
     def ai_forward(msg: str, f: Dict[str, Any], skip_api: bool):
@@ -753,8 +964,11 @@ async def process_customer_bot_message(
             assign_team=None,
             escalate=escalate_for_ai_turn,
             handled=True,
+            whatsapp_image_outbound=None,
+            whatsapp_text_after_images=None,
         )
 
+    ch = (channel or "web").strip().lower()
     text = (user_message or "").strip()
 
     if is_slash_reset_command(text):
@@ -863,6 +1077,123 @@ async def process_customer_bot_message(
             "lang": flow_lang,
         }
         return ai_forward(text, nf, skip_api=True)
+
+    if step == "trending_awaiting_country":
+        if _is_natural_language(text) and _parse_trending_country_reply(text) is None:
+            nf = _bail_to_conversational(flow, flow_lang)
+            return ai_forward(text, nf, skip_api=_default_skip_store_api(nf))
+        cc = _parse_trending_country_reply(text)
+        if not cc:
+            return save(flow, _t(flow_lang, MSGS["trending_country_retry"]))
+        items_all = list_active_trending_for_country(db, tenant_id, cc)
+        items = items_all[:TRENDING_WA_MAX]
+        if not items:
+            nf = {**flow, "step": "conversational", "lang": flow_lang}
+            nf.pop("trending_country", None)
+            nf.pop("trending_products_cache", None)
+            return save(
+                nf,
+                _t(flow_lang, MSGS["trending_no_products"]).format(
+                    country=_trending_footer_country_label(cc)
+                ),
+            )
+        nf = {
+            **flow,
+            "step": "trending_showing_products",
+            "lang": flow_lang,
+            "trending_country": cc,
+            "trending_products_cache": items,
+        }
+        body = _trending_inbox_and_web_body(flow_lang, cc, items)
+        footer = _t(flow_lang, MSGS["trending_after_images_footer"]).format(
+            country=_trending_footer_country_label(cc)
+        )
+        full_reply = f"{body}\n\n{footer}".strip()
+        wa_images: Optional[List[Dict[str, str]]] = None
+        wa_after: Optional[str] = None
+        if ch == "whatsapp":
+            wa_list: List[Dict[str, str]] = []
+            no_url_lines: List[str] = []
+            for it in items:
+                url = (it.get("image_url") or "").strip()
+                cap = _wa_caption_for_trending_row(it)
+                if url:
+                    wa_list.append({"image_url": url, "caption": cap})
+                else:
+                    no_url_lines.append(f"{cap}\n(no image URL — open chat on web for full list)")
+            if wa_list:
+                wa_images = wa_list
+                wa_after = footer
+                if no_url_lines:
+                    wa_after = "\n\n".join([*no_url_lines, footer]).strip()
+        return save(nf, full_reply, wa_images=wa_images, wa_text_after=wa_after)
+
+    if step == "trending_showing_products":
+        cache_raw = flow.get("trending_products_cache")
+        cache: List[Dict[str, Any]] = cache_raw if isinstance(cache_raw, list) else []
+        if not cache:
+            nf = {**flow, "step": "conversational", "lang": flow_lang}
+            nf.pop("trending_country", None)
+            nf.pop("trending_products_cache", None)
+            return save(nf, _t(flow_lang, MSGS["trending_product_not_matched"]))
+
+        if _wants_trending_products(text):
+            nf = {
+                **flow,
+                "step": "trending_awaiting_country",
+                "lang": flow_lang,
+            }
+            nf.pop("trending_country", None)
+            nf.pop("trending_products_cache", None)
+            return save(nf, _t(flow_lang, MSGS["trending_ask_country"]))
+
+        picked = _select_trending_product_from_cache(cache, text)
+        if picked:
+            detail = _format_trending_product_detail(flow_lang, picked)
+            nf = {**flow, "step": "conversational", "lang": flow_lang}
+            nf.pop("trending_country", None)
+            nf.pop("trending_products_cache", None)
+            url = (picked.get("image_url") or "").strip()
+            nm = str(picked.get("product_name") or "").strip()
+            pb = _trending_price_bit(picked)
+            cap_lines = [f"📦 {nm}"]
+            if pb:
+                cap_lines.append(f"💰 {pb}")
+            caption = "\n".join(cap_lines)[:1024]
+            rest_parts: List[str] = []
+            cat = str(picked.get("category") or "").strip()
+            desc = str(picked.get("description") or "").strip()
+            if cat:
+                rest_parts.append(f"📂 {cat}")
+            if desc:
+                rest_parts.append(desc)
+            if url:
+                rest_parts.append(f"📷 {url}")
+            wa_tail = "\n".join(rest_parts) if rest_parts else None
+            if ch == "whatsapp" and url:
+                return save(
+                    nf,
+                    detail,
+                    wa_images=[{"image_url": url, "caption": caption}],
+                    wa_text_after=wa_tail,
+                )
+            return save(nf, detail)
+
+        if _is_natural_language(text):
+            names = ", ".join(
+                str(x.get("product_name") or "").strip()
+                for x in cache[:TRENDING_WA_MAX]
+                if (x.get("product_name") or "").strip()
+            )
+            nf = {**flow, "step": "trending_showing_products", "lang": flow_lang}
+            hint = (
+                "[Trending products shown in this chat: "
+                f"{names}. User message may not match a product name; answer helpfully "
+                "or ask which listed product they mean.]\n"
+            )
+            return ai_forward(hint + text, nf, skip_api=_default_skip_store_api(nf))
+
+        return save(flow, _t(flow_lang, MSGS["trending_product_not_matched"]))
 
     if step == "existing_awaiting_email":
         if _wants_new_customer_path(text):
@@ -1043,6 +1374,15 @@ async def process_customer_bot_message(
 
     if step == "conversational":
         kind = flow.get("customer_kind")
+
+        if _wants_trending_products(text):
+            nf = {
+                **flow,
+                "step": "trending_awaiting_country",
+                "intro_shown": bool(flow.get("intro_shown")),
+                "lang": flow_lang,
+            }
+            return save(nf, _t(flow_lang, MSGS["trending_ask_country"]))
 
         # Let customer switch to "new" path at any time
         if kind == "existing" and not flow.get("verified") and _wants_new_customer_path(text):

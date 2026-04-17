@@ -204,13 +204,22 @@ export default function AdminTrendingProductsPage() {
 
   const saveProduct = async () => {
     const name = formName.trim();
-    const priceNum = Number(formPrice);
+    const priceRaw = formPrice.trim();
+    let priceNum: number | null = null;
+    if (priceRaw !== '') {
+      const n = Number(priceRaw);
+      if (!Number.isFinite(n) || n < 0) {
+        toast('Price must be a valid non-negative number or left empty');
+        return;
+      }
+      priceNum = n;
+    }
     if (!name) {
       toast('Product name is required');
       return;
     }
-    if (!Number.isFinite(priceNum) || priceNum < 0) {
-      toast('Valid price is required');
+    if (!editing && !formFile && !formImageKey) {
+      toast('Product image is required');
       return;
     }
     const order = parseInt(formOrder, 10);
@@ -452,8 +461,8 @@ export default function AdminTrendingProductsPage() {
 
       {mounted && formOpen && createPortal(
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4" role="dialog">
-          <div className="w-full max-w-lg rounded-xl border border-border bg-panel shadow-xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-panel shadow-xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3 shrink-0">
               <h3 className="font-semibold text-text-primary">
                 {editing ? `Edit Product — ${editing.country}` : `Add New Product — ${country}`}
               </h3>
@@ -461,7 +470,7 @@ export default function AdminTrendingProductsPage() {
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="space-y-4 p-4">
+            <div className="space-y-4 p-4 flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
               <label className="block text-xs font-medium text-text-secondary">
                 Product Name *
                 <input
@@ -472,7 +481,7 @@ export default function AdminTrendingProductsPage() {
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-xs font-medium text-text-secondary">
-                  Price *
+                  Price (optional)
                   <input
                     type="number"
                     step="0.01"
@@ -536,7 +545,7 @@ export default function AdminTrendingProductsPage() {
                 </div>
               </div>
               <div>
-                <span className="text-xs font-medium text-text-secondary">Product Image</span>
+                <span className="text-xs font-medium text-text-secondary">Product Image *</span>
                 <input
                   type="file"
                   accept="image/jpeg,image/png,image/webp,image/gif"
@@ -564,7 +573,7 @@ export default function AdminTrendingProductsPage() {
                 />
               </label>
             </div>
-            <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+            <div className="flex justify-end gap-2 border-t border-border px-4 py-3 shrink-0">
               <button type="button" onClick={() => setFormOpen(false)} className="rounded-lg px-4 py-2 text-sm border border-border">
                 Cancel
               </button>

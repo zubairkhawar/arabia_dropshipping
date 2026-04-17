@@ -118,6 +118,7 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
         tenant_id=message.tenant_id,
         orchestrator=orchestrator,
         phone=message.phone,
+        channel=(message.channel or "web").strip().lower(),
     )
 
     if conversation and flow.merge_metadata:

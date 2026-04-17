@@ -1836,6 +1836,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         tenant_id=tenant_id,
         orchestrator=orchestrator,
         phone=from_phone,
+        channel="whatsapp",
     )
 
     if flow.merge_metadata:
@@ -2001,7 +2002,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
 
     wa_response: Dict[str, Any] | None = None
     client = MetaWhatsAppClient()
-    if reply_text:
+    wa_images = getattr(flow, "whatsapp_image_outbound", None) or []
+    wa_tail = (getattr(flow, "whatsapp_text_after_images", None) or "").strip()
+
+    if reply_text or wa_images:
         if not client.is_configured():
             logger.warning(
                 "WhatsApp reply not sent: Meta Cloud API env missing. "
@@ -2010,14 +2014,46 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             wa_response = {"error": "meta_not_configured"}
         else:
             try:
-                wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)
+                wa_response = None
+                if isinstance(wa_images, list) and wa_images:
+                    for item in wa_images:
+                        if not isinstance(item, dict):
+                            continue
+                        img_url = str(item.get("image_url") or "").strip()
+                        if not img_url:
+                            continue
+                        cap = str(item.get("caption") or "").strip() or None
+                        try:
+                            wa_response = await client.send_image_message(
+                                to_phone=from_phone,
+                                image_url=img_url,
+                                caption=cap,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "WhatsApp send_image_message failed (conversation_id=%s)",
+                                conversation.id,
+                            )
+                            wa_response = {"error": "meta_image_send_failed"}
+                    if wa_tail:
+                        wa_response = await client.send_text_message(
+                            to_phone=from_phone, text=wa_tail[:4096]
+                        )
+                elif (reply_text or "").strip():
+                    wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)
+                if wa_response is None and (reply_text or "").strip():
+                    wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)
                 logger.info(
                     "WhatsApp outbound sent to=%s conversation_id=%s",
                     from_phone[-6:] if from_phone else "?",
                     conversation.id,
                 )
                 ai_msg.wa_delivered_at = datetime.utcnow()
-                msgs = wa_response.get("messages") if isinstance(wa_response, dict) else None
+                msgs = (
+                    wa_response.get("messages")
+                    if isinstance(wa_response, dict)
+                    else None
+                )
                 if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
                     out_wa_id = str(msgs[0].get("id") or "").strip()
                     if out_wa_id:
@@ -2029,7 +2065,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 db.refresh(ai_msg)
             except Exception:
                 logger.exception(
-                    "WhatsApp send_text_message failed (conversation_id=%s)",
+                    "WhatsApp outbound send failed (conversation_id=%s)",
                     conversation.id,
                 )
                 wa_response = {"error": "meta_send_failed"}
