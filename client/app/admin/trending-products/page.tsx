@@ -260,11 +260,11 @@ export default function AdminTrendingProductsPage() {
       toast('Product image is required');
       return;
     }
-    const order = parseInt(formOrder, 10);
-    if (!Number.isFinite(order) || order < 1 || order > 100) {
-      toast('Display order must be 1–100');
-      return;
-    }
+    const parsedOrder = parseInt(formOrder, 10);
+    const order =
+      Number.isFinite(parsedOrder) && parsedOrder >= 1 && parsedOrder <= 100
+        ? parsedOrder
+        : 1;
     setSaving(true);
     try {
       const { image_key, image_url } = await uploadImageIfNeeded();
@@ -398,7 +398,7 @@ export default function AdminTrendingProductsPage() {
                     <th className="px-4 py-2 font-medium">Product Name</th>
                     <th className="px-4 py-2 font-medium">Price</th>
                     <th className="px-4 py-2 font-medium">Category</th>
-                    <th className="px-4 py-2 font-medium">Status</th>
+                    <th className="px-4 py-2 font-medium">Trending</th>
                     <th className="px-4 py-2 font-medium text-right w-36">Actions</th>
                   </tr>
                 </thead>
@@ -413,7 +413,7 @@ export default function AdminTrendingProductsPage() {
                       <td className="px-4 py-2 text-text-secondary">{p.category}</td>
                       <td className="px-4 py-2">
                         <span className={p.is_active ? 'text-emerald-600' : 'text-text-muted'}>
-                          {p.is_active ? 'Active' : 'Inactive'}
+                          {p.is_active ? 'Trending' : 'Not Trending'}
                         </span>
                       </td>
                       <td className="px-4 py-2 text-right">
@@ -458,7 +458,7 @@ export default function AdminTrendingProductsPage() {
                   <div className="text-sm text-text-secondary">
                     {p.price} {p.currency} · {p.category}
                   </div>
-                  <div className="text-xs text-text-muted">{p.is_active ? 'Active' : 'Inactive'}</div>
+                  <div className="text-xs text-text-muted">{p.is_active ? 'Trending' : 'Not Trending'}</div>
                   <div className="flex gap-2 pt-1">
                     <button
                       type="button"
@@ -554,28 +554,17 @@ export default function AdminTrendingProductsPage() {
                     ))}
                   </select>
                 </label>
-                <label className="block text-xs font-medium text-text-secondary">
-                  Display Order * (1–100)
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={formOrder}
-                    onChange={(e) => setFormOrder(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-border bg-scaffold px-3 py-2 text-sm"
-                  />
-                </label>
               </div>
               <div>
-                <span className="text-xs font-medium text-text-secondary">Status</span>
+                <span className="text-xs font-medium text-text-secondary">Trending</span>
                 <div className="mt-2 flex gap-4 text-sm">
                   <label className="inline-flex items-center gap-2 cursor-pointer">
                     <input type="radio" checked={formActive} onChange={() => setFormActive(true)} />
-                    Active
+                    Trending
                   </label>
                   <label className="inline-flex items-center gap-2 cursor-pointer">
                     <input type="radio" checked={!formActive} onChange={() => setFormActive(false)} />
-                    Inactive
+                    Not Trending
                   </label>
                 </div>
               </div>
