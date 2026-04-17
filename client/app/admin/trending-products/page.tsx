@@ -79,6 +79,33 @@ function authHeaders(): HeadersInit {
   return h;
 }
 
+async function fetchTrendingApi(
+  endpoint: string,
+  init: RequestInit = {},
+  query?: Record<string, string>,
+): Promise<Response> {
+  const cleanEndpoint = endpoint
+    ? endpoint.startsWith('/')
+      ? endpoint
+      : `/${endpoint}`
+    : '';
+
+  const buildUrl = (withTrailingSlash: boolean) => {
+    const base = `${API_BASE}/api/admin/trending-products${withTrailingSlash && !cleanEndpoint ? '/' : ''}${cleanEndpoint}`;
+    if (!query) return base;
+    const u = new URL(base);
+    Object.entries(query).forEach(([k, v]) => u.searchParams.set(k, v));
+    return u.toString();
+  };
+
+  let res = await fetch(buildUrl(false), init);
+  // Compatibility fallback for older deployments that only match trailing slash for collection routes.
+  if (res.status === 404 && !cleanEndpoint) {
+    res = await fetch(buildUrl(true), init);
+  }
+  return res;
+}
+
 export default function AdminTrendingProductsPage() {
   const { toast } = useToast();
   const [country, setCountry] = useState<CountryCode>('UAE');
@@ -117,9 +144,7 @@ export default function AdminTrendingProductsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const url = new URL(`${API_BASE}/api/admin/trending-products`);
-      url.searchParams.set('country', country);
-      const res = await fetch(url.toString(), { headers: authHeaders() });
+      const res = await fetchTrendingApi('', { headers: authHeaders() }, { country });
       if (res.status === 401) {
         toast('Sign in as admin first');
         setItems([]);
@@ -325,7 +350,7 @@ export default function AdminTrendingProductsPage() {
         is_active: formActive && formTrending,
       };
       if (editing) {
-        const res = await fetch(`${API_BASE}/api/admin/trending-products/${editing.id}`, {
+        const res = await fetchTrendingApi(`/${editing.id}`, {
           method: 'PUT',
           headers: { ...authHeaders(), 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -336,7 +361,7 @@ export default function AdminTrendingProductsPage() {
         }
         toast('Product updated');
       } else {
-        const res = await fetch(`${API_BASE}/api/admin/trending-products`, {
+        const res = await fetchTrendingApi('', {
           method: 'POST',
           headers: { ...authHeaders(), 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -360,7 +385,7 @@ export default function AdminTrendingProductsPage() {
     if (!deleteTarget) return;
     setDeleting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/trending-products/${deleteTarget.id}`, {
+      const res = await fetchTrendingApi(`/${deleteTarget.id}`, {
         method: 'DELETE',
         headers: authHeaders(),
       });
@@ -676,7 +701,7 @@ export default function AdminTrendingProductsPage() {
                 >
                   <input
                     type="file"
-                    accept="image/jpg,image/jpeg,image/png,image/heic,image/heif"
+                    accept="image/jpg,image/jpeg,image/png,image/webp,image/heic,image/heif"
                     multiple
                     className="hidden"
                     onChange={(e) => {
@@ -689,7 +714,7 @@ export default function AdminTrendingProductsPage() {
                   />
                   <div className="text-base font-semibold text-text-primary">Upload files</div>
                   <div className="mt-1 text-sm text-text-secondary">Drag & drop or click to browse.</div>
-                  <div className="mt-1 text-xs text-text-muted">JPG, JPEG, PNG, HEIC</div>
+                  <div className="mt-1 text-xs text-text-muted">JPG, JPEG, PNG, WEBP, HEIC</div>
                   <div className="mt-2 text-xs text-text-muted">
                     {formFiles.length ? `${formFiles.length} new image(s) selected` : 'No new files selected'}
                   </div>

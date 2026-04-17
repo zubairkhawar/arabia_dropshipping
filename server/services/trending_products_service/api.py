@@ -51,6 +51,11 @@ def _require_admin(user: User) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
 
 
+def _normalize_product_name(name: str) -> str:
+    # Store names in title case consistently, e.g. "vacuum cleaner" -> "Vacuum Cleaner".
+    return " ".join((name or "").strip().split()).title()
+
+
 def _resolve_image_url(row: TrendingProduct) -> Optional[str]:
     u = (row.image_url or "").strip()
     if u:
@@ -253,7 +258,7 @@ async def create_trending_product(
     row = TrendingProduct(
         tenant_id=current_user.tenant_id,
         country=cty,
-        product_name=payload.product_name.strip(),
+        product_name=_normalize_product_name(payload.product_name),
         price=payload.price if payload.price is not None else Decimal("0"),
         currency=cur,
         category=cat,
@@ -308,7 +313,7 @@ async def update_trending_product(
         row.category = cat
 
     if payload.product_name is not None:
-        row.product_name = payload.product_name.strip()
+        row.product_name = _normalize_product_name(payload.product_name)
     if payload.price is not None:
         row.price = payload.price
     if payload.unit_pieces is not None:
