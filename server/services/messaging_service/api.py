@@ -1966,6 +1966,27 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
 
     # customer_msg was early-committed above for dedup; update final language
     customer_msg.language = detected_language
+    ai_messages: list[Message] = []
+    wa_images = getattr(flow, "whatsapp_image_outbound", None) or []
+    if isinstance(wa_images, list):
+        for item in wa_images:
+            if not isinstance(item, dict):
+                continue
+            img_url = str(item.get("image_url") or "").strip()
+            if not img_url:
+                continue
+            cap = str(item.get("caption") or "").strip() or "Image"
+            ai_messages.append(
+                Message(
+                    conversation_id=conversation.id,
+                    content=cap,
+                    sender_type="ai",
+                    sender_id=None,
+                    language=detected_language,
+                    created_at=datetime.utcnow(),
+                    message_metadata={"type": "image", "media_url": img_url},
+                )
+            )
     ai_msg = Message(
         conversation_id=conversation.id,
         content=reply_text,
@@ -1975,11 +1996,15 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         created_at=datetime.utcnow(),
     )
     db.add(customer_msg)
+    for m in ai_messages:
+        db.add(m)
     db.add(ai_msg)
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)
     db.commit()
     db.refresh(customer_msg)
+    for m in ai_messages:
+        db.refresh(m)
     db.refresh(ai_msg)
     ensure_receipt_for_customer_message(db, customer_msg)
     db.commit()
@@ -1999,6 +2024,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             conversation.id,
             _message_dict_for_ws(db, ai_msg),
         )
+        for m in ai_messages:
+            await push_inbox_message(
+                db,
+                tenant_id,
+                conversation.agent_id,
+                conversation.id,
+                _message_dict_for_ws(db, m),
+            )
 
     wa_response: Dict[str, Any] | None = None
     client = MetaWhatsAppClient()

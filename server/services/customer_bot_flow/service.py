@@ -951,14 +951,39 @@ def _parse_choice(text: str, mapping: Dict[str, str]) -> Optional[str]:
     return None
 
 
-def _delivery_status(order: Order) -> str:
-    data = order.order_data or {}
-    if isinstance(data, dict):
-        for key in ("delivery_status", "fulfillment_status", "shipping_status"):
-            v = data.get(key)
-            if v:
-                return str(v)
-    return "—"
+def _pick(data: Dict[str, Any], *keys: str) -> str:
+    """Return the first non-empty string value found under any of the given keys."""
+    for k in keys:
+        v = data.get(k)
+        if v is not None and str(v).strip() and str(v).strip() != "—":
+            return str(v).strip()
+    return ""
+
+
+def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
+    """
+    Normalize an order payload (from DB order_data JSON or external API) into
+    a flat dict with every field the bot might display.
+    """
+    return {
+        "order_number": _pick(raw, "order_number", "order_id", "id") or ref,
+        "status": _pick(raw, "status"),
+        "delivery_status": _pick(raw, "delivery_status", "fulfillment_status", "shipping_status"),
+        "expected_delivery": _pick(raw, "expected_delivery", "estimated_delivery", "delivery_date", "expected_delivery_date"),
+        "tracking_id": _pick(raw, "tracking_id", "tracking_number", "awb_number", "awb"),
+        "payment_status": _pick(raw, "payment_status"),
+        "invoice_id": _pick(raw, "invoice_id", "invoice_number", "invoice_ref"),
+        "invoice_amount": _pick(raw, "invoice_amount"),
+        "return_status": _pick(raw, "return_status"),
+        "return_date": _pick(raw, "return_date"),
+        "return_charges": _pick(raw, "return_charges"),
+        "return_charge_invoice": _pick(raw, "return_charge_invoice"),
+        "return_reason": _pick(raw, "return_reason"),
+        "cancellation_type": _pick(raw, "cancellation_type"),
+        "cancellation_reason": _pick(raw, "cancellation_reason"),
+        "total_amount": _pick(raw, "total_amount", "amount"),
+        "currency": _pick(raw, "currency"),
+    }
 
 
 async def _lookup_order(
@@ -982,11 +1007,15 @@ async def _lookup_order(
         .first()
     )
     if row:
-        return {
+        base: Dict[str, Any] = {
             "order_number": row.order_number,
             "status": row.status,
-            "delivery": _delivery_status(row),
-        }, "db"
+            "total_amount": row.total_amount,
+            "currency": row.currency,
+        }
+        if isinstance(row.order_data, dict):
+            base.update(row.order_data)
+        return _extract_order_fields(base, ref), "db"
 
     detail: Optional[Dict[str, Any]] = None
     try:
@@ -999,13 +1028,208 @@ async def _lookup_order(
     if not detail:
         return None, "not_found"
 
-    return {
-        "order_number": str(detail.get("order_number") or detail.get("id") or ref),
-        "status": str(detail.get("status") or "unknown"),
-        "delivery": str(
-            (detail.get("delivery_status") or detail.get("fulfillment_status") or "—")
-        ),
-    }, "api"
+    return _extract_order_fields(detail, ref), "api"
+
+
+def _format_order_sentence(lang: str, o: Dict[str, Any]) -> str:
+    """
+    Build a natural-language sentence from all available order fields.
+    Matches user language (English / Arabic / Roman Urdu).
+    """
+    oid = o.get("order_number") or "?"
+    status = (o.get("status") or "").lower()
+    delivery = (o.get("delivery_status") or "").lower()
+    expected = o.get("expected_delivery") or ""
+    tracking = o.get("tracking_id") or ""
+    payment = (o.get("payment_status") or "").lower()
+    invoice = o.get("invoice_id") or ""
+    ret_status = (o.get("return_status") or "").lower()
+    ret_date = o.get("return_date") or ""
+    ret_charges = o.get("return_charges") or ""
+    ret_invoice = o.get("return_charge_invoice") or ""
+    ret_reason = o.get("return_reason") or ""
+    cancel_type = (o.get("cancellation_type") or "").lower()
+    cancel_reason = o.get("cancellation_reason") or ""
+    currency = o.get("currency") or ""
+
+    # Use effective status: API status takes priority, fall back to delivery_status
+    effective = status or delivery or "unknown"
+
+    # --- Status label mapping ---
+    STATUS_EN = {
+        "in_transit": "is currently in transit",
+        "shipped": "has been shipped",
+        "delivered": "has been delivered",
+        "returned": "was returned",
+        "cancelled": "was cancelled",
+        "canceled": "was cancelled",
+        "pending": "is being processed",
+        "processing": "is being processed",
+        "confirmed": "has been confirmed",
+        "dispatched": "has been dispatched",
+        "failed": "has failed",
+    }
+    STATUS_RU = {
+        "in_transit": "transit mein hai",
+        "shipped": "ship ho chuka hai",
+        "delivered": "deliver ho chuka hai",
+        "returned": "return ho chuka hai",
+        "cancelled": "cancel ho chuka hai",
+        "canceled": "cancel ho chuka hai",
+        "pending": "process ho raha hai",
+        "processing": "process ho raha hai",
+        "confirmed": "confirm ho chuka hai",
+        "dispatched": "dispatch ho chuka hai",
+        "failed": "fail ho gaya hai",
+    }
+    STATUS_AR = {
+        "in_transit": "قيد التوصيل حاليًا",
+        "shipped": "تم شحنه",
+        "delivered": "تم توصيله",
+        "returned": "تم إرجاعه",
+        "cancelled": "تم إلغاؤه",
+        "canceled": "تم إلغاؤه",
+        "pending": "قيد المعالجة",
+        "processing": "قيد المعالجة",
+        "confirmed": "تم تأكيده",
+        "dispatched": "تم إرساله",
+        "failed": "فشل",
+    }
+
+    if lang == "roman_urdu":
+        parts: list[str] = []
+        status_text = STATUS_RU.get(effective, effective)
+        parts.append(f"Aapka order #{oid} {status_text}.")
+
+        if expected:
+            parts.append(f"Expected delivery: {expected}.")
+        if tracking:
+            parts.append(f"Tracking number: {tracking}.")
+        if payment:
+            pay_text = "ho chuki hai" if payment in ("paid", "completed") else payment
+            parts.append(f"Payment {pay_text}.")
+        if invoice:
+            parts.append(f"Yeh invoice {invoice} mein shamil hai.")
+
+        if effective in ("returned",) or ret_status in ("returned",):
+            if ret_date:
+                parts.append(f"Return date: {ret_date}.")
+            if ret_charges:
+                rc_text = f"{ret_charges} {currency}".strip()
+                parts.append(f"Return charges: {rc_text}.")
+            if ret_invoice:
+                parts.append(f"Return charges invoice {ret_invoice} mein hain.")
+            if ret_reason:
+                parts.append(f"Wajah: {ret_reason}.")
+
+        if effective in ("cancelled", "canceled"):
+            if cancel_type == "pre_shipment":
+                parts.append("Yeh order shipment se pehle cancel hua.")
+            elif cancel_type == "post_shipment":
+                parts.append("Yeh order ship hone ke baad cancel hua.")
+            if cancel_reason:
+                parts.append(f"Wajah: {cancel_reason}.")
+            if ret_date:
+                parts.append(f"Return date: {ret_date}.")
+            if ret_charges:
+                rc_text = f"{ret_charges} {currency}".strip()
+                parts.append(f"Return charges: {rc_text}.")
+            if ret_invoice:
+                parts.append(f"Return charges invoice {ret_invoice} mein hain.")
+            if not ret_charges and cancel_type == "pre_shipment":
+                parts.append("Is order par koi charges apply nahi hue.")
+
+        return " ".join(parts)
+
+    if lang == "arabic":
+        parts = []
+        status_text = STATUS_AR.get(effective, effective)
+        parts.append(f"طلبك #{oid} {status_text}.")
+
+        if expected:
+            parts.append(f"التسليم المتوقع: {expected}.")
+        if tracking:
+            parts.append(f"رقم التتبع: {tracking}.")
+        if payment:
+            pay_text = "تمت" if payment in ("paid", "completed") else payment
+            parts.append(f"الدفع: {pay_text}.")
+        if invoice:
+            parts.append(f"مضمّن في الفاتورة {invoice}.")
+
+        if effective in ("returned",) or ret_status in ("returned",):
+            if ret_date:
+                parts.append(f"تاريخ الإرجاع: {ret_date}.")
+            if ret_charges:
+                rc_text = f"{ret_charges} {currency}".strip()
+                parts.append(f"رسوم الإرجاع: {rc_text}.")
+            if ret_invoice:
+                parts.append(f"رسوم الإرجاع في الفاتورة {ret_invoice}.")
+            if ret_reason:
+                parts.append(f"السبب: {ret_reason}.")
+
+        if effective in ("cancelled", "canceled"):
+            if cancel_type == "pre_shipment":
+                parts.append("تم إلغاء الطلب قبل الشحن.")
+            elif cancel_type == "post_shipment":
+                parts.append("تم إلغاء الطلب بعد الشحن.")
+            if cancel_reason:
+                parts.append(f"السبب: {cancel_reason}.")
+            if ret_date:
+                parts.append(f"تاريخ الإرجاع: {ret_date}.")
+            if ret_charges:
+                rc_text = f"{ret_charges} {currency}".strip()
+                parts.append(f"رسوم الإرجاع: {rc_text}.")
+            if ret_invoice:
+                parts.append(f"رسوم الإرجاع في الفاتورة {ret_invoice}.")
+            if not ret_charges and cancel_type == "pre_shipment":
+                parts.append("لم يتم تطبيق أي رسوم على هذا الطلب.")
+
+        return " ".join(parts)
+
+    # --- English (default) ---
+    parts = []
+    status_text = STATUS_EN.get(effective, effective)
+    parts.append(f"Your order #{oid} {status_text}.")
+
+    if expected:
+        parts.append(f"Expected delivery: {expected}.")
+    if tracking:
+        parts.append(f"Tracking number: {tracking}.")
+    if payment:
+        pay_text = "has been paid" if payment in ("paid", "completed") else payment
+        parts.append(f"Payment {pay_text}.")
+    if invoice:
+        parts.append(f"This order is reflected in invoice {invoice}.")
+
+    if effective in ("returned",) or ret_status in ("returned",):
+        if ret_date:
+            parts.append(f"It was returned on {ret_date}.")
+        if ret_charges:
+            rc_text = f"{ret_charges} {currency}".strip()
+            parts.append(f"Return charges of {rc_text} have been applied.")
+        if ret_invoice:
+            parts.append(f"Return charges are included in invoice {ret_invoice}.")
+        if ret_reason:
+            parts.append(f"Reason: {ret_reason}.")
+
+    if effective in ("cancelled", "canceled"):
+        if cancel_type == "pre_shipment":
+            parts.append("It was cancelled before shipping.")
+        elif cancel_type == "post_shipment":
+            parts.append("It was shipped but later returned and cancelled.")
+        if cancel_reason:
+            parts.append(f"Reason: {cancel_reason}.")
+        if ret_date:
+            parts.append(f"It was returned on {ret_date}.")
+        if ret_charges:
+            rc_text = f"{ret_charges} {currency}".strip()
+            parts.append(f"Return charges of {rc_text} were applied.")
+        if ret_invoice:
+            parts.append(f"Return charges are included in invoice {ret_invoice}.")
+        if not ret_charges and cancel_type == "pre_shipment":
+            parts.append("No charges were applied.")
+
+    return " ".join(parts)
 
 
 @dataclass
@@ -1612,13 +1836,7 @@ async def process_customer_bot_message(
         if oref:
             order, src = await _lookup_order(db, tenant_id, oref, store_client)
             if order:
-                parts.append(
-                    _t(flow_lang, MSGS["order_found"]).format(
-                        order_id=order["order_number"],
-                        status=order["status"],
-                        delivery=order["delivery"],
-                    )
-                )
+                parts.append(_format_order_sentence(flow_lang, order))
                 parts.append(_t(flow_lang, MSGS["verified_followup"]))
                 return save(base_f, "\n\n".join(parts))
             if src == "api_error":
@@ -1643,13 +1861,8 @@ async def process_customer_bot_message(
         ref = raw if _is_likely_order_id_only(raw) else (_extract_order_id_from_message(raw, phone) or raw)
         order, src = await _lookup_order(db, tenant_id, ref, store_client)
         if order:
-            body = _t(flow_lang, MSGS["order_found"]).format(
-                order_id=order["order_number"],
-                status=order["status"],
-                delivery=order["delivery"],
-            )
             f = {**flow, "step": "conversational", "lang": flow_lang}
-            return save(f, body)
+            return save(f, _format_order_sentence(flow_lang, order))
         f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
         if src == "api_error":
             return save(f, _t(flow_lang, MSGS["order_lookup_error"]))
@@ -1768,13 +1981,8 @@ async def process_customer_bot_message(
                 if ref:
                     order, src = await _lookup_order(db, tenant_id, ref, store_client)
                     if order:
-                        body = _t(flow_lang, MSGS["order_found"]).format(
-                            order_id=order["order_number"],
-                            status=order["status"],
-                            delivery=order["delivery"],
-                        )
                         f = {**flow, "step": "conversational", "lang": flow_lang}
-                        return save(f, body)
+                        return save(f, _format_order_sentence(flow_lang, order))
                     if src == "api_error":
                         f = {**flow, "step": "conversational", "lang": flow_lang}
                         return save(f, _t(flow_lang, MSGS["order_lookup_error"]))

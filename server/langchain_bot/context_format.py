@@ -11,30 +11,77 @@ _STATUS_PHRASES: Dict[str, str] = {
     "shipped": "has been shipped",
     "fulfilled": "has been fulfilled",
     "delivered": "has been delivered",
+    "in_transit": "is currently in transit",
+    "dispatched": "has been dispatched",
+    "confirmed": "has been confirmed",
+    "returned": "was returned",
     "cancelled": "was cancelled",
     "canceled": "was cancelled",
     "refunded": "was refunded",
     "completed": "is completed",
+    "failed": "has failed",
 }
 
 
+def _pick_str(d: Dict[str, Any], *keys: str) -> str:
+    for k in keys:
+        v = d.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
 def format_order_for_llm(order: Dict[str, Any]) -> str:
-    """Turn one order dict into short natural-language lines."""
+    """Turn one order dict into short natural-language lines for the LLM context."""
     if not order:
         return ""
     order_num = order.get("order_number") or order.get("number") or order.get("id")
     status = (order.get("status") or "unknown").strip().lower()
     status_text = _STATUS_PHRASES.get(status, f"status is {order.get('status') or 'unknown'}")
     lines = [f"Order #{order_num} {status_text}."]
-    tn = order.get("tracking_number") or order.get("tracking")
+
+    tn = _pick_str(order, "tracking_number", "tracking", "tracking_id", "awb_number")
     if tn:
         lines.append(f"Tracking: {tn}")
-    car = order.get("carrier") or order.get("shipping_carrier")
+    car = _pick_str(order, "carrier", "shipping_carrier")
     if car:
         lines.append(f"Carrier: {car}")
-    ed = order.get("estimated_delivery") or order.get("delivery_estimate")
+    ed = _pick_str(order, "estimated_delivery", "delivery_estimate", "expected_delivery", "delivery_date")
     if ed:
         lines.append(f"Expected delivery: {ed}")
+    ps = _pick_str(order, "payment_status")
+    if ps:
+        lines.append(f"Payment: {ps}")
+    inv = _pick_str(order, "invoice_id", "invoice_number", "invoice_ref")
+    if inv:
+        lines.append(f"Invoice: {inv}")
+
+    # Return details
+    ret = _pick_str(order, "return_status")
+    if ret or status in ("returned",):
+        rd = _pick_str(order, "return_date")
+        if rd:
+            lines.append(f"Return date: {rd}")
+        rc = _pick_str(order, "return_charges")
+        if rc:
+            cur = _pick_str(order, "currency")
+            lines.append(f"Return charges: {rc} {cur}".strip())
+        ri = _pick_str(order, "return_charge_invoice")
+        if ri:
+            lines.append(f"Return charges invoice: {ri}")
+        rr = _pick_str(order, "return_reason")
+        if rr:
+            lines.append(f"Return reason: {rr}")
+
+    # Cancellation details
+    if status in ("cancelled", "canceled"):
+        ct = _pick_str(order, "cancellation_type")
+        if ct:
+            lines.append(f"Cancellation type: {ct}")
+        cr = _pick_str(order, "cancellation_reason")
+        if cr:
+            lines.append(f"Cancellation reason: {cr}")
+
     return "\n".join(lines)
 
 
