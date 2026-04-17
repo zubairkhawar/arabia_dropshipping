@@ -334,6 +334,24 @@ def ensure_trending_product_image_arrays() -> None:
         pass
 
 
+def ensure_trending_product_unit_pieces_column() -> None:
+    """Add optional unit_pieces column for trending products."""
+    try:
+        insp = inspect(engine)
+        if "trending_products" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("trending_products")}
+    except Exception:
+        return
+    if "unit_pieces" in cols:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE trending_products ADD COLUMN unit_pieces INTEGER"))
+    except Exception:
+        pass
+
+
 def get_db():
     db = SessionLocal()
     try:

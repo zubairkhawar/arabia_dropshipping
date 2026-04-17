@@ -473,6 +473,7 @@ class TrendingProduct(Base):
     price = Column(Numeric(10, 2), nullable=False)
     currency = Column(String(5), nullable=False)
     category = Column(String(80), nullable=False)
+    unit_pieces = Column(Integer, nullable=True)
     image_url = Column(Text, nullable=True)
     image_key = Column(String(255), nullable=True)
     image_urls = Column(JSON, nullable=True)

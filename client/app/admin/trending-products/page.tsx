@@ -54,6 +54,7 @@ interface TrendingProductRow {
   price: number;
   currency: string;
   category: string;
+  unit_pieces?: number | null;
   image_url: string | null;
   image_key: string | null;
   image_display_url: string | null;
@@ -93,6 +94,7 @@ export default function AdminTrendingProductsPage() {
   const [formPrice, setFormPrice] = useState('');
   const [formCurrency, setFormCurrency] = useState('AED');
   const [formCategory, setFormCategory] = useState<string>(CATEGORIES[0]);
+  const [formUnitPieces, setFormUnitPieces] = useState('');
   const [formOrder, setFormOrder] = useState('1');
   const [formActive, setFormActive] = useState(true);
   const [formTrending, setFormTrending] = useState(true);
@@ -100,6 +102,7 @@ export default function AdminTrendingProductsPage() {
   const [formImageKeys, setFormImageKeys] = useState<string[]>([]);
   const [formImageUrls, setFormImageUrls] = useState<string[]>([]);
   const [formImagePreviews, setFormImagePreviews] = useState<string[]>([]);
+  const [formNewFilePreviews, setFormNewFilePreviews] = useState<string[]>([]);
   const [formFiles, setFormFiles] = useState<File[]>([]);
   const [uploadDragOver, setUploadDragOver] = useState(false);
 
@@ -160,6 +163,7 @@ export default function AdminTrendingProductsPage() {
     setFormPrice('');
     setFormCurrency(CURRENCY_BY_COUNTRY[country]);
     setFormCategory(CATEGORIES[0]);
+    setFormUnitPieces('');
     const nextOrder = items.length ? Math.min(100, Math.max(...items.map((i) => i.display_order)) + 1) : 1;
     setFormOrder(String(nextOrder));
     setFormActive(true);
@@ -168,6 +172,7 @@ export default function AdminTrendingProductsPage() {
     setFormImageKeys([]);
     setFormImageUrls([]);
     setFormImagePreviews([]);
+    setFormNewFilePreviews([]);
     setFormFiles([]);
     setFormOpen(true);
   };
@@ -178,6 +183,7 @@ export default function AdminTrendingProductsPage() {
     setFormPrice(String(row.price));
     setFormCurrency(row.currency);
     setFormCategory(row.category);
+    setFormUnitPieces(row.unit_pieces ? String(row.unit_pieces) : '');
     setFormOrder(String(row.display_order));
     setFormActive(row.is_active);
     setFormTrending(row.is_active);
@@ -194,6 +200,7 @@ export default function AdminTrendingProductsPage() {
     setFormImageKeys(existingKeys);
     setFormImageUrls(existingUrls);
     setFormImagePreviews(existingPreviewUrls);
+    setFormNewFilePreviews([]);
     setFormFiles([]);
     setFormOpen(true);
   };
@@ -276,11 +283,21 @@ export default function AdminTrendingProductsPage() {
       }
       priceNum = n;
     }
+    const unitRaw = formUnitPieces.trim();
+    let unitPieces: number | null = null;
+    if (unitRaw !== '') {
+      const u = Number(unitRaw);
+      if (!Number.isInteger(u) || u <= 0) {
+        toast('Unit (pieces) must be a positive whole number or left empty');
+        return;
+      }
+      unitPieces = u;
+    }
     if (!name) {
       toast('Product name is required');
       return;
     }
-    if (!editing && !formFiles.length && !formImageKeys.length) {
+    if (!formFiles.length && !formImageKeys.length) {
       toast('At least one product image is required');
       return;
     }
@@ -298,6 +315,7 @@ export default function AdminTrendingProductsPage() {
         price: priceNum,
         currency: formCurrency,
         category: formCategory,
+        unit_pieces: unitPieces,
         image_keys: image_keys.length ? image_keys : undefined,
         image_key: image_keys[0] ?? undefined,
         image_urls: image_urls.length ? image_urls : undefined,
@@ -580,6 +598,18 @@ export default function AdminTrendingProductsPage() {
                     ))}
                   </select>
                 </label>
+                <label className="block text-xs font-medium text-text-secondary">
+                  Unit (pieces) (optional)
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={formUnitPieces}
+                    onChange={(e) => setFormUnitPieces(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-border bg-scaffold px-3 py-2 text-sm"
+                    placeholder="e.g. 12"
+                  />
+                </label>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="rounded-lg border border-border bg-scaffold p-3">
@@ -641,7 +671,7 @@ export default function AdminTrendingProductsPage() {
                     const next = dropped.filter((f) => f.type.startsWith('image/'));
                     if (!next.length) return;
                     setFormFiles((prev) => [...prev, ...next]);
-                    setFormImagePreviews((prev) => [...prev, ...next.map((f) => URL.createObjectURL(f))]);
+                    setFormNewFilePreviews((prev) => [...prev, ...next.map((f) => URL.createObjectURL(f))]);
                   }}
                 >
                   <input
@@ -653,7 +683,7 @@ export default function AdminTrendingProductsPage() {
                       const selected = Array.from(e.target.files || []);
                       if (!selected.length) return;
                       setFormFiles((prev) => [...prev, ...selected]);
-                      setFormImagePreviews((prev) => [...prev, ...selected.map((f) => URL.createObjectURL(f))]);
+                      setFormNewFilePreviews((prev) => [...prev, ...selected.map((f) => URL.createObjectURL(f))]);
                       e.currentTarget.value = '';
                     }}
                   />
@@ -664,10 +694,40 @@ export default function AdminTrendingProductsPage() {
                     {formFiles.length ? `${formFiles.length} new image(s) selected` : 'No new files selected'}
                   </div>
                 </label>
-                {formImagePreviews.length > 0 && (
+                {(formImagePreviews.length > 0 || formNewFilePreviews.length > 0) && (
                   <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {formImagePreviews.map((src, idx) => (
-                      <div key={`${src}-${idx}`} className="rounded-lg border border-border overflow-hidden bg-scaffold h-24 flex items-center justify-center">
+                      <div key={`existing-${src}-${idx}`} className="relative rounded-lg border border-border overflow-hidden bg-scaffold h-24 flex items-center justify-center">
+                        <button
+                          type="button"
+                          title="Remove image"
+                          onClick={() => {
+                            setFormImagePreviews((prev) => prev.filter((_, i) => i !== idx));
+                            setFormImageKeys((prev) => prev.filter((_, i) => i !== idx));
+                            setFormImageUrls((prev) => prev.filter((_, i) => i !== idx));
+                          }}
+                          className="absolute right-1 top-1 z-10 rounded-full bg-black/60 p-1 text-white hover:bg-black/80"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={src} alt="" className="h-full w-full object-cover" />
+                      </div>
+                    ))}
+                    {formNewFilePreviews.map((src, idx) => (
+                      <div key={`new-${src}-${idx}`} className="relative rounded-lg border border-border overflow-hidden bg-scaffold h-24 flex items-center justify-center">
+                        <button
+                          type="button"
+                          title="Remove image"
+                          onClick={() => {
+                            URL.revokeObjectURL(src);
+                            setFormNewFilePreviews((prev) => prev.filter((_, i) => i !== idx));
+                            setFormFiles((prev) => prev.filter((_, i) => i !== idx));
+                          }}
+                          className="absolute right-1 top-1 z-10 rounded-full bg-black/60 p-1 text-white hover:bg-black/80"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={src} alt="" className="h-full w-full object-cover" />
                       </div>

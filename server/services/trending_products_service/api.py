@@ -110,6 +110,7 @@ class TrendingProductOut(BaseModel):
     price: float
     currency: str
     category: str
+    unit_pieces: Optional[int] = None
     image_url: Optional[str] = None
     image_key: Optional[str] = None
     image_display_url: Optional[str] = None
@@ -142,6 +143,7 @@ def _to_out(row: TrendingProduct) -> TrendingProductOut:
         price=price_f,
         currency=row.currency,
         category=row.category,
+        unit_pieces=row.unit_pieces,
         image_url=row.image_url,
         image_key=row.image_key,
         image_display_url=_resolve_image_url(row),
@@ -167,6 +169,7 @@ class TrendingProductCreate(BaseModel):
     )
     currency: str = Field(..., min_length=3, max_length=5)
     category: str = Field(..., min_length=1, max_length=80)
+    unit_pieces: Optional[int] = Field(None, ge=1, le=1000000)
     image_url: Optional[str] = None
     image_key: Optional[str] = Field(None, max_length=255)
     image_urls: Optional[List[str]] = None
@@ -182,6 +185,7 @@ class TrendingProductUpdate(BaseModel):
     price: Optional[Decimal] = Field(None, ge=Decimal("0"), le=Decimal("99999999.99"))
     currency: Optional[str] = Field(None, min_length=3, max_length=5)
     category: Optional[str] = Field(None, min_length=1, max_length=80)
+    unit_pieces: Optional[int] = Field(None, ge=1, le=1000000)
     image_url: Optional[str] = None
     image_key: Optional[str] = Field(None, max_length=255)
     image_urls: Optional[List[str]] = None
@@ -253,6 +257,7 @@ async def create_trending_product(
         price=payload.price if payload.price is not None else Decimal("0"),
         currency=cur,
         category=cat,
+        unit_pieces=payload.unit_pieces,
         image_url=(norm_urls[0] if norm_urls else None),
         image_key=(norm_keys[0] if norm_keys else None),
         image_urls=norm_urls or None,
@@ -306,6 +311,8 @@ async def update_trending_product(
         row.product_name = payload.product_name.strip()
     if payload.price is not None:
         row.price = payload.price
+    if payload.unit_pieces is not None:
+        row.unit_pieces = payload.unit_pieces
     if payload.description is not None:
         row.description = (payload.description or "").strip() or None
     if payload.display_order is not None:
