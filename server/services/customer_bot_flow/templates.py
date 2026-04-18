@@ -10,28 +10,6 @@ from typing import Any, Dict, Optional
 
 # Template id → language code → exact message ({placeholders} only where noted).
 BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
-    "welcome_back": {
-        "english": (
-            "Welcome back! Would you like to continue where we left off or start fresh?\n\n"
-            "1️⃣ Continue\n"
-            "2️⃣ Start fresh"
-        ),
-        "arabic": (
-            "مرحبًا بعودتك! هل تريد المتابعة من حيث توقفت أم البدء من جديد؟\n\n"
-            "1️⃣ متابعة\n"
-            "2️⃣ البدء من جديد"
-        ),
-        "roman_urdu": (
-            "Welcome back! Aap wahan se continue karna chahte hain jahan chhore the, ya naye siray se?\n\n"
-            "1️⃣ Continue\n"
-            "2️⃣ Start fresh"
-        ),
-    },
-    "resume_continued": {
-        "english": "Great — we'll pick up where you left off. 👍",
-        "arabic": "تمام — سنكمل من حيث توقفنا. 👍",
-        "roman_urdu": "Theek hai — jahan se chhore the wahan se continue karte hain. 👍",
-    },
     "agent_relay_ack": {
         "english": (
             "✅ We received your message and shared it with our team.\n"
@@ -53,20 +31,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "english": "Hello! How can I help today?",
         "arabic": "مرحبًا! كيف يمكنني مساعدتك اليوم؟",
         "roman_urdu": "Hello! Aaj kya madad karoon?",
-    },
-    "agent_schedule_unknown": {
-        "english": (
-            "We do not have a published human-agent schedule in the system yet. "
-            "Type \"agent\" or \"support\" to request a human, or reply **1** for new / **2** for existing."
-        ),
-        "arabic": (
-            "لا يوجد جدول دعم بشري محدد في النظام بعد. "
-            "اكتب \"agent\" أو \"support\" لطلب موظف، أو **1** للجديد / **2** للحالي."
-        ),
-        "roman_urdu": (
-            "Abhi system mein human agents ka schedule save nahi mila. "
-            "\"agent\" ya \"support\" likhein, ya **1** new / **2** existing ke liye."
-        ),
     },
     "customer_type_menu_reminder": {
         "english": "To continue, reply **1** if you are a new customer or **2** if you are an existing customer.",
@@ -123,58 +87,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         ),
         "roman_urdu": (
             "Hello, main Arabia Dropbot hoon — Arabia Dropshipping ka assistant. Kaise madad karoon?"
-        ),
-    },
-    "new_welcome": {
-        "english": (
-            "Great! 😊\n\n"
-            "How can we help you today?\n\n"
-            "1️⃣ Browse products 🛍️\n"
-            "2️⃣ Get information ℹ️\n"
-            "3️⃣ Talk to support\n\n"
-            "Or type your question anytime"
-        ),
-        "arabic": (
-            "رائع! 😊\n\n"
-            "كيف يمكننا مساعدتك اليوم؟\n\n"
-            "1️⃣ تصفح المنتجات 🛍️\n"
-            "2️⃣ الحصول على معلومات ℹ️\n"
-            "3️⃣ التحدث مع الدعم\n\n"
-            "أو اكتب سؤالك في أي وقت"
-        ),
-        "roman_urdu": (
-            "Great! 😊\n\n"
-            "Aap ko kis cheez mein madad chahiye?\n\n"
-            "1️⃣ Products dekhna 🛍️\n"
-            "2️⃣ Maloomat lena ℹ️\n"
-            "3️⃣ Support se baat karna\n\n"
-            "Ya apna sawal likh dein"
-        ),
-    },
-    "new_menu_after_greeting": {
-        "english": (
-            "Hello! 😊\n\n"
-            "How can we help you today?\n\n"
-            "1️⃣ Browse products 🛍️\n"
-            "2️⃣ Get information ℹ️\n"
-            "3️⃣ Talk to support\n\n"
-            "Or type your question anytime"
-        ),
-        "arabic": (
-            "وعليكم السلام ورحمة الله 🌙\n\n"
-            "كيف يمكننا مساعدتك اليوم؟\n\n"
-            "1️⃣ تصفح المنتجات 🛍️\n"
-            "2️⃣ الحصول على معلومات ℹ️\n"
-            "3️⃣ التحدث مع الدعم\n\n"
-            "أو اكتب سؤالك في أي وقت"
-        ),
-        "roman_urdu": (
-            "Walaykum assalam! 🌙\n\n"
-            "Aap ko kis cheez mein madad chahiye?\n\n"
-            "1️⃣ Products dekhna 🛍️\n"
-            "2️⃣ Maloomat lena ℹ️\n"
-            "3️⃣ Support se baat karna\n\n"
-            "Ya apna sawal likh dein"
         ),
     },
     "order_verify_intro": {
@@ -296,18 +208,9 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": "Apna mobile number bhejein 📱",
     },
     "mobile_unsupported_country": {
-        "english": (
-            "We only support phone numbers from 🇵🇰 Pakistan, 🇦🇪 UAE, and 🇸🇦 Saudi Arabia.\n\n"
-            "Please send a valid mobile number."
-        ),
-        "arabic": (
-            "نحن ندعم أرقام الهاتف من 🇵🇰 باكستان, 🇦🇪 الإمارات و 🇸🇦 السعودية فقط.\n\n"
-            "يرجى إرسال رقم جوال صحيح."
-        ),
-        "roman_urdu": (
-            "Hum sirf 🇵🇰 Pakistan, 🇦🇪 UAE aur 🇸🇦 Saudi Arabia ke numbers support karte hain.\n\n"
-            "Please sahih mobile number bhejein."
-        ),
+        "english": "We only support 🇵🇰 Pakistan, 🇦🇪 UAE, and 🇸🇦 Saudi Arabia numbers. Please send a valid mobile.",
+        "arabic": "ندعم أرقام 🇵🇰 باكستان و🇦🇪 الإمارات و🇸🇦 السعودية فقط. يرجى إرسال رقم جوال صحيح.",
+        "roman_urdu": "Sirf 🇵🇰 Pakistan, 🇦🇪 UAE aur 🇸🇦 Saudi Arabia ke numbers. Sahih mobile bhejein.",
     },
     "customer_not_found_after_verify": {
         "english": "We could not find a customer with this email and mobile. Please check and send your mobile number again.",
@@ -333,26 +236,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "english": "📦 Please enter your Order ID:",
         "arabic": "📦 يرجى إدخال رقم الطلب:",
         "roman_urdu": "Apna Order ID bhejein 📦",
-    },
-    "order_found": {
-        "english": (
-            "✅ Order found!\n\n"
-            "📦 Order ID: {order_id}\n"
-            "📍 Status: {status}\n"
-            "🚚 Delivery: {delivery}"
-        ),
-        "arabic": (
-            "✅ تم العثور على الطلب!\n\n"
-            "📦 رقم الطلب: {order_id}\n"
-            "📍 الحالة: {status}\n"
-            "🚚 التوصيل: {delivery}"
-        ),
-        "roman_urdu": (
-            "✅ Order mil gaya!\n\n"
-            "📦 Order ID: {order_id}\n"
-            "📍 Status: {status}\n"
-            "🚚 Delivery: {delivery}"
-        ),
     },
     "order_not_found": {
         "english": "Order nahi mila. Dobara check karein ya support likhein.",

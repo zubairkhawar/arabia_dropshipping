@@ -54,6 +54,44 @@ TEAM_BEGINNER = "beginner"
 TEAM_INTERMEDIATE = "intermediate"
 TEAM_EXPERT = "expert"
 
+# Verbatim copy previously under BOT_FLOW_TEMPLATES; lives here so templates stay slimmer.
+_RESUME_CHOICE_MSGS: Dict[str, str] = {
+    "english": (
+        "Welcome back! Would you like to continue where we left off or start fresh?\n\n"
+        "1️⃣ Continue\n"
+        "2️⃣ Start fresh"
+    ),
+    "arabic": (
+        "مرحبًا بعودتك! هل تريد المتابعة من حيث توقفت أم البدء من جديد؟\n\n"
+        "1️⃣ متابعة\n"
+        "2️⃣ البدء من جديد"
+    ),
+    "roman_urdu": (
+        "Welcome back! Aap wahan se continue karna chahte hain jahan chhore the, ya naye siray se?\n\n"
+        "1️⃣ Continue\n"
+        "2️⃣ Start fresh"
+    ),
+}
+_RESUME_CONTINUED_MSGS: Dict[str, str] = {
+    "english": "Great — we'll pick up where you left off. 👍",
+    "arabic": "تمام — سنكمل من حيث توقفنا. 👍",
+    "roman_urdu": "Theek hai — jahan se chhore the wahan se continue karte hain. 👍",
+}
+_AGENT_SCHEDULE_UNKNOWN_MSGS: Dict[str, str] = {
+    "english": (
+        "We do not have a published human-agent schedule in the system yet. "
+        'Type "agent" or "support" to request a human, or reply **1** for new / **2** for existing.'
+    ),
+    "arabic": (
+        'لا يوجد جدول دعم بشري محدد في النظام بعد. '
+        'اكتب "agent" أو "support" لطلب موظف، أو **1** للجديد / **2** للحالي.'
+    ),
+    "roman_urdu": (
+        "Abhi system mein human agents ka schedule save nahi mila. "
+        '"agent" ya "support" likhein, ya **1** new / **2** existing ke liye.'
+    ),
+}
+
 
 def _t(lang: str, table: Dict[str, str]) -> str:
     return table.get(lang) or table.get("english") or next(iter(table.values()))
@@ -1101,7 +1139,7 @@ def _entry_menu_agent_hours_reply(db: Session, tenant_id: int, lang: str) -> str
         .first()
     )
     if not sched:
-        body = _t(lang, MSGS["agent_schedule_unknown"])
+        body = _t(lang, _AGENT_SCHEDULE_UNKNOWN_MSGS)
     else:
         body = format_tenant_schedule_for_customer(
             lang,
@@ -1561,11 +1599,11 @@ async def process_customer_bot_message(
             restored = {**snap}
             restored.pop("resume_snapshot", None)
             restored["lang"] = flow_lang
-            return save(restored, _t(flow_lang, MSGS["resume_continued"]))
+            return save(restored, _t(flow_lang, _RESUME_CONTINUED_MSGS))
         if choice == "fresh":
             nf = _reset_bot_flow(flow_lang)
             return save(nf, _t(flow_lang, MSGS["greeting"]), skip_api=False)
-        return save(flow, _t(flow_lang, MSGS["welcome_back"]))
+        return save(flow, _t(flow_lang, _RESUME_CHOICE_MSGS))
 
     # Clear stale WhatsApp/web bot state (e.g. old "verified" session) — before handoff
     if wants_bot_flow_reset(text):
@@ -1592,7 +1630,7 @@ async def process_customer_bot_message(
             esc=True,
         )
 
-    # Sets step awaiting_resume_choice; reply uses MSGS["welcome_back"] from templates.
+    # Sets step awaiting_resume_choice; reply uses _RESUME_CHOICE_MSGS.
     if not _flow_is_tabula_rasa(flow) and _looks_like_greeting(text):
         snap = {k: v for k, v in flow.items() if k != "resume_snapshot"}
         wb: Dict[str, Any] = {
@@ -1601,7 +1639,7 @@ async def process_customer_bot_message(
             "lang": flow_lang,
             "resume_snapshot": snap,
         }
-        return save(wb, _t(flow_lang, MSGS["welcome_back"]))
+        return save(wb, _t(flow_lang, _RESUME_CHOICE_MSGS))
 
     # --- New / Existing customer selection ---
     if step == "awaiting_customer_type":
