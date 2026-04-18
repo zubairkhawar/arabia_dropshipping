@@ -23,6 +23,7 @@ from services.ai_orchestrator_service.services import (
     AIOrchestrator,
     _extract_order_id_from_message,
 )
+from services.phone_lookup_variants import normalize_mobile_for_flow
 from services.store_integration_service.client import StoreIntegrationClient
 from services.trending_products_service.bot_query import list_active_trending_for_country
 from services.human_handoff_intent import (
@@ -469,43 +470,8 @@ def _is_likely_email(text: str) -> bool:
 
 
 def _normalize_phone(raw: str) -> Optional[str]:
-    """
-    Normalize phone numbers from Pakistan (92), UAE (971), Saudi Arabia (966).
-    Returns the normalized string or None when the number doesn't belong to any
-    of the three supported countries.
-
-    Pakistan  → local format  03XXXXXXXXX  (11 digits)
-    UAE       → international 971XXXXXXXX  (10-12 digits)
-    Saudi     → international 966XXXXXXXXX (12 digits)
-    """
-    s = re.sub(r"[\s\-().]+", "", (raw or "").strip())
-    if s.startswith("+"):
-        s = s[1:]
-    if s.startswith("00"):
-        s = s[2:]
-    if not s.isdigit():
-        return None
-
-    # --- Pakistan (92) ---
-    # International: 923XXXXXXXXX (12 digits)
-    if s.startswith("92") and len(s) == 12 and s[2] == "3":
-        return "0" + s[2:]
-    # Local with leading 0: 03XXXXXXXXX (11 digits)
-    if s.startswith("03") and len(s) == 11:
-        return s
-    # Bare local (e.g. from 003XXXXXXXXX after stripping 00): 3XXXXXXXXX (10 digits)
-    if s.startswith("3") and len(s) == 10:
-        return "0" + s
-
-    # --- UAE (971) ---
-    if s.startswith("971") and 10 <= len(s) <= 12:
-        return s
-
-    # --- Saudi Arabia (966) ---
-    if s.startswith("966") and 12 <= len(s) <= 13:
-        return s
-
-    return None
+    """Delegates to shared PK/UAE/KSA normalizer (also used for multi-format API lookup)."""
+    return normalize_mobile_for_flow(raw)
 
 
 def _verified_at_iso() -> str:
@@ -2044,7 +2010,9 @@ async def process_customer_bot_message(
         mobile = _normalize_phone(mobile_raw)
         if mobile is None:
             return save(flow, _t(flow_lang, MSGS["mobile_unsupported_country"]))
-        customer = await store_client.get_customer_by_email_mobile(pending_email, mobile)
+        customer = await store_client.get_customer_by_email_mobile_first_hit(
+            pending_email, mobile_raw
+        )
         if not customer:
             return save(flow, _t(flow_lang, MSGS["customer_not_found_after_verify"]))
         verified_at = _verified_at_iso()

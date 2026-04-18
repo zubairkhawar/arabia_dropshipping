@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any
 import httpx
 
 from config import settings
+from services.phone_lookup_variants import mobile_lookup_variants
 from services.verification_service import send_verification_code_local, verify_code_local
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,19 @@ class StoreIntegrationClient:
                 return None
         except httpx.HTTPError:
             return None
+
+    async def get_customer_by_email_mobile_first_hit(
+        self, email: str, mobile_raw: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Try GET /customers with each common mobile format (local, +92…, 0092…, etc.)
+        until one returns a customer.
+        """
+        for m in mobile_lookup_variants(mobile_raw):
+            row = await self.get_customer_by_email_mobile(email, m)
+            if row:
+                return row
+        return None
 
     async def get_recent_orders_for_customer(self, customer_id: str, limit: int = 3) -> List[Dict[str, Any]]:
         """
