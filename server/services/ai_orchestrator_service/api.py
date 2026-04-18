@@ -20,6 +20,7 @@ from services.customer_bot_flow import (
     resolve_bot_template,
 )
 from services.customer_bot_flow.session_reset import release_agent_and_clear_bot_flow
+from services.tenant_schedule_text import format_tenant_schedule_line_for_handoff
 from services.human_handoff_intent import is_slash_reset_command
 from services.agent_portal_service.broadcast import notify_bot_handoff_assigned
 from services.agent_routing_service.api import assign_from_bot_flow
@@ -269,14 +270,12 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
                     .first()
                 )
                 if sched and sched.working_days and sched.start_time and sched.end_time:
-                    if lang == "arabic":
-                        schedule_line = (
-                            f"🕐 ساعات العمل: {sched.working_days} من {sched.start_time} إلى {sched.end_time}\n"
-                        )
-                    else:
-                        schedule_line = (
-                            f"🕐 Working hours: {sched.working_days}, {sched.start_time} to {sched.end_time}\n"
-                        )
+                    schedule_line = format_tenant_schedule_line_for_handoff(
+                        lang,
+                        sched.working_days,
+                        sched.start_time,
+                        sched.end_time,
+                    )
                 try:
                     extra = extra.format(schedule=schedule_line)
                 except (KeyError, IndexError):

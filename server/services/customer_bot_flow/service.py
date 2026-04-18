@@ -18,7 +18,7 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from config import get_openai_api_key, settings
-from models import Conversation, Message, Order
+from models import Conversation, Message, Order, TenantSchedule
 from services.ai_orchestrator_service.services import (
     AIOrchestrator,
     _extract_order_id_from_message,
@@ -32,6 +32,7 @@ from services.human_handoff_intent import (
     wants_human_agent,
 )
 from services.customer_bot_flow.templates import BOT_FLOW_TEMPLATES
+from services.tenant_schedule_text import format_tenant_schedule_for_customer
 try:
     from langchain_core.messages import HumanMessage, SystemMessage
 except ImportError:  # pragma: no cover — older langchain pin
@@ -1068,25 +1069,34 @@ def _parse_choice(text: str, mapping: Dict[str, str]) -> Optional[str]:
     return None
 
 
-async def _classify_customer_kind_llm(user_message: str) -> Optional[str]:
+async def _classify_entry_menu_intent_llm(user_message: str) -> str:
     """
-    When menu text does not match keywords/digits, use the LLM to decide new vs existing.
-    Returns \"new\", \"existing\", or None if unclear / no API key / error.
+    When the new/existing menu text does not match keywords/digits, classify with the LLM.
+
+    Returns one of: new | existing | agent_hours | other
+    - agent_hours: asking when support/agents are online, working hours, availability.
+    - other: general FAQ / unrelated (route to main AI).
+    On failure or missing API key, returns \"other\".
     """
     msg = (user_message or "").strip()
     if not msg or len(msg) > 500:
-        return None
+        return "other"
     key = get_openai_api_key()
     if not key:
-        logger.warning("customer_kind LLM: no OpenAI API key configured")
-        return None
+        logger.warning("entry_menu intent LLM: no OpenAI API key configured")
+        return "other"
     system = (
-        "You are a strict classifier. The user is at the Arabia Dropshipping bot entry step "
-        "and must be either a NEW customer (first time, signing up, no account yet) or an "
-        "EXISTING customer (already registered, returning, login, old account, typos of "
-        "\"existing\" such as existinf/exsisting).\n"
-        "Output exactly one token, lowercase, no punctuation: new OR existing OR unknown.\n"
-        "Use unknown only if the message is totally unrelated or impossible to tell."
+        "You classify one user message at the Arabia Dropshipping bot ENTRY step "
+        "(the bot just asked: new customer or existing customer?).\n"
+        "Choose exactly ONE label:\n"
+        "- new — user indicates they are NEW (first time, sign up, register, typos like neww).\n"
+        "- existing — user indicates EXISTING (already have account, login, old customer, "
+        "typos like existinf/exsisting).\n"
+        "- agent_hours — user asks when human agents/support are AVAILABLE, working hours, "
+        "online time, office hours, schedule, kab online, agents available, 24/7 question, etc. "
+        "(NOT choosing new vs existing).\n"
+        "- other — general questions, shipping, products, unrelated text, or impossible to tell.\n"
+        "Output exactly one lowercase word: new OR existing OR agent_hours OR other. No punctuation."
     )
     human = f"User message:\n{msg}"
     try:
@@ -1094,24 +1104,47 @@ async def _classify_customer_kind_llm(user_message: str) -> Optional[str]:
             model_name=settings.openai_model,
             temperature=0,
             openai_api_key=key,
-            max_tokens=8,
+            max_tokens=12,
         )
         resp = await llm.ainvoke(
             [SystemMessage(content=system), HumanMessage(content=human)]
         )
         text_out = (getattr(resp, "content", None) or str(resp) or "").strip().lower()
+        if re.search(r"\bagent_hours\b", text_out) or (
+            re.search(r"\bagent\b", text_out) and re.search(r"\bhours?\b", text_out)
+        ):
+            return "agent_hours"
         first = (text_out.split() or [""])[0]
         token = re.sub(r"[^a-z]", "", first)
-        if not token or token.startswith("unknown"):
-            return None
         if token.startswith("exist") or token == "existing":
             return "existing"
         if token.startswith("new"):
             return "new"
-        return None
+        if token == "other":
+            return "other"
+        return "other"
     except Exception as exc:  # noqa: BLE001
-        logger.warning("customer_kind LLM classification failed: %s", exc)
-        return None
+        logger.warning("entry_menu intent LLM classification failed: %s", exc)
+        return "other"
+
+
+def _entry_menu_agent_hours_reply(db: Session, tenant_id: int, lang: str) -> str:
+    sched = (
+        db.query(TenantSchedule)
+        .filter(TenantSchedule.tenant_id == tenant_id)
+        .first()
+    )
+    if not sched:
+        body = _t(lang, MSGS["agent_schedule_unknown"])
+    else:
+        body = format_tenant_schedule_for_customer(
+            lang,
+            working_days=sched.working_days,
+            start_time=sched.start_time,
+            end_time=sched.end_time,
+        )
+    hint = _t(lang, MSGS["customer_type_menu_reminder"])
+    return f"{body}\n\n{hint}".strip()
 
 
 def _pick(data: Dict[str, Any], *keys: str) -> str:
@@ -1641,9 +1674,12 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(nf, _t(flow_lang, MSGS["ask_email"]))
-        # Typo / free phrasing on the 1–2 menu: let the LLM classify new vs existing.
-        llm_kind = await _classify_customer_kind_llm(text)
-        if llm_kind == "new":
+        # Typo / FAQ on the 1–2 menu: LLM classifies new vs existing vs agent hours vs other.
+        entry_intent = await _classify_entry_menu_intent_llm(text)
+        if entry_intent == "agent_hours":
+            sched_body = _entry_menu_agent_hours_reply(db, tenant_id, flow_lang)
+            return save(flow, format_kb_reply(flow_lang, sched_body), skip_api=True)
+        if entry_intent == "new":
             nf = {
                 **flow,
                 "step": "conversational",
@@ -1652,7 +1688,7 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
-        if llm_kind == "existing":
+        if entry_intent == "existing":
             nf = {
                 **flow,
                 "step": "existing_awaiting_email",
@@ -1662,7 +1698,7 @@ async def process_customer_bot_message(
             }
             return save(nf, _t(flow_lang, MSGS["ask_email"]))
         # Short menu-ish input but classifier could not decide — ask again (avoid empty LLM reply / fallback).
-        if llm_kind is None and len(text.strip()) <= 48 and not _looks_like_free_text_question(text):
+        if entry_intent == "other" and len(text.strip()) <= 48 and not _looks_like_free_text_question(text):
             return save(flow, _t(flow_lang, MSGS["customer_type_unclear"]))
         # Trending products intent at the entry menu — jump straight to trending flow
         if _wants_trending_products(text):

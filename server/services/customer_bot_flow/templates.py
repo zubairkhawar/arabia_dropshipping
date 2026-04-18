@@ -54,6 +54,25 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "مرحبًا! كيف يمكنني مساعدتك اليوم؟",
         "roman_urdu": "Hello! Aaj kya madad karoon?",
     },
+    "agent_schedule_unknown": {
+        "english": (
+            "We do not have a published human-agent schedule in the system yet. "
+            "Type \"agent\" or \"support\" to request a human, or reply **1** for new / **2** for existing."
+        ),
+        "arabic": (
+            "لا يوجد جدول دعم بشري محدد في النظام بعد. "
+            "اكتب \"agent\" أو \"support\" لطلب موظف، أو **1** للجديد / **2** للحالي."
+        ),
+        "roman_urdu": (
+            "Abhi system mein human agents ka schedule save nahi mila. "
+            "\"agent\" ya \"support\" likhein, ya **1** new / **2** existing ke liye."
+        ),
+    },
+    "customer_type_menu_reminder": {
+        "english": "To continue, reply **1** if you are a new customer or **2** if you are an existing customer.",
+        "arabic": "للمتابعة، أجب بـ **1** إذا كنت عميلاً جديداً أو **2** إذا كنت عميلاً حالياً.",
+        "roman_urdu": "Aage barhne ke liye **1** likhein agar new customer, **2** likhein agar existing customer.",
+    },
     "customer_type_unclear": {
         "english": (
             "I could not tell whether you are a new or an existing customer.\n"

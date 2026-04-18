@@ -16,6 +16,7 @@ from langchain_bot.context_format import (
     format_orders_summary_for_llm,
 )
 from langchain_bot.prompts import build_prompt, normalize_context_text, now_utc_iso
+from services.tenant_schedule_text import format_tenant_schedule_for_customer
 
 KB_QUERY_SYNONYMS: Dict[str, List[str]] = {
     "kitny": ["how", "many", "count"],
@@ -65,7 +66,7 @@ class ArabiaLangChainBot:
         self.prompt = build_prompt()
         self.last_reply_used_kb: bool = False
 
-    def _build_schedule_context(self, tenant_id: int) -> str:
+    def _build_schedule_context(self, tenant_id: int, language: str = "english") -> str:
         sched = (
             self.db.query(TenantSchedule)
             .filter(TenantSchedule.tenant_id == tenant_id)
@@ -73,9 +74,12 @@ class ArabiaLangChainBot:
         )
         if not sched:
             return "No configured agent schedule."
-        return (
-            f"Working days: {sched.working_days}. "
-            f"Agent hours: {sched.start_time} to {sched.end_time}."
+        lang = (language or "english").strip().lower()
+        return format_tenant_schedule_for_customer(
+            lang,
+            working_days=sched.working_days,
+            start_time=sched.start_time,
+            end_time=sched.end_time,
         )
 
     def _build_active_broadcast_context(self, tenant_id: int) -> str:
@@ -452,7 +456,7 @@ class ArabiaLangChainBot:
             conversation_id,
             exclude_message_id=exclude_history_message_id,
         )
-        schedule_context = self._build_schedule_context(tenant_id)
+        schedule_context = self._build_schedule_context(tenant_id, language)
         broadcast_context = self._build_active_broadcast_context(tenant_id)
         min_score = max(0, int(getattr(settings, "kb_min_score", 1) or 0))
         rows = self._load_knowledge_rows(tenant_id)
