@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from config import settings
+from config import get_openai_api_key, settings
 from models import Conversation, Message, Order
 from services.ai_orchestrator_service.services import (
     AIOrchestrator,
@@ -32,6 +32,12 @@ from services.human_handoff_intent import (
     wants_human_agent,
 )
 from services.customer_bot_flow.templates import BOT_FLOW_TEMPLATES
+try:
+    from langchain_core.messages import HumanMessage, SystemMessage
+except ImportError:  # pragma: no cover — older langchain pin
+    from langchain.schema import HumanMessage, SystemMessage
+
+from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -1062,6 +1068,52 @@ def _parse_choice(text: str, mapping: Dict[str, str]) -> Optional[str]:
     return None
 
 
+async def _classify_customer_kind_llm(user_message: str) -> Optional[str]:
+    """
+    When menu text does not match keywords/digits, use the LLM to decide new vs existing.
+    Returns \"new\", \"existing\", or None if unclear / no API key / error.
+    """
+    msg = (user_message or "").strip()
+    if not msg or len(msg) > 500:
+        return None
+    key = get_openai_api_key()
+    if not key:
+        logger.warning("customer_kind LLM: no OpenAI API key configured")
+        return None
+    system = (
+        "You are a strict classifier. The user is at the Arabia Dropshipping bot entry step "
+        "and must be either a NEW customer (first time, signing up, no account yet) or an "
+        "EXISTING customer (already registered, returning, login, old account, typos of "
+        "\"existing\" such as existinf/exsisting).\n"
+        "Output exactly one token, lowercase, no punctuation: new OR existing OR unknown.\n"
+        "Use unknown only if the message is totally unrelated or impossible to tell."
+    )
+    human = f"User message:\n{msg}"
+    try:
+        llm = ChatOpenAI(
+            model_name=settings.openai_model,
+            temperature=0,
+            openai_api_key=key,
+            max_tokens=8,
+        )
+        resp = await llm.ainvoke(
+            [SystemMessage(content=system), HumanMessage(content=human)]
+        )
+        text_out = (getattr(resp, "content", None) or str(resp) or "").strip().lower()
+        first = (text_out.split() or [""])[0]
+        token = re.sub(r"[^a-z]", "", first)
+        if not token or token.startswith("unknown"):
+            return None
+        if token.startswith("exist") or token == "existing":
+            return "existing"
+        if token.startswith("new"):
+            return "new"
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("customer_kind LLM classification failed: %s", exc)
+        return None
+
+
 def _pick(data: Dict[str, Any], *keys: str) -> str:
     """Return the first non-empty string value found under any of the given keys."""
     for k in keys:
@@ -1558,8 +1610,17 @@ async def process_customer_bot_message(
             text,
             {
                 "1": "new", "new": "new", "new customer": "new", "n": "new",
+                "first time": "new", "naya": "new", "naya customer": "new",
+                "naya hun": "new", "pehli baar": "new", "pehli dafa": "new",
+                "sign up": "new", "register": "new",
                 "2": "existing", "existing": "existing", "old": "existing",
                 "existing customer": "existing", "e": "existing",
+                "old customer": "existing", "purana": "existing",
+                "purana customer": "existing", "already": "existing",
+                "already registered": "existing", "already have account": "existing",
+                "sign in": "existing", "login": "existing", "log in": "existing",
+                "returning": "existing", "returning customer": "existing",
+                "pehle se hun": "existing", "account hai": "existing",
             },
         )
         if choice == "new":
@@ -1580,6 +1641,29 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
             }
             return save(nf, _t(flow_lang, MSGS["ask_email"]))
+        # Typo / free phrasing on the 1–2 menu: let the LLM classify new vs existing.
+        llm_kind = await _classify_customer_kind_llm(text)
+        if llm_kind == "new":
+            nf = {
+                **flow,
+                "step": "conversational",
+                "customer_kind": "new",
+                "intro_shown": True,
+                "lang": flow_lang,
+            }
+            return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+        if llm_kind == "existing":
+            nf = {
+                **flow,
+                "step": "existing_awaiting_email",
+                "customer_kind": "existing",
+                "intro_shown": True,
+                "lang": flow_lang,
+            }
+            return save(nf, _t(flow_lang, MSGS["ask_email"]))
+        # Short menu-ish input but classifier could not decide — ask again (avoid empty LLM reply / fallback).
+        if llm_kind is None and len(text.strip()) <= 48 and not _looks_like_free_text_question(text):
+            return save(flow, _t(flow_lang, MSGS["customer_type_unclear"]))
         # Trending products intent at the entry menu — jump straight to trending flow
         if _wants_trending_products(text):
             nf = {

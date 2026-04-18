@@ -54,6 +54,23 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "مرحبًا! كيف يمكنني مساعدتك اليوم؟",
         "roman_urdu": "Hello! Aaj kya madad karoon?",
     },
+    "customer_type_unclear": {
+        "english": (
+            "I could not tell whether you are a new or an existing customer.\n"
+            "Please reply with **1** for new customer or **2** for existing customer "
+            "(or type \"new customer\" / \"existing customer\")."
+        ),
+        "arabic": (
+            "لم أتمكن من معرفة إن كنت عميلاً جديداً أو حالياً.\n"
+            "يرجى الرد بـ **1** للعميل الجديد أو **2** للعميل الحالي "
+            "(أو اكتب \"عميل جديد\" / \"عميل حالي\")."
+        ),
+        "roman_urdu": (
+            "Samajh nahi aa saka ke aap new customer hain ya existing.\n"
+            "Please **1** likhein agar new customer, **2** likhein agar existing "
+            "(ya \"new customer\" / \"existing customer\" likhein)."
+        ),
+    },
     "greeting": {
         "english": (
             "Hello. I'm Arabia Dropbot, your assistant for Arabia Dropshipping. "
