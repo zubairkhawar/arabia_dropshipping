@@ -240,6 +240,13 @@ def _is_natural_language(text: str) -> bool:
     return alpha > len(s) * 0.4
 
 
+def _conversation_bail_from_trending(flow: Dict[str, Any], lang: str) -> Dict[str, Any]:
+    nf = {**flow, "step": "conversational", "lang": lang}
+    for k in TRENDING_STATE_KEYS:
+        nf.pop(k, None)
+    return nf
+
+
 def _wants_new_customer_path(text: str) -> bool:
     """Detect when a customer says 'I'm new / I don't want to verify / skip verification'."""
     s = (text or "").strip().lower()
@@ -612,6 +619,13 @@ def _default_skip_store_api(f: Dict[str, Any]) -> bool:
 
 
 TRENDING_PAGE_SIZE = 5
+TRENDING_STATE_KEYS = (
+    "trending_country",
+    "trending_products_cache",
+    "trending_products_all",
+    "trending_category",
+    "trending_offset",
+)
 TRENDING_CATEGORY_ALIASES: Dict[str, tuple[str, ...]] = {
     "Electronics": ("electronics", "electronic", "gadgets", "gadget", "mobile", "phone"),
     "Fashion": ("fashion", "clothes", "clothing", "apparel"),
@@ -665,6 +679,20 @@ def _append_trending_followup_suggestions(lang: str, country_code: str, text: st
     oa, ob = _trending_followup_other_markets(country_code)
     block = _t(lang, MSGS["trending_followup_suggestions"]).format(other_a=oa, other_b=ob)
     return f"{base}{block}".strip()
+
+
+def _exit_trending_for_greeting(flow: Dict[str, Any], flow_lang: str) -> Tuple[Dict[str, Any], str]:
+    """Leave trending steps on hi/hello; keep customer_kind when set, else show new/existing greeting."""
+    nf = {**flow, "lang": flow_lang}
+    for k in TRENDING_STATE_KEYS:
+        nf.pop(k, None)
+    nf["step"] = "conversational"
+    if flow.get("customer_kind"):
+        return nf, _t(flow_lang, MSGS["hello_ack"])
+    nf["step"] = "awaiting_customer_type"
+    nf["intro_shown"] = True
+    nf["customer_kind"] = None
+    return nf, _t(flow_lang, MSGS["greeting"])
 
 
 def _parse_trending_category(text: str) -> Optional[str]:
@@ -888,6 +916,8 @@ def _select_trending_product_from_list(
     t_norm = t_norm.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
     query = _strip_trending_detail_query(t_norm)
     query = query.lstrip("#").strip()
+    if len(query) < 2 and not re.fullmatch(r"\d+", query):
+        return None
     ord_m = re.search(r"(?i)^(\d{1,3})\s*(?:st|nd|rd|th)\b", query)
     if ord_m and len(query) <= 14:
         query = ord_m.group(1)
@@ -1920,6 +1950,9 @@ async def process_customer_bot_message(
         return ai_forward(text, nf, skip_api=True)
 
     if step == "trending_awaiting_country":
+        if _looks_like_greeting(text):
+            nf, greet_reply = _exit_trending_for_greeting(flow, flow_lang)
+            return save(nf, greet_reply, skip_api=False)
         if _is_natural_language(text) and _parse_trending_country_reply(text) is None:
             nf = _bail_to_conversational(flow, flow_lang)
             return ai_forward(text, nf, skip_api=_default_skip_store_api(nf))
@@ -1934,11 +1967,8 @@ async def process_customer_bot_message(
         if not page:
             # Stay in trending_awaiting_country so the user can pick another country
             nf = {**flow, "step": "trending_awaiting_country", "lang": flow_lang}
-            nf.pop("trending_country", None)
-            nf.pop("trending_products_cache", None)
-            nf.pop("trending_products_all", None)
-            nf.pop("trending_category", None)
-            nf.pop("trending_offset", None)
+            for k in TRENDING_STATE_KEYS:
+                nf.pop(k, None)
             if wanted_category:
                 no_msg = _t(flow_lang, MSGS["trending_no_products_category"]).format(
                     country=_trending_footer_country_label(cc),
@@ -2007,14 +2037,16 @@ async def process_customer_bot_message(
         flow_cat = flow.get("trending_category")
         visible = _trending_visible_list(all_items, flow_cat)
         wanted_category = _parse_trending_category(text)
+        if _looks_like_greeting(text):
+            nf, greet_reply = _exit_trending_for_greeting(flow, flow_lang)
+            return save(nf, greet_reply, skip_api=False)
         if not cache:
-            nf = {**flow, "step": "conversational", "lang": flow_lang}
-            nf.pop("trending_country", None)
-            nf.pop("trending_products_cache", None)
-            nf.pop("trending_products_all", None)
-            nf.pop("trending_category", None)
-            nf.pop("trending_offset", None)
-            return save(nf, _t(flow_lang, MSGS["trending_product_not_matched"]))
+            nf = _conversation_bail_from_trending(flow, flow_lang)
+            hint = (
+                "[Context: Trending product list was not available in session. "
+                "Help them choose a country for trending products or answer their message naturally.]\n"
+            )
+            return ai_forward(hint + text, nf, skip_api=_default_skip_store_api(nf))
 
         if _wants_trending_more(text):
             off_raw = flow.get("trending_offset")
@@ -2079,11 +2111,8 @@ async def process_customer_bot_message(
                 "step": "trending_awaiting_country",
                 "lang": flow_lang,
             }
-            nf.pop("trending_country", None)
-            nf.pop("trending_products_cache", None)
-            nf.pop("trending_products_all", None)
-            nf.pop("trending_category", None)
-            nf.pop("trending_offset", None)
+            for k in TRENDING_STATE_KEYS:
+                nf.pop(k, None)
             return save(nf, _t(flow_lang, MSGS["trending_ask_country"]))
 
         if wanted_category:
@@ -2178,25 +2207,32 @@ async def process_customer_bot_message(
                     )
             return save(nf, detail_msg)
 
-        if _is_natural_language(text):
-            off_hint = flow.get("trending_offset")
-            try:
-                off_i = int(off_hint) if off_hint is not None else 0
-            except (TypeError, ValueError):
-                off_i = 0
-            names = ", ".join(
-                f"{off_i + i + 1}: {str(x.get('product_name') or '').strip()}"
-                for i, x in enumerate(cache[:TRENDING_PAGE_SIZE])
-                if (x.get("product_name") or "").strip()
-            )
-            nf = {**flow, "step": "trending_showing_products", "lang": flow_lang}
-            hint = (
-                "[Trending products on this page (global list numbers): "
-                f"{names}. User message may not match a product; answer helpfully or ask which number they mean.]\n"
-            )
-            return ai_forward(hint + text, nf, skip_api=_default_skip_store_api(nf))
-
-        return save(flow, _t(flow_lang, MSGS["trending_product_not_matched"]))
+        # Anything else (thanks, acknowledgments in any language, questions, noise):
+        # leave trending and let the LLM interpret — no hardcoded phrase lists.
+        logger.info("trending_showing_products: bail to LLM (non-pagination, non-pick): %r", (text or "")[:80])
+        off_hint = flow.get("trending_offset")
+        try:
+            off_i = int(off_hint) if off_hint is not None else 0
+        except (TypeError, ValueError):
+            off_i = 0
+        names = ", ".join(
+            f"{off_i + i + 1}: {str(x.get('product_name') or '').strip()}"
+            for i, x in enumerate(cache[:TRENDING_PAGE_SIZE])
+            if (x.get("product_name") or "").strip()
+        )
+        region = _trending_footer_country_label(cc) if cc else "their region"
+        nf = _conversation_bail_from_trending(flow, flow_lang)
+        hint_parts = [
+            f"[User was viewing trending products for {region}.",
+            f'They wrote: "{text}".',
+            "Respond naturally in the chat language (thanks, short replies, Arabic/Urdu/Roman Urdu, or new questions are all fine).",
+            'Do not say their message failed to match a trending product or ask them to pick only from the list unless they clearly need that.',
+        ]
+        if names:
+            hint_parts.append(f"Last page shown (list numbers for reference): {names}.")
+        hint_parts.append('They can ask by number, general questions about Arabia Dropshipping, or acknowledgments.]')
+        hint = " ".join(hint_parts) + "\n"
+        return ai_forward(hint + text, nf, skip_api=_default_skip_store_api(nf))
 
     if step == "sourcing_collecting_details":
         # Customer is providing product details for sourcing — collect and hand off
