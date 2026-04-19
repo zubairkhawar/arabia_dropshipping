@@ -448,3 +448,72 @@ def public_list_trending_products(
             )
         )
     return out
+
+
+# --- Paginated public catalog (same paging as customer bot; no auth) ---
+
+trending_page_router = APIRouter(prefix="/api", tags=["trending-products"])
+
+
+class TrendingProductPageItem(BaseModel):
+    id: int
+    name: str
+    price: float
+    currency: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+
+
+class TrendingProductsPageResponse(BaseModel):
+    success: bool = True
+    country: str
+    total: int
+    has_more: bool
+    products: List[TrendingProductPageItem]
+
+
+@trending_page_router.get("/trending-products", response_model=TrendingProductsPageResponse)
+def public_trending_products_page(
+    country: str = Query(..., min_length=2, max_length=10),
+    limit: int = Query(5, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    tenant_id: int = Query(1, ge=1),
+    db: Session = Depends(get_db),
+):
+    c = country.strip().upper()
+    if c in ("SA", "SAUDI"):
+        c = "KSA"
+    if c not in ALLOWED_COUNTRIES:
+        raise HTTPException(status_code=400, detail="country must be UAE, KSA, or PK")
+    q = (
+        db.query(TrendingProduct)
+        .filter(
+            TrendingProduct.tenant_id == tenant_id,
+            TrendingProduct.country == c,
+            TrendingProduct.is_active.is_(True),
+        )
+        .order_by(TrendingProduct.display_order.asc(), TrendingProduct.id.asc())
+    )
+    total = q.count()
+    rows = q.offset(offset).limit(limit).all()
+    products: List[TrendingProductPageItem] = []
+    for r in rows:
+        pr = r.price
+        pf = float(pr) if pr is not None else 0.0
+        products.append(
+            TrendingProductPageItem(
+                id=r.id,
+                name=r.product_name,
+                price=pf,
+                currency=r.currency,
+                description=(r.description or "").strip() or None,
+                image_url=_resolve_image_url(r),
+            )
+        )
+    return TrendingProductsPageResponse(
+        success=True,
+        country=c,
+        total=total,
+        has_more=offset + len(products) < total,
+        products=products,
+    )

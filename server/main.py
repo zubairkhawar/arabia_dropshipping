@@ -43,6 +43,7 @@ from services.upload_service.api import router as upload_router
 from services.trending_products_service.api import (
     public_router as trending_public_router,
     router as trending_products_admin_router,
+    trending_page_router,
 )
 
 
@@ -161,6 +162,7 @@ app.include_router(agent_portal_router, prefix="/api/agent-portal", tags=["agent
 app.include_router(upload_router, prefix="/api/upload", tags=["upload"])
 app.include_router(trending_products_admin_router)
 app.include_router(trending_public_router)
+app.include_router(trending_page_router)
 
 
 @app.get("/")

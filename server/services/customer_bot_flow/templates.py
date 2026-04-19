@@ -419,46 +419,116 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "يرجى اختيار: 1 = السعودية 🇸🇦، 2 = الإمارات 🇦🇪، 3 = باكستان 🇵🇰 (أو اكتب KSA / UAE / PK).",
         "roman_urdu": "Please choose: 1 = KSA 🇸🇦, 2 = UAE 🇦🇪, 3 = Pakistan 🇵🇰 (ya KSA / UAE / PK likhein).",
     },
-    "trending_after_images_footer": {
+    "trending_intro_first": {
+        "english": "Here are the trending products in {country}:",
+        "arabic": "إليك المنتجات الرائجة في {country}:",
+        "roman_urdu": "Yeh hain {country} ke trending products:",
+    },
+    "trending_intro_more": {
+        "english": "Here are more trending products in {country}:",
+        "arabic": "إليك المزيد من المنتجات الرائجة في {country}:",
+        "roman_urdu": "Yeh hain aur trending products {country} ke liye:",
+    },
+    "trending_intro_first_category": {
+        "english": "Here are the trending {category} products in {country}:",
+        "arabic": "إليك منتجات {category} الرائجة في {country}:",
+        "roman_urdu": "Yeh hain {country} ke trending {category} products:",
+    },
+    "trending_intro_more_category": {
+        "english": "Here are more trending {category} products in {country}:",
+        "arabic": "إليك المزيد من منتجات {category} الرائجة في {country}:",
+        "roman_urdu": "Yeh hain aur {category} trending products {country} ke liye:",
+    },
+    "trending_footer_first_has_more": {
+        "english": "Would you like to see more products? Just type \"show me more\".",
+        "arabic": "هل تريد رؤية المزيد من المنتجات؟ فقط اكتب \"show me more\".",
+        "roman_urdu": "Aur products dekhna chahen ge? Bas \"show me more\" likhein.",
+    },
+    "trending_footer_first_only": {
         "english": (
-            "These are the current trending products in {country}! 🔥\n\n"
-            "Want details on a specific product? Type the product name (or its number from the list).\n\n"
-            "Or type your question anytime."
+            "These are all the trending products in {country} right now.\n\n"
+            "Would you like me to help you with something else? You can also type \"agent\" to speak with a human."
         ),
         "arabic": (
-            "هذه المنتجات الرائجة الحالية في {country}! 🔥\n\n"
-            "تريد تفاصيل عن منتج معيّن؟ اكتب اسم المنتج (أو رقمه من القائمة).\n\n"
-            "أو اكتب سؤالك في أي وقت."
+            "هذه كل المنتجات الرائجة في {country} حالياً.\n\n"
+            "هل تريد مساعدة في شيء آخر؟ يمكنك أيضاً كتابة \"agent\" للتحدث مع موظف."
         ),
         "roman_urdu": (
-            "Yeh {country} ke current trending products hain! 🔥\n\n"
-            "Kisi product ki detail chahiye? Product ka naam likhein (ya list ka number).\n\n"
-            "Ya kabhi bhi apna sawal likhein."
+            "Abhi {country} ke liye yeh saare trending products hain.\n\n"
+            "Aur kuch madad chahiye? \"agent\" likh kar human se baat kar sakte hain."
+        ),
+    },
+    "trending_footer_more_has_more": {
+        "english": (
+            "Would you like to see more? Type \"show me more\" or ask about a specific product by number."
+        ),
+        "arabic": (
+            "هل تريد المزيد؟ اكتب \"show me more\" أو اسأل عن منتج محدد برقمه."
+        ),
+        "roman_urdu": (
+            "Aur dekhna hai? \"show me more\" likhein ya number se kisi product ke baare mein pooch lein."
+        ),
+    },
+    "trending_footer_more_end": {
+        "english": (
+            "These are all the trending products in {country} right now.\n\n"
+            "Would you like me to help you with something else? You can also type \"agent\" to speak with a human."
+        ),
+        "arabic": (
+            "هذه كل المنتجات الرائجة في {country} حالياً.\n\n"
+            "هل تريد مساعدة في شيء آخر؟ يمكنك أيضاً كتابة \"agent\" للتحدث مع موظف."
+        ),
+        "roman_urdu": (
+            "Abhi {country} ke liye yeh saare trending products hain.\n\n"
+            "Aur kuch madad chahiye? \"agent\" likh kar human se baat kar sakte hain."
+        ),
+    },
+    "trending_no_more_pages": {
+        "english": (
+            "There are no more trending products to show for {country} right now. "
+            "Ask me anything else, pick trending products again for another country, or type \"agent\" for a human."
+        ),
+        "arabic": (
+            "لا توجد منتجات رائجة إضافية لعرضها لـ {country} حالياً. "
+            "اسأل عن أي شيء آخر، أو اختر دولة أخرى للمنتجات الرائجة، أو اكتب \"agent\" للتحدث مع موظف."
+        ),
+        "roman_urdu": (
+            "Abhi {country} ke liye aur trending products load karne ko nahi bacha. "
+            "Kuch aur pooch lein, dobara trending products try karein, ya \"agent\" likhein."
+        ),
+    },
+    "trending_product_detail_handoff": {
+        "english": (
+            "I'd be happy to help you with more details about {product_name}.\n\n"
+            "Let me connect you with a support agent who can provide complete information including "
+            "availability, bulk pricing, and shipping options.\n\n"
+            "Please wait a moment."
+        ),
+        "arabic": (
+            "يسعدني مساعدتك في المزيد من التفاصيل عن {product_name}.\n\n"
+            "دعني أوصلك بأحد موظفي الدعم ليقدم لك معلومات كاملة تشمل التوفر والأسعار بالجملة وخيارات الشحن.\n\n"
+            "يرجى الانتظار لحظة."
+        ),
+        "roman_urdu": (
+            "{product_name} ki mazeed details mein madad karne ko tayyar hoon.\n\n"
+            "Main aap ko support agent se connect karta hoon — availability, bulk pricing, aur shipping "
+            "options ka poora jawab mil jaye ga.\n\n"
+            "Thora intezar karein."
         ),
     },
     "trending_product_not_matched": {
         "english": (
-            "I couldn’t match that to one of the trending products I just showed. "
-            "Try the exact product name, a number from the list (1–8), or type \"agent\" for a human."
+            "I couldn’t match that to one of the trending products in this list. "
+            "Try a list number (e.g. 3 or \"product 3\"), type \"show me more\", or type \"agent\" for a human."
         ),
         "arabic": (
-            "لم أستطع ربط ذلك بأحد المنتجات الرائجة التي عرضتها للتو. "
-            "جرّب اسم المنتج بدقة، أو رقماً من القائمة (1–8)، أو اكتب \"agent\" للتحدث مع موظف."
+            "لم أستطع ربط ذلك بأحد المنتجات الرائجة في هذه القائمة. "
+            "جرّب رقم المنتج (مثل 3 أو \"product 3\")، أو اكتب \"show me more\"، أو \"agent\" للتحدث مع موظف."
         ),
         "roman_urdu": (
-            "Isay abhi dikhaye gaye trending products se match nahi kar saka. "
-            "Exact naam try karein, list ka number (1–8), ya \"agent\" likhein human ke liye."
+            "Isay is trending list se match nahi kar saka. "
+            "List number try karein (jaise 3 ya \"product 3\"), \"show me more\" likhein, ya \"agent\" human ke liye."
         ),
-    },
-    "trending_header": {
-        "english": "🔥 Trending picks for {country}:",
-        "arabic": "🔥 منتجات رائجة في {country}:",
-        "roman_urdu": "🔥 {country} ke trending picks:",
-    },
-    "trending_header_category": {
-        "english": "🔥 Trending {category} picks for {country}:",
-        "arabic": "🔥 منتجات {category} الرائجة في {country}:",
-        "roman_urdu": "🔥 {country} ke trending {category} picks:",
     },
     "trending_no_products": {
         "english": "No trending products are listed for {country} yet.",

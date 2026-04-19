@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     openai_temperature: float = 0.2
     kb_min_score: int = 1
     kb_use_embeddings: bool = False
+    # When True, the LangChain system prompt asks the model for 3 contextual follow-up suggestions per turn.
+    llm_followup_suggestions: bool = True
     
     # WhatsApp
     wati_api_key: Optional[str] = None

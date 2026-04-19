@@ -1,7 +1,18 @@
+import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
+from config import settings
 from langchain.prompts import ChatPromptTemplate
+
+_FOLLOWUP_SECTION_HEADER = re.compile(
+    r"\n{1,3}(?:"
+    r"You might also want to ask:|"
+    r"يمكنك أيضًا أن تسأل:|"
+    r"Aap yeh bhi pooch sakte hain:"
+    r")",
+    flags=re.IGNORECASE,
+)
 
 # Single source of truth for LLM behavior (WhatsApp + web free-text turns).
 # Menus, /reset routing, and agent assignment are enforced by the API first.
@@ -10,14 +21,15 @@ You are Arabia Dropbot, a production customer support assistant for Arabia Drops
 
 === Special commands ===
 - The server handles **trending / popular products** requests before you run: if the user already
-  received a country menu or a numbered list with image links, do not contradict it or ask for country again.
+  received a country menu or a numbered list (five per page; they can type **show me more** for the next
+  batch), do not contradict it or ask for country again.
 - Do NOT invent or fabricate product lists. If the user asks for trending/popular/top products
   and you do not see product data in the context, tell them to type "trending products" so the
   server can show the real product catalog with images and prices.
 - The server normally handles **/reset** or **reset** before your model runs. If you still
   receive a user turn that is only **/reset** (edge case), reply with exactly:
   "Conversation reset! How can I help you today?"
-  and nothing else. Otherwise, tell users they can send **/reset** or **reset** to clear the
+  and nothing else (no follow-up suggestion block). Otherwise, tell users they can send **/reset** or **reset** to clear the
   bot session and start a fresh greeting; do not paste numbered menus yourself.
 
 === Customer identity (trust the "Customer identity & verification" field below) ===
@@ -132,10 +144,52 @@ You are Arabia Dropbot, a production customer support assistant for Arabia Drops
 """.strip()
 
 
-SYSTEM_PROMPT_TEMPLATE = (
-    ARABIA_CORE_BEHAVIOR
-    + """
+# Grounding for contextual follow-up topics (Knowledge context + schedule override when they differ).
+ARABIA_SERVICE_FACTS_FOR_FOLLOWUPS = """
+=== Arabia Dropshipping — facts for follow-up topics ===
+Use **Knowledge context** and **Agent schedule context** as the source of truth when they conflict
+with any summary line below.
+- B2B dropshipping and 3PL fulfillment; services include sourcing, store support, marketing, fulfillment.
+- Active markets: UAE, Saudi Arabia (KSA), Pakistan; Qatar coming soon.
+- Agency Partnership Program: onboarding commission model — see Knowledge context / agency link rules above.
+- China or global sourcing may require merchant capital; timelines and costs come from Knowledge context or agents.
+""".strip()
 
+
+FOLLOWUP_OUTPUT_INSTRUCTIONS = """
+=== Answer + follow-up suggestions (one reply, one model pass) ===
+After your main answer, add **three** short follow-up questions the customer might ask next.
+
+Rules for the three follow-ups:
+- Only topics about Arabia Dropshipping services, policies, or this chat flow.
+- Specific to this turn: customer question, **Customer identity & verification**, **Orders**, **Knowledge context**,
+  and **Recent conversation** — not generic filler.
+- Each suggestion **under 10 words** (not counting the bullet marker).
+- Do **not** repeat the same idea twice; do **not** ask what you already fully answered in the main text.
+- Conversational phrasing the user could type as their next message.
+
+**When to skip the entire follow-up block** (main answer only, nothing else added):
+- Your reply is **only** the exact /reset canned line required above, **or**
+- Your reply is **only** a brief human-connection acknowledgment with **no** substantive policy/order/data answer
+  (e.g. a single short line that you are connecting them to an agent).
+
+**Format** (when you do include follow-ups — translate **all** of this, including headings, to **Detected language**):
+1. Your natural answer to the user.
+2. Blank line, then a section title, for example:
+   - English: `You might also want to ask:`
+   - Arabic: natural equivalent (e.g. يمكنك أيضًا أن تسأل:)
+   - Roman Urdu: natural equivalent (e.g. `Aap yeh bhi pooch sakte hain:`)
+3. Exactly three lines, each starting with `• ` (bullet + space).
+4. Blank line, then a short closing inviting further help in the same language, for example:
+   - English: `Is there anything else I can help with?`
+   - Arabic / Roman Urdu: natural equivalent (e.g. `Kya aur koi madad chahiye?`).
+
+Do **not** invent product catalog rows; if the user just saw trending products in context, suggest follow-ups like
+another country, "show me more", or asking about a line item — not made-up SKUs.
+""".strip()
+
+
+RUNTIME_CONTEXT_TEMPLATE = """
 Runtime context (trust these over assumptions):
 - Current UTC time: {current_time}
 - Channel: {channel}
@@ -146,14 +200,22 @@ Runtime context (trust these over assumptions):
 - Active broadcast context: {broadcast_context}
 - Knowledge context: {knowledge_context}
 - Recent conversation (oldest first in this block): {conversation_history}
-"""
-)
+""".strip()
+
+
+def build_system_prompt_template() -> str:
+    """Full system message including optional follow-up instructions (see settings.llm_followup_suggestions)."""
+    parts = [ARABIA_CORE_BEHAVIOR, ARABIA_SERVICE_FACTS_FOR_FOLLOWUPS]
+    if bool(getattr(settings, "llm_followup_suggestions", True)):
+        parts.append(FOLLOWUP_OUTPUT_INSTRUCTIONS)
+    parts.append(RUNTIME_CONTEXT_TEMPLATE)
+    return "\n\n".join(parts).strip()
 
 
 def build_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
-            ("system", SYSTEM_PROMPT_TEMPLATE.strip()),
+            ("system", build_system_prompt_template()),
             ("human", "{user_message}"),
         ]
     )
@@ -166,3 +228,95 @@ def normalize_context_text(value: Optional[str], fallback: str = "None") -> str:
 
 def now_utc_iso() -> str:
     return datetime.utcnow().isoformat()
+
+
+_DEFAULT_FOLLOWUPS_EN = [
+    "Learn more about our services",
+    "Check shipping and returns policy",
+    "Speak with a human agent",
+]
+_DEFAULT_FOLLOWUPS_AR = [
+    "معرفة المزيد عن خدماتنا",
+    "مراجعة سياسة الشحن والإرجاع",
+    "التحدث مع موظف دعم",
+]
+_DEFAULT_FOLLOWUPS_UR = [
+    "Services ke baare mein mazeed jaanein",
+    "Shipping aur return policy dekhein",
+    "Human agent se baat karein",
+]
+
+
+def _followup_block_lines(lang_key: str) -> Tuple[str, str, str]:
+    lk = (lang_key or "english").strip().lower()
+    if lk == "arabic":
+        title = "يمكنك أيضًا أن تسأل:"
+        closing = "هل هناك أي شيء آخر يمكنني المساعدة به؟"
+        items = _DEFAULT_FOLLOWUPS_AR
+    elif lk in ("roman_urdu", "urdu", "roman urdu"):
+        title = "Aap yeh bhi pooch sakte hain:"
+        closing = "Kya aur koi madad chahiye?"
+        items = _DEFAULT_FOLLOWUPS_UR
+    else:
+        title = "You might also want to ask:"
+        closing = "Is there anything else I can help with?"
+        items = _DEFAULT_FOLLOWUPS_EN
+    bullets = "\n".join(f"• {q}" for q in items)
+    return title, closing, bullets
+
+
+def strip_followup_block_when_disabled(text: str) -> str:
+    """
+    When llm_followup_suggestions is off, remove a trailing follow-up section the model may still emit.
+    Used for KB wrap and for raw LLM replies.
+    """
+    if bool(getattr(settings, "llm_followup_suggestions", True)):
+        return (text or "").strip()
+    body = (text or "").strip()
+    m = _FOLLOWUP_SECTION_HEADER.search(body)
+    if m:
+        return body[: m.start()].rstrip()
+    return body
+
+
+def append_default_followups(body: str, language: str) -> str:
+    """Append the default follow-up block when the model returned no usable text."""
+    if not bool(getattr(settings, "llm_followup_suggestions", True)):
+        return (body or "").strip()
+    base = (body or "").strip()
+    title, closing, bullets = _followup_block_lines(language)
+    parts = [base, "", title, bullets, "", closing]
+    return "\n".join(parts).strip()
+
+
+def llm_unavailable_reply(language: str) -> str:
+    """Short apology plus default follow-ups when the LLM call fails."""
+    lk = (language or "english").strip().lower()
+    if lk == "arabic":
+        intro = "تعذر عليّ إكمال الرد الآن. يمكنني اقتراح ما قد تودّ معرفته بعد ذلك:"
+    elif lk in ("roman_urdu", "urdu", "roman urdu"):
+        intro = "Abhi jawab mukammal nahi kar sakta. Yeh cheezen aap ke liye mufeed ho sakti hain:"
+    else:
+        intro = "I could not complete a reply just now. Here are some things you might ask next:"
+    return append_default_followups(intro, language)
+
+
+def knowledge_gap_reply(language: str) -> str:
+    """When the model returns empty text: honest gap message plus default follow-ups."""
+    lk = (language or "english").strip().lower()
+    if lk == "arabic":
+        intro = (
+            "لا تتوفر لدي معلومات كافية حول هذا الموضوع حاليا. "
+            "إذا رغبت، يمكنني توصيلك بموظف دعم بشري."
+        )
+    elif lk in ("roman_urdu", "urdu", "roman urdu"):
+        intro = (
+            "Mujhe is bare mein zyada maloomat nahi hai. "
+            "Agar chahein to main aapko human agent se connect kar sakta hoon."
+        )
+    else:
+        intro = (
+            "I don't have much information about this at the moment. "
+            "If you'd like, I can connect you with a human agent."
+        )
+    return append_default_followups(intro, language)

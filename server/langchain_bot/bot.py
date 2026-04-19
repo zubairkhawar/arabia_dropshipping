@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import logging
 import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
@@ -15,8 +16,17 @@ from langchain_bot.context_format import (
     build_customer_identity_summary,
     format_orders_summary_for_llm,
 )
-from langchain_bot.prompts import build_prompt, normalize_context_text, now_utc_iso
+from langchain_bot.prompts import (
+    build_prompt,
+    knowledge_gap_reply,
+    llm_unavailable_reply,
+    normalize_context_text,
+    now_utc_iso,
+    strip_followup_block_when_disabled,
+)
 from services.tenant_schedule_text import format_tenant_schedule_for_customer
+
+logger = logging.getLogger(__name__)
 
 KB_QUERY_SYNONYMS: Dict[str, List[str]] = {
     "kitny": ["how", "many", "count"],
@@ -63,7 +73,6 @@ class ArabiaLangChainBot:
         self.db = db
         self.model_name = model_name or settings.openai_model
         self.temperature = temperature if temperature is not None else settings.openai_temperature
-        self.prompt = build_prompt()
         self.last_reply_used_kb: bool = False
 
     def _build_schedule_context(self, tenant_id: int, language: str = "english") -> str:
@@ -482,7 +491,8 @@ class ArabiaLangChainBot:
                 if web_context:
                     knowledge_context = f"{knowledge_context}\n\n{web_context}".strip()
 
-        messages = self.prompt.format_messages(
+        # Fresh template each turn so LLM_FOLLOWUP_SUGGESTIONS env changes apply without restart.
+        messages = build_prompt().format_messages(
             current_time=now_utc_iso(),
             channel=normalize_context_text(channel, "unknown"),
             language=normalize_context_text(language, "english"),
@@ -494,15 +504,13 @@ class ArabiaLangChainBot:
             conversation_history=history_block,
             user_message=user_message,
         )
-        response = await llm.ainvoke(messages)
+        try:
+            response = await llm.ainvoke(messages)
+        except Exception:
+            logger.exception("LangChain OpenAI chat call failed")
+            return llm_unavailable_reply(language)
         content = getattr(response, "content", None)
         out = content.strip() if isinstance(content, str) else str(response).strip()
         if out:
-            return out
-        # Final fallback when KB/crawl/web all fail or model returns empty.
-        lang = (language or "").strip().lower()
-        if lang == "roman_urdu":
-            return "Mujhe is bare mein zyada maloomat nahi hai. Agar chahein to main aapko human agent se connect kar sakta hoon."
-        if lang == "arabic":
-            return "لا تتوفر لدي معلومات كافية حول هذا الموضوع حاليا. إذا رغبت، يمكنني توصيلك بموظف دعم بشري."
-        return "I don't have much information about this at the moment. If you'd like, I can connect you with a human agent."
+            return strip_followup_block_when_disabled(out)
+        return knowledge_gap_reply(language)
