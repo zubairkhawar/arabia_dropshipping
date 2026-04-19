@@ -483,6 +483,29 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Aur kuch madad chahiye? \"agent\" likh kar human se baat kar sakte hain."
         ),
     },
+    "trending_followup_suggestions": {
+        "english": (
+            "\n\nYou might also want to ask:\n"
+            "• Show trending products in {other_a}\n"
+            "• Show trending products in {other_b}\n"
+            "• Tell me about a product by its list number\n\n"
+            "Is there anything else I can help with?"
+        ),
+        "arabic": (
+            "\n\nيمكنك أيضًا أن تسأل:\n"
+            "• عرض المنتجات الرائجة في {other_a}\n"
+            "• عرض المنتجات الرائجة في {other_b}\n"
+            "• أخبرني عن منتج برقمه في القائمة\n\n"
+            "هل هناك أي شيء آخر يمكنني المساعدة به؟"
+        ),
+        "roman_urdu": (
+            "\n\nAap yeh bhi pooch sakte hain:\n"
+            "• {other_a} mein trending products dikhao\n"
+            "• {other_b} mein trending products dikhao\n"
+            "• List number se kisi product ke baare mein batao\n\n"
+            "Kya aur koi madad chahiye?"
+        ),
+    },
     "trending_no_more_pages": {
         "english": (
             "There are no more trending products to show for {country} right now. "
@@ -495,6 +518,35 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": (
             "Abhi {country} ke liye aur trending products load karne ko nahi bacha. "
             "Kuch aur pooch lein, dobara trending products try karein, ya \"agent\" likhein."
+        ),
+    },
+    "trending_product_detail_ok": {
+        "english": (
+            "📦 {name}\n💰 {price_line}\n\n📝 {description}\n\n"
+            "For stock, bulk pricing, or shipping help, type \"agent\" to reach a human."
+        ),
+        "arabic": (
+            "📦 {name}\n💰 {price_line}\n\n📝 {description}\n\n"
+            "لمخزون أو تسعير بالجملة أو الشحن، اكتب \"agent\" للتحدث مع موظف."
+        ),
+        "roman_urdu": (
+            "📦 {name}\n💰 {price_line}\n\n📝 {description}\n\n"
+            "Stock, bulk pricing, ya shipping ke liye \"agent\" likhein human se baat ke liye."
+        ),
+    },
+    "trending_product_detail_missing": {
+        "english": (
+            "I don’t have a catalog description for {name} yet.\n\n"
+            "For specs, stock, and pricing, type \"agent\" to reach a support agent — "
+            "or ask another question."
+        ),
+        "arabic": (
+            "لا يوجد وصف مسجّل في الكتالوج لـ {name} حتى الآن.\n\n"
+            "للمواصفات أو المخزون أو الأسعار، اكتب \"agent\" للتحدث مع الدعم — أو اسأل سؤالاً آخر."
+        ),
+        "roman_urdu": (
+            "Abhi catalog mein {name} ka koi description nahi hai.\n\n"
+            "Specs, stock, pricing ke liye \"agent\" likhein support se — ya koi aur sawal pooch lein."
         ),
     },
     "trending_product_detail_handoff": {

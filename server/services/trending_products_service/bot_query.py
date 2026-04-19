@@ -87,3 +87,32 @@ def list_active_trending_for_country(
             }
         )
     return out
+
+
+def get_trending_product_by_id(
+    db: Session, tenant_id: int, product_id: int
+) -> Optional[Dict[str, Any]]:
+    """Single active trending row for detail replies (authoritative vs cached list)."""
+    r = (
+        db.query(TrendingProduct)
+        .filter(
+            TrendingProduct.id == int(product_id),
+            TrendingProduct.tenant_id == tenant_id,
+            TrendingProduct.is_active.is_(True),
+        )
+        .first()
+    )
+    if not r:
+        return None
+    price_val = float(r.price) if r.price is not None else 0.0
+    return {
+        "id": r.id,
+        "product_name": r.product_name,
+        "price": price_val,
+        "currency": r.currency,
+        "category": r.category,
+        "description": (r.description or "").strip(),
+        "image_url": resolve_trending_image_url(r) or "",
+        "image_urls": resolve_trending_image_urls(r),
+        "country": (r.country or "").strip().upper(),
+    }
