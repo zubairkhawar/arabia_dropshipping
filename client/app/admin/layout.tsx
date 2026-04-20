@@ -12,6 +12,7 @@ const MAIN_SCROLLBAR_HIDDEN = new Set([
   '/admin/agents',
   '/admin/settings',
   '/admin/knowledge-base',
+  '/admin/trending-products',
 ]);
 
 function AdminShell({ children }: { children: React.ReactNode }) {

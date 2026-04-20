@@ -123,6 +123,47 @@ def _list_active_for_country(
         .order_by(TrendingProduct.display_order.asc(), TrendingProduct.id.asc())
         .all()
     )
+    # Emit a breakdown whenever the caller will likely see an empty list so the
+    # mismatch between the admin UI and the bot is diagnosable from logs alone.
+    if not rows:
+        try:
+            total_active = (
+                db.query(TrendingProduct)
+                .filter(
+                    TrendingProduct.tenant_id == tenant_id,
+                    TrendingProduct.country == c,
+                    TrendingProduct.is_active.is_(True),
+                )
+                .count()
+            )
+            trending_true = (
+                db.query(TrendingProduct)
+                .filter(
+                    TrendingProduct.tenant_id == tenant_id,
+                    TrendingProduct.country == c,
+                    TrendingProduct.is_active.is_(True),
+                    TrendingProduct.is_trending.is_(True),
+                )
+                .count()
+            )
+            logger.info(
+                "trending query empty: tenant_id=%s country=%s is_trending=%s "
+                "total_active=%d active_trending_true=%d active_trending_false=%d",
+                tenant_id,
+                c,
+                is_trending,
+                total_active,
+                trending_true,
+                max(0, total_active - trending_true),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "trending query empty and diagnostic count failed "
+                "(tenant_id=%s country=%s is_trending=%s)",
+                tenant_id,
+                c,
+                is_trending,
+            )
     return [_row_to_bot_dict(r) for r in rows]
 
 

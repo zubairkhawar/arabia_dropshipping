@@ -784,36 +784,117 @@ def _trending_list_line(rank: int, it: Dict[str, Any]) -> str:
     return f"{bullet} {nm}"
 
 
+# Short single/double-word pagination triggers. Matched on whole-token basis so
+# unrelated words containing these letters (e.g. "more expensive") don't fire.
+_TRENDING_MORE_TOKEN_PHRASES: tuple[tuple[str, ...], ...] = (
+    # English
+    ("more",),
+    ("m",),
+    ("next",),
+    ("continue",),
+    ("go",),
+    ("yes",),
+    ("ya",),
+    # Arabic
+    ("مزيد",),
+    ("المزيد",),
+    ("التالي",),
+    ("أكثر",),
+    ("اكثر",),
+    ("كمان",),
+    ("كمل",),
+    ("زيد",),
+    ("استمر",),
+    # Roman Urdu / Urdu
+    ("aur",),
+    ("aage",),
+    ("mazeed",),
+    ("mazid",),
+    ("mazyed",),
+    ("zyada",),
+    ("ziada",),
+    ("chalao",),
+    # Two-token acks
+    ("yes", "more"),
+    ("show", "more"),
+    ("see", "more"),
+    ("give", "more"),
+    ("load", "more"),
+    ("more", "please"),
+    ("next", "page"),
+)
+
+# Multi-word pagination phrases. Substring match on the normalised text.
+_TRENDING_MORE_PHRASES: tuple[str, ...] = (
+    # English
+    "show me more",
+    "show some more",
+    "show more",
+    "see more",
+    "see some more",
+    "give me more",
+    "send more",
+    "load more",
+    "keep going",
+    "more products",
+    "more items",
+    "more trending",
+    "next page",
+    "anything else",
+    "what else",
+    # Arabic — "more", "show me more", "more products", etc.
+    "المزيد",
+    "مزيد",
+    "اعرض المزيد",
+    "أعرض المزيد",
+    "اظهر المزيد",
+    "أظهر المزيد",
+    "ارسل المزيد",
+    "أرسل المزيد",
+    "ورني المزيد",
+    "منتجات اكثر",
+    "منتجات أكثر",
+    "التالي",
+    "كمل",
+    "كمان",
+    "استمر",
+    # Roman Urdu
+    "aur dikhao",
+    "aur dikha",
+    "aur dikha do",
+    "aur dikhaiye",
+    "aur dekhna",
+    "aur products",
+    "aur product",
+    "aur items",
+    "aur batao",
+    "aur cheezen",
+    "aur cheezain",
+    "mazeed dikhao",
+    "mazid dikhao",
+    "mazyed dikhao",
+    "zyada dikhao",
+    "ziada dikhao",
+    "aage dikhao",
+    "aage dikha",
+    "continue karo",
+    "agay dikhao",
+)
+
+
 def _wants_trending_more(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t:
         return False
     flat = unicodedata.normalize("NFKC", t).translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    # Strip common ending punctuation/emoji so "more?" / "more!" still match.
+    flat = re.sub(r"[\.!\?،,؟]+$", "", flat).strip()
     tokens = [x for x in re.split(r"\s+", flat) if x]
-    if len(tokens) <= 2 and tokens in (
-        ["more"],
-        ["m"],
-        ["next"],
-        ["مزيد"],
-        ["التالي"],
-        ["mazeed"],
-    ):
-        return True
-    phrases = (
-        "show me more",
-        "show more",
-        "more products",
-        "more trending",
-        "load more",
-        "next page",
-        "aur dikhao",
-        "aur dikha",
-        "mazeed",
-        "مزيد",
-        "mazeed dikhao",
-        "aur dikha do",
-    )
-    return any(p in flat for p in phrases)
+    if 1 <= len(tokens) <= 2:
+        tup = tuple(tokens)
+        if tup in _TRENDING_MORE_TOKEN_PHRASES:
+            return True
+    return any(p in flat for p in _TRENDING_MORE_PHRASES)
 
 
 def _trending_footer_template_key(
@@ -996,19 +1077,9 @@ def _select_trending_product_from_list(
     ord_m = re.search(r"(?i)^(\d{1,3})\s*(?:st|nd|rd|th)\b", query)
     if ord_m and len(query) <= 14:
         query = ord_m.group(1)
-    if query in (
-        "more",
-        "m",
-        "next",
-        "next page",
-        "show more",
-        "show me more",
-        "مزيد",
-        "التالي",
-        "mazeed",
-        "aur",
-        "aur dikhao",
-    ):
+    # Reuse the pagination detector so *every* variant of "show me more" we now
+    # understand is prevented from being read as a product name.
+    if _wants_trending_more(query):
         return None
 
     if re.fullmatch(r"\d+", query):

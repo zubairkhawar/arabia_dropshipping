@@ -592,8 +592,8 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "trending_footer_first_has_more": {
         "english": "Would you like to see more products? Just type \"show me more\".",
-        "arabic": "هل تريد رؤية المزيد من المنتجات؟ فقط اكتب \"show me more\".",
-        "roman_urdu": "Aur products dekhna chahen ge? Bas \"show me more\" likhein.",
+        "arabic": "هل تريد رؤية المزيد من المنتجات؟ فقط اكتب \"المزيد\".",
+        "roman_urdu": "Aur products dekhna chahen ge? Bas \"aur dikhao\" likhein.",
     },
     "trending_footer_first_only": {
         "english": (
@@ -614,10 +614,10 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Would you like to see more? Type \"show me more\" or ask about a specific product by number."
         ),
         "arabic": (
-            "هل تريد المزيد؟ اكتب \"show me more\" أو اسأل عن منتج محدد برقمه."
+            "هل تريد المزيد؟ اكتب \"المزيد\" أو اسأل عن منتج محدد برقمه."
         ),
         "roman_urdu": (
-            "Aur dekhna hai? \"show me more\" likhein ya number se kisi product ke baare mein pooch lein."
+            "Aur dekhna hai? \"aur dikhao\" likhein ya number se kisi product ke baare mein pooch lein."
         ),
     },
     "trending_footer_more_end": {
@@ -726,11 +726,11 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         ),
         "arabic": (
             "لم أستطع ربط ذلك بأحد المنتجات الرائجة في هذه القائمة. "
-            "جرّب رقم المنتج (مثل 3 أو \"product 3\")، أو اكتب \"show me more\"، أو \"agent\" للتحدث مع موظف."
+            "جرّب رقم المنتج (مثل 3 أو \"product 3\")، أو اكتب \"المزيد\"، أو \"agent\" للتحدث مع موظف."
         ),
         "roman_urdu": (
             "Isay is trending list se match nahi kar saka. "
-            "List number try karein (jaise 3 ya \"product 3\"), \"show me more\" likhein, ya \"agent\" human ke liye."
+            "List number try karein (jaise 3 ya \"product 3\"), \"aur dikhao\" likhein, ya \"agent\" human ke liye."
         ),
     },
     "trending_no_products": {
@@ -775,8 +775,8 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "non_trending_footer_first_has_more": {
         "english": "Would you like to see more products? Just type \"show me more\".",
-        "arabic": "هل تريد رؤية المزيد من المنتجات؟ فقط اكتب \"show me more\".",
-        "roman_urdu": "Aur products dekhna chahen ge? Bas \"show me more\" likhein.",
+        "arabic": "هل تريد رؤية المزيد من المنتجات؟ فقط اكتب \"المزيد\".",
+        "roman_urdu": "Aur products dekhna chahen ge? Bas \"aur dikhao\" likhein.",
     },
     "non_trending_footer_first_only": {
         "english": (
@@ -797,10 +797,10 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Would you like to see more? Type \"show me more\" or ask about a specific product by number."
         ),
         "arabic": (
-            "هل تريد المزيد؟ اكتب \"show me more\" أو اسأل عن منتج محدد برقمه."
+            "هل تريد المزيد؟ اكتب \"المزيد\" أو اسأل عن منتج محدد برقمه."
         ),
         "roman_urdu": (
-            "Aur dekhna hai? \"show me more\" likhein ya number se kisi product ke baare mein pooch lein."
+            "Aur dekhna hai? \"aur dikhao\" likhein ya number se kisi product ke baare mein pooch lein."
         ),
     },
     "non_trending_footer_more_end": {
