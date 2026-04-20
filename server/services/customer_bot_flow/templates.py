@@ -318,6 +318,20 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "ya **agent** / **support** likhein."
         ),
     },
+    "orders_period_lookup_error": {
+        "english": (
+            "I couldn't fetch orders for that period right now. Please try again in a moment, "
+            "or type **agent** / **support** for help."
+        ),
+        "arabic": (
+            "لم أتمكن من جلب الطلبات لهذه الفترة الآن. يرجى المحاولة بعد قليل، "
+            "أو اكتب **agent** / **support** للمساعدة."
+        ),
+        "roman_urdu": (
+            "Abhi is period ke orders nahi aa rahe. Thori dair baad try karein, "
+            "ya **agent** / **support** likhein."
+        ),
+    },
     "connecting_agent_named": {
         "english": (
             "\n\nYou are now connected with {agent_name}. "

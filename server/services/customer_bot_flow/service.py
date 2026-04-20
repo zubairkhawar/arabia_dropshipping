@@ -11,7 +11,8 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+import calendar
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import desc
@@ -1458,6 +1459,17 @@ _STATUS_PHRASES = {
         "return_received": "has been returned",
         "return moving hub to hub": "is currently being returned",
         "return moving": "is currently being returned",
+        "return to origin": "is being returned to origin",
+        "return_to_origin": "is being returned to origin",
+        "returned to origin": "was returned to origin",
+        "out for delivery": "is out for delivery",
+        "on delivery": "is out for delivery",
+        "delivery attempted": "had a delivery attempt",
+        "at warehouse": "is at the warehouse",
+        "in warehouse": "is at the warehouse",
+        "at hub": "is at the hub",
+        "booked": "has been booked",
+        "booking done": "has been booked",
         "cancelled": "has been cancelled",
         "canceled": "has been cancelled",
         "pending": "is being processed",
@@ -1476,6 +1488,17 @@ _STATUS_PHRASES = {
         "return_received": "return ho chuka hai",
         "return moving hub to hub": "wapas bhejne ke process mein hai",
         "return moving": "wapas bhejne ke process mein hai",
+        "return to origin": "origin ki taraf wapas bheja ja raha hai",
+        "return_to_origin": "origin ki taraf wapas bheja ja raha hai",
+        "returned to origin": "origin par wapas bhej diya gaya hai",
+        "out for delivery": "delivery par nikal chuka hai",
+        "on delivery": "delivery par nikal chuka hai",
+        "delivery attempted": "delivery attempt ho chuki hai",
+        "at warehouse": "warehouse mein hai",
+        "in warehouse": "warehouse mein hai",
+        "at hub": "hub par hai",
+        "booked": "book ho chuka hai",
+        "booking done": "book ho chuka hai",
         "cancelled": "cancel ho chuka hai",
         "canceled": "cancel ho chuka hai",
         "pending": "process ho raha hai",
@@ -1494,6 +1517,17 @@ _STATUS_PHRASES = {
         "return_received": "تم إرجاعه",
         "return moving hub to hub": "قيد الإرجاع",
         "return moving": "قيد الإرجاع",
+        "return to origin": "قيد الإرجاع إلى المصدر",
+        "return_to_origin": "قيد الإرجاع إلى المصدر",
+        "returned to origin": "تم إرجاعه إلى المصدر",
+        "out for delivery": "خرج للتسليم",
+        "on delivery": "خرج للتسليم",
+        "delivery attempted": "تمت محاولة التسليم",
+        "at warehouse": "في المستودع",
+        "in warehouse": "في المستودع",
+        "at hub": "في المركز اللوجستي",
+        "booked": "تم حجزه",
+        "booking done": "تم حجزه",
         "cancelled": "تم إلغاؤه",
         "canceled": "تم إلغاؤه",
         "pending": "قيد المعالجة",
@@ -2043,6 +2077,376 @@ def _format_tracking_sentence(lang: str, tr: Dict[str, Any]) -> str:
     return (head + tail).rstrip(",. ") + "."
 
 
+# ---------------------------------------------------------------------------
+# Date-range parsing (month / this-or-last-month / this-or-last-week /
+# last N days / today-yesterday / explicit YYYY-MM-DD ranges).
+# Used by "orders-in-period" and "invoices-in-period" intents.
+# ---------------------------------------------------------------------------
+
+_MONTH_NAMES: Dict[str, int] = {
+    # English + abbreviations
+    "january": 1, "jan": 1,
+    "february": 2, "feb": 2,
+    "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "may": 5,
+    "june": 6, "jun": 6,
+    "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+    # Modern Standard Arabic + Levantine variants
+    "يناير": 1, "كانون الثاني": 1,
+    "فبراير": 2, "شباط": 2,
+    "مارس": 3, "آذار": 3, "اذار": 3,
+    "أبريل": 4, "ابريل": 4, "نيسان": 4,
+    "مايو": 5, "أيار": 5, "ايار": 5,
+    "يونيو": 6, "حزيران": 6,
+    "يوليو": 7, "تموز": 7,
+    "أغسطس": 8, "اغسطس": 8, "آب": 8, "اب": 8,
+    "سبتمبر": 9, "أيلول": 9, "ايلول": 9,
+    "أكتوبر": 10, "اكتوبر": 10, "تشرين الأول": 10, "تشرين الاول": 10,
+    "نوفمبر": 11, "تشرين الثاني": 11,
+    "ديسمبر": 12, "كانون الأول": 12, "كانون الاول": 12,
+}
+
+_MONTH_LABEL_EN = {
+    1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
+    7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December",
+}
+
+
+def _month_bounds(year: int, month: int) -> Tuple[date, date]:
+    _, last_day = calendar.monthrange(year, month)
+    return date(year, month, 1), date(year, month, last_day)
+
+
+def _parse_iso_date(s: str) -> Optional[date]:
+    try:
+        return date.fromisoformat(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_date_range(text: str, today: Optional[date] = None) -> Optional[Dict[str, Optional[str]]]:
+    """
+    Extract a date window from free-form text.
+
+    Returns ``None`` when no period is found, otherwise a dict::
+
+        {
+            "label": "April 2026",             # human-readable for replies
+            "date_from": "YYYY-MM-DD",
+            "date_to":   "YYYY-MM-DD",
+            "month":     "YYYY-MM" or None,    # set when the window is a full
+                                               # calendar month (preferred by
+                                               # the /orders/all endpoint)
+        }
+    """
+    if not (text or "").strip():
+        return None
+    t = text.lower()
+    ref = today or datetime.utcnow().date()
+
+    # Explicit YYYY-MM-DD to YYYY-MM-DD
+    m = re.search(
+        r"(\d{4}-\d{2}-\d{2})\s*(?:to|till|until|through|and|-|–|—|:)\s*(\d{4}-\d{2}-\d{2})",
+        t,
+    )
+    if m:
+        d1 = _parse_iso_date(m.group(1))
+        d2 = _parse_iso_date(m.group(2))
+        if d1 and d2:
+            if d1 > d2:
+                d1, d2 = d2, d1
+            return {
+                "label": f"{d1.isoformat()} to {d2.isoformat()}",
+                "date_from": d1.isoformat(),
+                "date_to": d2.isoformat(),
+                "month": None,
+            }
+
+    if "this month" in t or "current month" in t or "is month" in t or "هذا الشهر" in t:
+        df, dt = _month_bounds(ref.year, ref.month)
+        return {
+            "label": f"{_MONTH_LABEL_EN[ref.month]} {ref.year}",
+            "date_from": df.isoformat(),
+            "date_to": dt.isoformat(),
+            "month": f"{ref.year:04d}-{ref.month:02d}",
+        }
+
+    if "last month" in t or "previous month" in t or "pichla mahina" in t or "الشهر الماضي" in t:
+        year, month = (ref.year - 1, 12) if ref.month == 1 else (ref.year, ref.month - 1)
+        df, dt = _month_bounds(year, month)
+        return {
+            "label": f"{_MONTH_LABEL_EN[month]} {year}",
+            "date_from": df.isoformat(),
+            "date_to": dt.isoformat(),
+            "month": f"{year:04d}-{month:02d}",
+        }
+
+    if re.search(r"\btoday\b", t) or "aaj" in t or "اليوم" in t:
+        return {
+            "label": "today",
+            "date_from": ref.isoformat(),
+            "date_to": ref.isoformat(),
+            "month": None,
+        }
+
+    if re.search(r"\byesterday\b", t) or "kal" in t or "أمس" in t or "امس" in t:
+        y = ref - timedelta(days=1)
+        return {
+            "label": "yesterday",
+            "date_from": y.isoformat(),
+            "date_to": y.isoformat(),
+            "month": None,
+        }
+
+    m = re.search(r"\b(?:last|past|previous)\s+(\d{1,3})\s+days?\b", t)
+    if m:
+        n = max(1, min(365, int(m.group(1))))
+        start = ref - timedelta(days=n - 1)
+        return {
+            "label": f"the last {n} days",
+            "date_from": start.isoformat(),
+            "date_to": ref.isoformat(),
+            "month": None,
+        }
+
+    if "this week" in t or "current week" in t or "هذا الأسبوع" in t:
+        start = ref - timedelta(days=ref.weekday())
+        end = start + timedelta(days=6)
+        return {
+            "label": "this week",
+            "date_from": start.isoformat(),
+            "date_to": end.isoformat(),
+            "month": None,
+        }
+
+    if "last week" in t or "previous week" in t or "الأسبوع الماضي" in t:
+        this_week_mon = ref - timedelta(days=ref.weekday())
+        start = this_week_mon - timedelta(days=7)
+        end = start + timedelta(days=6)
+        return {
+            "label": "last week",
+            "date_from": start.isoformat(),
+            "date_to": end.isoformat(),
+            "month": None,
+        }
+
+    # Month name [optional year]. Walk longest names first so "september"
+    # beats "sep" and "كانون الأول" beats "الأول".
+    for name in sorted(_MONTH_NAMES.keys(), key=len, reverse=True):
+        if name in t:
+            num = _MONTH_NAMES[name]
+            yr_m = re.search(r"\b(\d{4})\b", t)
+            year = int(yr_m.group(1)) if yr_m else ref.year
+            df, dt = _month_bounds(year, num)
+            return {
+                "label": f"{_MONTH_LABEL_EN[num]} {year}",
+                "date_from": df.isoformat(),
+                "date_to": dt.isoformat(),
+                "month": f"{year:04d}-{num:02d}",
+            }
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# invoice-by-id, invoices-in-period, orders-in-period
+# ---------------------------------------------------------------------------
+
+_INVOICE_ID_RE = re.compile(
+    r"invoice(?:\s+(?:id|number|no\.?))?\s*[:#]?\s*(\d{1,12})\b",
+    re.IGNORECASE,
+)
+
+_ORDERS_IN_PERIOD_MARKERS = (
+    "my orders",
+    "all my orders",
+    "orders in",
+    "orders for",
+    "orders from",
+    "orders last",
+    "orders this",
+    "orders of",
+    "orders during",
+    "orders between",
+    "mere orders",
+    "meray orders",
+    "meri orders",
+    "meri sales",
+    "sales in",
+    "sales for",
+    "sales from",
+    "sales last",
+    "sales this",
+    "طلباتي",
+    "مبيعاتي",
+    "الطلبات",
+)
+
+
+def _extract_invoice_id(text: str) -> str:
+    m = _INVOICE_ID_RE.search(text or "")
+    return m.group(1).strip() if m else ""
+
+
+def _looks_like_invoice_by_id(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if _looks_like_invoice_for_order(text):
+        return False
+    if "order" in t:
+        # Leave order-centric queries for invoice-for-order / order-status.
+        return False
+    if _parse_date_range(text):
+        return False
+    return bool(_extract_invoice_id(text))
+
+
+def _looks_like_invoices_in_period(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if _looks_like_invoice_for_order(text):
+        return False
+    has_invoice_word = ("invoice" in t) or ("فاتور" in t)
+    if not has_invoice_word:
+        return False
+    return _parse_date_range(text) is not None
+
+
+def _looks_like_orders_in_period(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if any(m in t for m in _ORDERS_IN_PERIOD_MARKERS):
+        return True
+    # Plural "orders" word combined with any period phrase is enough.
+    if re.search(r"\borders\b", t) and _parse_date_range(text):
+        return True
+    return False
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _sum_profit(orders: List[Dict[str, Any]]) -> int:
+    return sum(_safe_int(o.get("profit")) for o in orders if isinstance(o, dict))
+
+
+def _orders_period_row(o: Dict[str, Any]) -> str:
+    oid = _pick(o, "id", "order_id", "order_number") or "?"
+    date_str = _pick(o, "createdon", "order_date", "created_at") or ""
+    date_short = date_str.split(" ")[0] if date_str else ""
+    details = _pick(o, "details", "product_summary")
+    if details and len(details) > 60:
+        details = details[:57].rstrip() + "…"
+    profit = _pick(o, "profit")
+    amount = _pick(o, "shipping_charges")
+    head_bits: List[str] = [f"#{oid}"]
+    if date_short:
+        head_bits.append(f"({date_short})")
+    head = " ".join(head_bits)
+    tail_bits: List[str] = []
+    if details:
+        tail_bits.append(details)
+    money_bits: List[str] = []
+    if amount:
+        money_bits.append(f"{amount} AED shipping")
+    if profit:
+        money_bits.append(f"{profit} AED profit")
+    if money_bits:
+        tail_bits.append(", ".join(money_bits))
+    if tail_bits:
+        return f"{head} — " + ", ".join(tail_bits)
+    return head
+
+
+def _format_orders_in_period(
+    lang: str, orders: List[Dict[str, Any]], label: str, max_rows: int = 5
+) -> str:
+    """Header sentence + up to `max_rows` compact rows for an orders listing."""
+    count = len(orders)
+    profit = _sum_profit(orders)
+    head: str
+    if count == 0:
+        if lang == "roman_urdu":
+            return f"{label} mein koi order nahi mila."
+        if lang == "arabic":
+            return f"لا توجد طلبات خلال {label}."
+        return f"You had no orders in {label}."
+
+    if lang == "roman_urdu":
+        head = f"{label} mein aapke {count} order(s) hain"
+        if profit:
+            head += f", total profit {profit} AED"
+        head += "."
+    elif lang == "arabic":
+        head = f"لديك {count} طلب خلال {label}"
+        if profit:
+            head += f"، إجمالي الأرباح {profit} درهم"
+        head += "."
+    else:
+        head = f"You have {count} order{'s' if count != 1 else ''} in {label}"
+        if profit:
+            head += f", total profit {profit} AED"
+        head += "."
+
+    rows = [_orders_period_row(o) for o in orders[:max_rows]]
+    tail = ""
+    if count > max_rows:
+        remainder = count - max_rows
+        if lang == "roman_urdu":
+            tail = f"\n+ {remainder} aur — date range ya month badalne ke liye dobara pooch lein."
+        elif lang == "arabic":
+            tail = f"\n+ {remainder} المزيد — يمكنك تضييق النطاق الزمني لعرض المزيد."
+        else:
+            tail = f"\n+ {remainder} more — narrow the date range to see others."
+    return head + "\n" + "\n".join(f"• {row}" for row in rows) + tail
+
+
+def _format_invoices_in_period(
+    lang: str, payload: Dict[str, Any], label: str
+) -> str:
+    invs = payload.get("invoices") if isinstance(payload.get("invoices"), list) else []
+    count = len(invs)
+    if count == 0 and isinstance(payload.get("invoice"), dict):
+        invs = [payload]
+        count = 1
+    if count == 0:
+        if lang == "roman_urdu":
+            return f"{label} mein koi invoice nahi mila."
+        if lang == "arabic":
+            return f"لا توجد فواتير خلال {label}."
+        return f"You had no invoices in {label}."
+    latest_raw = invs[0] if isinstance(invs[0], dict) else {}
+    latest = _extract_invoice(latest_raw) if latest_raw else {}
+    latest_date = _pick(latest, "date") if latest else ""
+    if lang == "roman_urdu":
+        out = f"{label} mein aapke {count} invoice(s) hain"
+        if latest_date:
+            out += f"; sabse recent {latest_date} ki hai"
+        return out.rstrip(",. ") + "."
+    if lang == "arabic":
+        out = f"لديك {count} فاتورة خلال {label}"
+        if latest_date:
+            out += f"؛ آخرها بتاريخ {latest_date}"
+        return out.rstrip(",. ") + "."
+    out = f"You have {count} invoice{'s' if count != 1 else ''} in {label}"
+    if latest_date:
+        out += f"; the most recent is dated {latest_date}"
+    return out.rstrip(",. ") + "."
+
+
 @dataclass
 class BotFlowResult:
     """Result of one customer message through the structured bot flow."""
@@ -2180,6 +2584,79 @@ async def process_customer_bot_message(
             whatsapp_text_after_images=None,
         )
 
+    def _show_trending_for_country(
+        cc: str, base_flow: Dict[str, Any], msg_text: str
+    ) -> BotFlowResult:
+        """Fetch and display trending products for *cc*. Reused by entry points and the country step."""
+        wanted_category = _parse_trending_category(msg_text)
+        items_all = list_active_trending_for_country(db, tenant_id, cc)
+        visible = _trending_visible_list(items_all, wanted_category)
+        offset = 0
+        page = visible[offset : offset + TRENDING_PAGE_SIZE]
+        if not page:
+            nf = {**base_flow, "step": "trending_awaiting_country", "lang": flow_lang}
+            for k in TRENDING_STATE_KEYS:
+                nf.pop(k, None)
+            if wanted_category:
+                no_msg = _t(flow_lang, MSGS["trending_no_products_category"]).format(
+                    country=_trending_footer_country_label(cc),
+                    category=wanted_category,
+                )
+            else:
+                no_msg = _t(flow_lang, MSGS["trending_no_products"]).format(
+                    country=_trending_footer_country_label(cc)
+                )
+            retry = _t(flow_lang, MSGS["trending_country_retry"])
+            return save(nf, f"{no_msg}\n\n{retry}")
+        has_more = offset + len(page) < len(visible)
+        fk, needs_c = _trending_footer_template_key(first_batch=True, has_more=has_more)
+        footer = (
+            _t(flow_lang, MSGS[fk]).format(country=_trending_footer_country_label(cc))
+            if needs_c
+            else _t(flow_lang, MSGS[fk])
+        )
+        nf = {
+            **base_flow,
+            "step": "trending_showing_products",
+            "lang": flow_lang,
+            "trending_country": cc,
+            "trending_category": wanted_category,
+            "trending_products_all": items_all,
+            "trending_products_cache": page,
+            "trending_offset": offset,
+        }
+        body = _trending_inbox_and_web_body(
+            flow_lang, cc, page,
+            category=wanted_category, start_rank=1, is_more_batch=False,
+        )
+        full_reply = _append_trending_followup_suggestions(
+            flow_lang, cc, f"{body}\n\n{footer}".strip()
+        )
+        wa_imgs: Optional[List[Dict[str, str]]] = None
+        wa_aft: Optional[str] = None
+        _ch = (channel or "web").strip().lower()
+        if _ch == "whatsapp":
+            wa_l: List[Dict[str, str]] = []
+            no_u: List[str] = []
+            for i, it in enumerate(page):
+                url = (it.get("image_url") or "").strip()
+                cap = _wa_caption_for_trending_row(it, rank=offset + i + 1)
+                logger.info(
+                    "trending WA image: product=%s image_url=%s",
+                    (it.get("product_name") or "")[:40],
+                    url[:120] if url else "(empty)",
+                )
+                if url:
+                    wa_l.append({"image_url": url, "caption": cap})
+                else:
+                    no_u.append(f"{cap}\n(no image URL — open chat on web for full list)")
+            if wa_l:
+                wa_imgs = wa_l
+                wa_aft = full_reply.strip()
+                if no_u:
+                    wa_aft = "\n\n".join([*no_u, full_reply]).strip()
+        return save(nf, full_reply, wa_images=wa_imgs, wa_text_after=wa_aft)
+
     ch = (channel or "web").strip().lower()
     text = (user_message or "").strip()
 
@@ -2292,22 +2769,19 @@ async def process_customer_bot_message(
         # Trending / sourcing before the entry LLM so phrases like "Give me trending products"
         # are never treated as an unclear 1/2 menu reply.
         if _wants_trending_products(text):
-            nf = {
+            inline_cc = _parse_trending_country_reply(text)
+            base = {
                 **flow,
-                "step": "trending_awaiting_country",
                 "customer_kind": flow.get("customer_kind") or "new",
                 "intro_shown": True,
                 "lang": flow_lang,
             }
-            for k in (
-                "trending_country",
-                "trending_products_cache",
-                "trending_products_all",
-                "trending_category",
-                "trending_offset",
-            ):
-                nf.pop(k, None)
-            return save(nf, _t(flow_lang, MSGS["trending_ask_country"]))
+            for k in TRENDING_STATE_KEYS:
+                base.pop(k, None)
+            if inline_cc:
+                return _show_trending_for_country(inline_cc, base, text)
+            base["step"] = "trending_awaiting_country"
+            return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
         if _wants_product_sourcing(text):
             product_hint = _extract_sourcing_product_name(text)
             has_bulk = bool(
@@ -2406,74 +2880,7 @@ async def process_customer_bot_message(
         cc = _parse_trending_country_reply(text)
         if not cc:
             return save(flow, _t(flow_lang, MSGS["trending_country_retry"]))
-        wanted_category = _parse_trending_category(text)
-        items_all = list_active_trending_for_country(db, tenant_id, cc)
-        visible = _trending_visible_list(items_all, wanted_category)
-        offset = 0
-        page = visible[offset : offset + TRENDING_PAGE_SIZE]
-        if not page:
-            # Stay in trending_awaiting_country so the user can pick another country
-            nf = {**flow, "step": "trending_awaiting_country", "lang": flow_lang}
-            for k in TRENDING_STATE_KEYS:
-                nf.pop(k, None)
-            if wanted_category:
-                no_msg = _t(flow_lang, MSGS["trending_no_products_category"]).format(
-                    country=_trending_footer_country_label(cc),
-                    category=wanted_category,
-                )
-            else:
-                no_msg = _t(flow_lang, MSGS["trending_no_products"]).format(
-                    country=_trending_footer_country_label(cc)
-                )
-            retry = _t(flow_lang, MSGS["trending_country_retry"])
-            return save(nf, f"{no_msg}\n\n{retry}")
-        has_more = offset + len(page) < len(visible)
-        fk, needs_c = _trending_footer_template_key(first_batch=True, has_more=has_more)
-        footer = (
-            _t(flow_lang, MSGS[fk]).format(country=_trending_footer_country_label(cc))
-            if needs_c
-            else _t(flow_lang, MSGS[fk])
-        )
-        nf = {
-            **flow,
-            "step": "trending_showing_products",
-            "lang": flow_lang,
-            "trending_country": cc,
-            "trending_category": wanted_category,
-            "trending_products_all": items_all,
-            "trending_products_cache": page,
-            "trending_offset": offset,
-        }
-        body = _trending_inbox_and_web_body(
-            flow_lang,
-            cc,
-            page,
-            category=wanted_category,
-            start_rank=1,
-            is_more_batch=False,
-        )
-        full_reply = _append_trending_followup_suggestions(
-            flow_lang, cc, f"{body}\n\n{footer}".strip()
-        )
-        wa_images: Optional[List[Dict[str, str]]] = None
-        wa_after: Optional[str] = None
-        if ch == "whatsapp":
-            wa_list: List[Dict[str, str]] = []
-            no_url_lines: List[str] = []
-            for i, it in enumerate(page):
-                url = (it.get("image_url") or "").strip()
-                cap = _wa_caption_for_trending_row(it, rank=offset + i + 1)
-                if url:
-                    wa_list.append({"image_url": url, "caption": cap})
-                else:
-                    no_url_lines.append(f"{cap}\n(no image URL — open chat on web for full list)")
-            if wa_list:
-                wa_images = wa_list
-                # Send intro + numbered list + footer after images (captions are per-product only).
-                wa_after = full_reply.strip()
-                if no_url_lines:
-                    wa_after = "\n\n".join([*no_url_lines, full_reply]).strip()
-        return save(nf, full_reply, wa_images=wa_images, wa_text_after=wa_after)
+        return _show_trending_for_country(cc, flow, text)
 
     if step == "trending_showing_products":
         cache_raw = flow.get("trending_products_cache")
@@ -2553,14 +2960,14 @@ async def process_customer_bot_message(
             return save(nf, full_reply)
 
         if _wants_trending_products(text):
-            nf = {
-                **flow,
-                "step": "trending_awaiting_country",
-                "lang": flow_lang,
-            }
+            inline_cc = _parse_trending_country_reply(text)
+            base = {**flow, "lang": flow_lang}
             for k in TRENDING_STATE_KEYS:
-                nf.pop(k, None)
-            return save(nf, _t(flow_lang, MSGS["trending_ask_country"]))
+                base.pop(k, None)
+            if inline_cc:
+                return _show_trending_for_country(inline_cc, base, text)
+            base["step"] = "trending_awaiting_country"
+            return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
 
         if wanted_category:
             next_visible = _filter_trending_items_by_category(all_items, wanted_category)
@@ -2888,21 +3295,18 @@ async def process_customer_bot_message(
         kind = flow.get("customer_kind")
 
         if _wants_trending_products(text):
-            nf = {
+            inline_cc = _parse_trending_country_reply(text)
+            base = {
                 **flow,
-                "step": "trending_awaiting_country",
                 "intro_shown": bool(flow.get("intro_shown")),
                 "lang": flow_lang,
             }
-            for k in (
-                "trending_country",
-                "trending_products_cache",
-                "trending_products_all",
-                "trending_category",
-                "trending_offset",
-            ):
-                nf.pop(k, None)
-            return save(nf, _t(flow_lang, MSGS["trending_ask_country"]))
+            for k in TRENDING_STATE_KEYS:
+                base.pop(k, None)
+            if inline_cc:
+                return _show_trending_for_country(inline_cc, base, text)
+            base["step"] = "trending_awaiting_country"
+            return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
 
         # Product sourcing / bulk order detection → collect details then hand off
         if _wants_product_sourcing(text):
@@ -3026,6 +3430,29 @@ async def process_customer_bot_message(
                         _t(flow_lang, MSGS["tracking_lookup_error"]),
                     )
 
+            # Invoice by explicit invoice number: "invoice #55", "invoice 55".
+            if _looks_like_invoice_by_id(text):
+                iid = _extract_invoice_id(text)
+                if iid:
+                    try:
+                        payload = await store_client.get_invoice_by_seller_id(
+                            str(flow.get("seller_id") or ""),
+                            invoice_id=iid,
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.exception("invoice-by-id lookup failed for %s", iid)
+                        payload = {}
+                    inv = _extract_invoice(payload or {})
+                    if inv:
+                        return save(
+                            {**flow, "step": "conversational", "lang": flow_lang},
+                            _format_invoice_sentence(flow_lang, inv),
+                        )
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _t(flow_lang, MSGS["invoice_not_found"]),
+                    )
+
             # Invoice for a specific order: "which invoice is order 157955 in?"
             if _looks_like_invoice_for_order(text):
                 ref = (_extract_order_id_from_message(text, phone) or "").strip()
@@ -3050,6 +3477,40 @@ async def process_customer_bot_message(
                 # No order id yet → ask for one.
                 nf = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
                 return save(nf, _t(flow_lang, MSGS["ask_order"]))
+
+            # Invoices in a period: "my invoices in March", "invoices last month".
+            if _looks_like_invoices_in_period(text):
+                sid = str(flow.get("seller_id") or "").strip()
+                window = _parse_date_range(text) or {}
+                if not sid:
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _t(flow_lang, MSGS["invoice_lookup_error"]),
+                    )
+                try:
+                    payload = await store_client.get_invoice_by_seller_id(
+                        sid,
+                        all_invoices=True,
+                        date_from=window.get("date_from"),
+                        date_to=window.get("date_to"),
+                    )
+                except TypeError:
+                    # Older client signature – fall back without date args.
+                    try:
+                        payload = await store_client.get_invoice_by_seller_id(
+                            sid, all_invoices=True
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.exception("invoices-in-period lookup failed for %s", sid)
+                        payload = {}
+                except Exception:  # noqa: BLE001
+                    logger.exception("invoices-in-period lookup failed for %s", sid)
+                    payload = {}
+                label = window.get("label") or ""
+                return save(
+                    {**flow, "step": "conversational", "lang": flow_lang},
+                    _format_invoices_in_period(flow_lang, payload or {}, label),
+                )
 
             # Latest / current invoice.
             if _looks_like_latest_invoice(text):
@@ -3098,6 +3559,47 @@ async def process_customer_bot_message(
                 return save(
                     {**flow, "step": "conversational", "lang": flow_lang},
                     _t(flow_lang, MSGS["invoice_not_found"]),
+                )
+
+            # Orders within a period: "my orders last month", "orders in April 2026".
+            if _looks_like_orders_in_period(text):
+                sid = str(flow.get("seller_id") or "").strip()
+                if not sid:
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _t(flow_lang, MSGS["orders_period_lookup_error"]),
+                    )
+                window = _parse_date_range(text) or {}
+                if not window:
+                    # Default "my orders" with no period → current month.
+                    today = datetime.utcnow().date()
+                    df, dt = _month_bounds(today.year, today.month)
+                    window = {
+                        "label": f"{_MONTH_LABEL_EN[today.month]} {today.year}",
+                        "date_from": df.isoformat(),
+                        "date_to": dt.isoformat(),
+                        "month": f"{today.year:04d}-{today.month:02d}",
+                    }
+                try:
+                    orders = await store_client.get_orders_all(
+                        sid,
+                        month=window.get("month"),
+                        date_from=window.get("date_from"),
+                        date_to=window.get("date_to"),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("orders-in-period lookup failed for %s", sid)
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _t(flow_lang, MSGS["orders_period_lookup_error"]),
+                    )
+                return save(
+                    {**flow, "step": "conversational", "lang": flow_lang},
+                    _format_orders_in_period(
+                        flow_lang,
+                        orders or [],
+                        window.get("label") or "",
+                    ),
                 )
 
             if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
