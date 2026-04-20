@@ -1196,6 +1196,23 @@ async def update_conversation_status(
     db.refresh(conversation)
     _ = conversation.customer
     _ = conversation.messages
+    if conversation.agent_id is not None:
+        try:
+            await push_inbox_sync_event(
+                db,
+                conversation.tenant_id,
+                conversation.agent_id,
+                {
+                    "type": "inbox_conversation_refresh",
+                    "conversation_id": conversation.id,
+                    "reason": "conversation_status_updated",
+                },
+            )
+        except Exception:
+            logger.exception(
+                "status patch: inbox refresh broadcast failed (conversation_id=%s)",
+                conversation.id,
+            )
     return _build_conversation_summary(conversation)
 
 

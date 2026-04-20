@@ -112,7 +112,6 @@ export function ChatList() {
   const [localConversations] = useState<Conversation[]>(defaultConversations);
   const [liveOpen, setLiveOpen] = useState(true);
   const [closedOpen, setClosedOpen] = useState(true);
-  const [transferredOpen, setTransferredOpen] = useState(true);
   const { inboxQuery } = useAgentSearch();
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<InboxSearchResult[]>([]);
@@ -174,11 +173,8 @@ export function ChatList() {
     isAgentInbox ? c.status === 'active' : c.status === 'active' || c.status === 'transferred',
   );
   const closedConversations = filteredConversations.filter((c) => c.status === 'resolved');
-  const transferredConversations = filteredConversations.filter((c) => c.status === 'transferred');
   const hasAnyInboxConversation =
-    liveConversations.length > 0 ||
-    closedConversations.length > 0 ||
-    (isAgentInbox && transferredConversations.length > 0);
+    liveConversations.length > 0 || closedConversations.length > 0;
   const activeSearch = inboxQuery.trim();
   const localFallbackResults = useMemo(() => {
     const q = activeSearch.toLowerCase();
@@ -491,73 +487,6 @@ export function ChatList() {
                             {conv.customerPhone}
                           </p>
                         )}
-                        <p
-                          className={`text-xs truncate ${
-                            isSelected ? 'text-white/90' : 'text-text-secondary'
-                          }`}
-                        >
-                          {conv.lastMessage}
-                        </p>
-                      </button>
-                    );
-                  })}
-              </div>
-            )}
-
-            {/* ── Agent Inbox: Transferred Chats ── */}
-            {isAgentInbox && !(inboxConv?.isLoading) && (
-              <div className="space-y-1">
-                <button
-                  type="button"
-                  className="w-full px-1 py-1 flex items-center justify-between mt-2 hover:bg-panel rounded"
-                  onClick={() => setTransferredOpen((open) => !open)}
-                >
-                  <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">
-                    Transferred Chats
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <ChevronDown
-                      className={`h-3 w-3 text-text-muted transition-transform ${
-                        transferredOpen ? 'rotate-180' : ''
-                      }`}
-                    />
-                  </span>
-                </button>
-                {transferredOpen &&
-                  transferredConversations.map((conv) => {
-                    const isSelected = selectedId === conv.id;
-                    return (
-                      <button
-                        key={conv.id}
-                        type="button"
-                        onClick={() => setSelectedId(conv.id)}
-                        className={`w-full text-left p-3 rounded-lg cursor-pointer transition-colors ${
-                          isSelected
-                            ? 'bg-primary text-white'
-                            : 'bg-white hover:bg-panel border border-border'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2 mb-1">
-                          <span
-                            className={`text-sm font-medium truncate flex-1 min-w-0 flex items-center gap-1.5 ${
-                              isSelected ? 'text-white' : 'text-text-primary'
-                            }`}
-                          >
-                            {conv.customerName}
-                          </span>
-                          <span
-                            className={`text-xs flex-shrink-0 ${
-                              isSelected ? 'text-white/80' : 'text-text-muted'
-                            }`}
-                          >
-                            {conv.transferredAt ?? conv.lastActivityAt}
-                          </span>
-                        </div>
-                        <p className={`text-[11px] truncate mb-0.5 ${isSelected ? 'text-white/85' : 'text-text-muted'}`}>
-                          {conv.transferredToAgentName
-                            ? `Transferred to ${conv.transferredToAgentName}`
-                            : 'Transferred to another agent'}
-                        </p>
                         <p
                           className={`text-xs truncate ${
                             isSelected ? 'text-white/90' : 'text-text-secondary'

@@ -466,9 +466,19 @@ async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     if result.agent_id is not None:
-        from services.agent_portal_service.broadcast import push_unread_summary
+        from services.agent_portal_service.broadcast import push_inbox_sync_event, push_unread_summary
 
         await push_unread_summary(db, payload.tenant_id, result.agent_id)
+        await push_inbox_sync_event(
+            db,
+            payload.tenant_id,
+            result.agent_id,
+            {
+                "type": "inbox_conversation_refresh",
+                "conversation_id": result.conversation_id,
+                "reason": "routing_assign",
+            },
+        )
     return result
 
 

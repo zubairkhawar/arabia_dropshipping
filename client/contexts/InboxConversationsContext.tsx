@@ -513,8 +513,20 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         });
         return;
       }
+      // New bot→agent handoff pushes `notification` (bot_new_chat); refresh so Live appears without polling.
+      if (msg.type === 'notification' && msg.notification && typeof msg.notification === 'object') {
+        if (!isAgentPortal) return;
+        const raw = msg.notification as Record<string, unknown>;
+        const t = String(raw.type ?? '');
+        if (t === 'bot_new_chat') {
+          queueMicrotask(() => {
+            void refreshConversations();
+          });
+        }
+        return;
+      }
     });
-  }, [subscribe, syncInboxReadState, timeZone, refreshConversations]);
+  }, [subscribe, syncInboxReadState, timeZone, refreshConversations, isAgentPortal]);
 
   useEffect(() => {
     let cancelled = false;
