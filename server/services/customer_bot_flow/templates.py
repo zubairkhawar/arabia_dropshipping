@@ -752,6 +752,26 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "لا توجد منتجات {category} رائجة مسجّلة لـ {country} حالياً. جرّب فئة/دولة أخرى أو اسألني أي شيء آخر.",
         "roman_urdu": "Abhi {country} mein {category} category ke trending products list nahi hain. Doosri category/country try karein ya koi aur sawal pooch lein.",
     },
+    "non_trending_unavailable": {
+        "english": (
+            "I only showcase our *trending* picks here — the non-trending catalog "
+            "isn't available through the bot. For the full catalog please sign in "
+            "to your seller dashboard.\n\n"
+            "Would you like to see the trending products instead, or is there "
+            "anything else I can help with?"
+        ),
+        "arabic": (
+            "أعرض هنا فقط المنتجات *الرائجة* — الكتالوج الكامل غير متوفر عبر البوت. "
+            "للاطلاع على كل المنتجات يُرجى تسجيل الدخول إلى لوحة البائع.\n\n"
+            "هل تود رؤية المنتجات الرائجة بدلاً من ذلك، أم يمكنني مساعدتك بشيء آخر؟"
+        ),
+        "roman_urdu": (
+            "Main yahan sirf *trending* products dikhata hoon — baqi ke products "
+            "bot par available nahi hain. Poora catalogue dekhne ke liye apne "
+            "seller dashboard mein login karein.\n\n"
+            "Kya aap trending products dekhna chahenge, ya kisi aur cheez mein madad chahiye?"
+        ),
+    },
     "sourcing_collect_details": {
         "english": (
             "Thank you for your interest in sourcing a product! 📦\n\n"

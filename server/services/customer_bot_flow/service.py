@@ -1111,12 +1111,67 @@ def _wants_product_sourcing(text: str) -> bool:
     return False
 
 
+def _wants_non_trending_products(text: str) -> bool:
+    """Detects a customer asking for products that are **NOT** trending.
+
+    Examples:
+        - "show me products which are not trending"
+        - "ksa k prodcuts dikhao jo trending nhi hain"
+        - "non-trending products"
+        - "المنتجات غير الرائجة"
+
+    The non-trending catalogue is not exposed through the bot, but we must
+    recognise the intent so we don't accidentally fall through to the
+    positive trending handler and show the opposite of what was asked.
+    """
+    t = (text or "").strip().lower()
+    if not t or len(t) > 220:
+        return False
+    flat = t.replace("\n", " ")
+
+    # Must still be talking about products at all; otherwise phrases like
+    # "not trending right now?" (about something unrelated) wouldn't qualify.
+    # ``prod`` covers "product / products / prodcut / prodcts" (typos).
+    product_markers = (
+        "prod",
+        "item",
+        "cheez",
+        "maal",
+        "samaan",
+        "saman",
+        "منتج",
+        "منتجات",
+        "سلع",
+        "سلعة",
+    )
+    if not any(m in flat for m in product_markers):
+        return False
+
+    # English + Arabic + Roman-Urdu negations around the word "trending".
+    if re.search(r"\b(not|without|no)\s+trending\b", flat):
+        return True
+    if re.search(r"\bnon[-\s]*trending\b", flat):
+        return True
+    if re.search(
+        r"\btrending\s+(nahi|nahin|nhi|mat|na)\b",
+        flat,
+    ):
+        return True
+    # Arabic: "غير رائج", "ليست رائجة", "ما هي غير الرائجة"
+    if re.search(r"(غير|ليست|ليس|ما)\s*(ال)?\s*رائج", flat):
+        return True
+    return False
+
+
 def _wants_trending_products(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t or len(t) > 220:
         return False
     flat = t.replace("\n", " ")
-    # Negation — user explicitly does NOT want trending products
+    # Negation — user explicitly does NOT want trending products. Catches
+    # English, Roman-Urdu, and Arabic variants (see _wants_non_trending_products).
+    if _wants_non_trending_products(text):
+        return False
     if re.search(r"\bnot\s+trending\b|\bnon[\s-]?trending\b|\bwithout\s+trending\b", flat):
         return False
     markers = (
@@ -2865,6 +2920,9 @@ async def process_customer_bot_message(
             return save(nf, _t(flow_lang, MSGS["ask_email"]))
         # Trending / sourcing before the entry LLM so phrases like "Give me trending products"
         # are never treated as an unclear 1/2 menu reply.
+        if _wants_non_trending_products(text):
+            nf = {**flow, "intro_shown": True, "lang": flow_lang}
+            return save(nf, _t(flow_lang, MSGS["non_trending_unavailable"]))
         if _wants_trending_products(text):
             inline_cc = _parse_trending_country_reply(text)
             base = {
@@ -3065,6 +3123,13 @@ async def process_customer_bot_message(
                     return save(nf, full_reply, wa_images=wa_list2, wa_text_after=wa_after2)
             return save(nf, full_reply)
 
+        if _wants_non_trending_products(text):
+            # Bail out of the trending state; we don't showcase the rest of
+            # the catalogue via the bot.
+            nf = {**flow, "step": "conversational", "lang": flow_lang}
+            for k in TRENDING_STATE_KEYS:
+                nf.pop(k, None)
+            return save(nf, _t(flow_lang, MSGS["non_trending_unavailable"]))
         if _wants_trending_products(text):
             inline_cc = _parse_trending_country_reply(text)
             base = {**flow, "lang": flow_lang}
@@ -3432,6 +3497,9 @@ async def process_customer_bot_message(
     if step == "conversational":
         kind = flow.get("customer_kind")
 
+        if _wants_non_trending_products(text):
+            nf = {**flow, "intro_shown": True, "lang": flow_lang}
+            return save(nf, _t(flow_lang, MSGS["non_trending_unavailable"]))
         if _wants_trending_products(text):
             inline_cc = _parse_trending_country_reply(text)
             base = {
