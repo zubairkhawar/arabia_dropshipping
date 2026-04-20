@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
-import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X, Download } from 'lucide-react';
+import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X, Download, KeyRound } from 'lucide-react';
 import { AgentActivityBar, useAgentAttendanceData } from '@/components/agents/activity-bar';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
@@ -68,6 +68,13 @@ export default function AdminAgents() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [createError, setCreateError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
+  const [changePasswordError, setChangePasswordError] = useState('');
+  const [changePasswordSubmitting, setChangePasswordSubmitting] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [agentReportMonth, setAgentReportMonth] = useState(() => new Date().getMonth() + 1);
@@ -187,6 +194,18 @@ export default function AdminAgents() {
     return v.charAt(0).toUpperCase() + v.slice(1);
   };
 
+  const validatePasswordPair = (pass: string, confirmPass: string): string | null => {
+    if (!pass || !confirmPass) return 'Password and confirm password are required.';
+    if (pass.length < 8) return 'Password must be at least 8 characters.';
+    if (/\s/.test(pass)) return 'Password must not contain spaces.';
+    if (!/[A-Z]/.test(pass)) return 'Password must include at least one uppercase letter.';
+    if (!/[a-z]/.test(pass)) return 'Password must include at least one lowercase letter.';
+    if (!/\d/.test(pass)) return 'Password must include at least one number.';
+    if (!/[^A-Za-z0-9]/.test(pass)) return 'Password must include at least one special character.';
+    if (pass !== confirmPass) return 'Password and confirm password must match.';
+    return null;
+  };
+
   const validateCreateForm = (
     emailValue: string,
     first: string,
@@ -200,14 +219,7 @@ export default function AdminAgents() {
     if (!NAME_RE.test(first) || !NAME_RE.test(last)) {
       return 'First and last name can only include letters (A-Z).';
     }
-    if (pass.length < 8) return 'Password must be at least 8 characters.';
-    if (/\s/.test(pass)) return 'Password must not contain spaces.';
-    if (!/[A-Z]/.test(pass)) return 'Password must include at least one uppercase letter.';
-    if (!/[a-z]/.test(pass)) return 'Password must include at least one lowercase letter.';
-    if (!/\d/.test(pass)) return 'Password must include at least one number.';
-    if (!/[^A-Za-z0-9]/.test(pass)) return 'Password must include at least one special character.';
-    if (pass !== confirmPass) return 'Password and confirm password must match.';
-    return null;
+    return validatePasswordPair(pass, confirmPass);
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -247,6 +259,49 @@ export default function AdminAgents() {
     setCreateError('');
     setShowCreateModal(false);
     requestAnimationFrame(() => toast('Agent created successfully'));
+  };
+
+  const openChangePasswordModal = () => {
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setShowNewPassword(false);
+    setShowConfirmNewPassword(false);
+    setChangePasswordError('');
+    setShowChangePasswordModal(true);
+  };
+
+  const closeChangePasswordModal = () => {
+    setShowChangePasswordModal(false);
+    setChangePasswordError('');
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setShowNewPassword(false);
+    setShowConfirmNewPassword(false);
+    setChangePasswordSubmitting(false);
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAgent) return;
+    const pass = newPassword.trim();
+    const confirmPass = confirmNewPassword;
+    const validationError = validatePasswordPair(pass, confirmPass);
+    if (validationError) {
+      setChangePasswordError(validationError);
+      toast(validationError);
+      return;
+    }
+    setChangePasswordError('');
+    setChangePasswordSubmitting(true);
+    const ok = await updateAgent(selectedAgent.id, { password: pass });
+    setChangePasswordSubmitting(false);
+    if (!ok) {
+      toast('Failed to update password. Please try again.');
+      return;
+    }
+    closeChangePasswordModal();
+    setShowPassword(true);
+    requestAnimationFrame(() => toast('Password updated successfully'));
   };
 
   const handleDeleteClick = (id: string, label: string) => {
@@ -535,12 +590,23 @@ export default function AdminAgents() {
                   <p className="text-text-primary break-all">{selectedAgent.email}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-text-muted mb-0.5">Password</p>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <p className="text-xs text-text-muted">Password</p>
+                    <button
+                      type="button"
+                      onClick={openChangePasswordModal}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:text-primary-dark"
+                      aria-label="Change agent password"
+                    >
+                      <KeyRound className="w-3 h-3" />
+                      Change password
+                    </button>
+                  </div>
                   <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 rounded border border-border bg-panel">
                     <code className="text-xs font-mono min-w-0 flex-1 truncate">
                       {showPassword
                         ? selectedAgent.password ||
-                          'Not available — create a new agent or update this agent\u2019s password to make it viewable'
+                          'Not available — use Change password to set a new one'
                         : '••••••••'}
                     </code>
                     <button
@@ -579,8 +645,9 @@ export default function AdminAgents() {
                     </button>
                   </div>
                   <p className="mt-1 text-[11px] text-text-muted">
-                    Share these credentials securely with the agent so they can log into the agent
-                    portal.
+                    {selectedAgent.password
+                      ? 'Share these credentials securely with the agent so they can log into the agent portal.'
+                      : 'This agent was created before password storage was enabled. Use Change password to set a new one and make it viewable.'}
                   </p>
                 </div>
               </div>
@@ -756,6 +823,118 @@ export default function AdminAgents() {
                 Delete agent
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showChangePasswordModal && selectedAgent && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+          onClick={closeChangePasswordModal}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4">
+              <p className="text-sm font-semibold text-text-primary">Change agent password</p>
+              <p className="text-xs text-text-secondary mt-1">
+                Set a new password for {selectedAgent.name}. They will need to use this password to
+                log into the agent portal from now on.
+              </p>
+            </div>
+            <form onSubmit={handleChangePassword} className="space-y-3 text-sm">
+              <div>
+                <label className="block text-xs font-medium text-text-primary mb-1">
+                  New password
+                </label>
+                <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 rounded border border-border bg-white">
+                  <input
+                    type={showNewPassword ? 'text' : 'password'}
+                    value={newPassword}
+                    onChange={(e) => {
+                      setChangePasswordError('');
+                      setNewPassword(e.target.value);
+                    }}
+                    placeholder="New password"
+                    className="flex-1 min-w-0 bg-transparent focus:outline-none text-sm"
+                    required
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword((v) => !v)}
+                    className="p-1 rounded hover:bg-panel text-text-muted"
+                    aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showNewPassword ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
+                <p className="mt-1 text-[11px] text-text-muted">
+                  Min 8 chars, including uppercase, lowercase, number, and special character.
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-text-primary mb-1">
+                  Confirm new password
+                </label>
+                <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 rounded border border-border bg-white">
+                  <input
+                    type={showConfirmNewPassword ? 'text' : 'password'}
+                    value={confirmNewPassword}
+                    onChange={(e) => {
+                      setChangePasswordError('');
+                      setConfirmNewPassword(e.target.value);
+                    }}
+                    placeholder="Confirm new password"
+                    className="flex-1 min-w-0 bg-transparent focus:outline-none text-sm"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmNewPassword((v) => !v)}
+                    className="p-1 rounded hover:bg-panel text-text-muted"
+                    aria-label={
+                      showConfirmNewPassword ? 'Hide confirm password' : 'Show confirm password'
+                    }
+                  >
+                    {showConfirmNewPassword ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
+              </div>
+              {changePasswordError ? (
+                <p className="text-xs text-status-error">{changePasswordError}</p>
+              ) : null}
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeChangePasswordModal();
+                    toast('Password change cancelled');
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-border text-xs text-text-secondary hover:bg-panel"
+                  disabled={changePasswordSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={changePasswordSubmitting}
+                  className="inline-flex items-center gap-2 px-4 py-1.5 bg-primary text-white rounded-lg text-xs font-medium hover:bg-primary-dark disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <KeyRound className="w-4 h-4" />
+                  {changePasswordSubmitting ? 'Updating…' : 'Update password'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
