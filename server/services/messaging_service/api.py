@@ -1247,7 +1247,9 @@ async def send_conversation_to_ai(
 
     # Preserve the last handler info in metadata before clearing agent_id,
     # so the admin panel can still show who handled this conversation.
+    released_from_agent_id: Optional[int] = None
     if conversation.agent_id is not None:
+        released_from_agent_id = conversation.agent_id
         prev_agent = db.query(Agent).filter(Agent.id == conversation.agent_id).first()
         meta = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
         meta["last_handler"] = {
@@ -1255,6 +1257,9 @@ async def send_conversation_to_ai(
             "agent_name": (prev_agent.name if prev_agent else transfer_by_name).strip(),
             "at": datetime.utcnow().isoformat(),
         }
+        # Flag so downstream routing (_get_previous_agent_for_customer) and
+        # audits can recognise this was an explicit "send back to bot" action.
+        meta["released_to_ai_at"] = datetime.utcnow().isoformat()
         conversation.conversation_metadata = meta
 
     conversation.agent_id = None
@@ -1263,6 +1268,27 @@ async def send_conversation_to_ai(
     db.add(conversation)
     db.commit()
     db.refresh(conversation)
+
+    # Tell the previous agent (and any other tab viewing this thread) to
+    # refresh so the UI stops showing them as the assignee / active handler.
+    if released_from_agent_id is not None:
+        try:
+            await push_inbox_sync_event(
+                db,
+                conversation.tenant_id,
+                released_from_agent_id,
+                {
+                    "type": "inbox_conversation_refresh",
+                    "conversation_id": conversation.id,
+                    "reason": "released_to_ai",
+                },
+            )
+        except Exception:
+            logger.exception(
+                "send-to-ai: failed to broadcast refresh (conversation_id=%s, agent_id=%s)",
+                conversation.id,
+                released_from_agent_id,
+            )
 
     if (conversation.channel or "").lower() == "whatsapp":
         customer = db.query(Customer).filter(Customer.id == conversation.customer_id).first()

@@ -269,22 +269,33 @@ async def get_agent_attendance(
 
 
 def _get_previous_agent_for_customer(
-    db: Session, tenant_id: int, customer_id: int
+    db: Session,
+    tenant_id: int,
+    customer_id: int,
+    *,
+    exclude_conversation_id: Optional[int] = None,
 ) -> Optional[Agent]:
-    """Find the most recent agent who handled this customer, if any."""
-    last_conv = (
-        db.query(Conversation)
-        .filter(
-            Conversation.tenant_id == tenant_id,
-            Conversation.customer_id == customer_id,
-            Conversation.agent_id.isnot(None),
-        )
-        .order_by(desc(Conversation.updated_at))
-        .first()
+    """Find the most recent agent who handled this customer, if any.
+
+    Respects the "send back to AI" signal: if the customer's most recent
+    conversation (other than the one currently being routed) has no agent
+    assigned, it means an agent/admin explicitly released them to the bot —
+    we should NOT silently re-route them to an older agent in that case.
+    """
+    q = db.query(Conversation).filter(
+        Conversation.tenant_id == tenant_id,
+        Conversation.customer_id == customer_id,
     )
-    if last_conv and last_conv.agent_id:
-        return db.query(Agent).filter(Agent.id == last_conv.agent_id).first()
-    return None
+    if exclude_conversation_id is not None:
+        q = q.filter(Conversation.id != exclude_conversation_id)
+    last_conv = q.order_by(desc(Conversation.updated_at)).first()
+    if last_conv is None:
+        return None
+    if last_conv.agent_id is None:
+        # Most recent prior conversation has no agent → customer was
+        # intentionally sent back to the bot. Don't reuse any older agent.
+        return None
+    return db.query(Agent).filter(Agent.id == last_conv.agent_id).first()
 
 
 def _active_assigned_conversations(db: Session, agent_id: int) -> int:
@@ -384,7 +395,10 @@ def perform_conversation_assignment(
             return _commit(team_first, "bot_routed_team")
 
     previous_agent = _get_previous_agent_for_customer(
-        db, payload.tenant_id, payload.customer_id
+        db,
+        payload.tenant_id,
+        payload.customer_id,
+        exclude_conversation_id=conversation.id,
     )
     if previous_agent and _agent_has_capacity(db, previous_agent):
         return _commit(previous_agent, "previous_agent_for_customer")

@@ -732,10 +732,27 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           : c,
       ),
     );
-    void fetch(`${API_BASE}/api/messaging/conversations/${convId}/send-to-ai`, {
-      method: 'POST',
-    });
-  }, [timeZone]);
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    void (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/messaging/conversations/${convId}/send-to-ai`, {
+          method: 'POST',
+          headers,
+        });
+        if (!res.ok) {
+          // Backend didn't accept the handoff — re-sync so the UI matches truth
+          // (otherwise the agent thinks it's with the bot but messages keep going to them).
+          console.error('send-to-ai failed', res.status, await res.text().catch(() => ''));
+        }
+      } catch (err) {
+        console.error('send-to-ai request error', err);
+      } finally {
+        void refreshConversations();
+      }
+    })();
+  }, [timeZone, refreshConversations]);
 
   const getMessages = useCallback((convId: number) => messagesByConvId[convId] ?? [], [messagesByConvId]);
 
