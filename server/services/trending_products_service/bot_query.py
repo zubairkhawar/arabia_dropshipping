@@ -18,7 +18,13 @@ def resolve_trending_image_url(row: TrendingProduct) -> Optional[str]:
     if u:
         return u
     key = (row.image_key or "").strip()
-    if key and is_r2_configured():
+    if not key:
+        return None
+    # Prefer public base URL (works with WhatsApp / external services without presigning)
+    public_base = (getattr(settings, "r2_public_base_url", None) or "").strip().rstrip("/")
+    if public_base:
+        return f"{public_base}/{key}"
+    if is_r2_configured():
         try:
             return presign_get(key, settings.r2_presign_get_seconds)
         except Exception as e:
@@ -46,8 +52,11 @@ def resolve_trending_image_urls(row: TrendingProduct) -> List[str]:
         if primary_key not in keys:
             keys.insert(0, primary_key)
     resolved: List[str] = []
+    public_base = (getattr(settings, "r2_public_base_url", None) or "").strip().rstrip("/")
     for key in keys:
-        if is_r2_configured():
+        if public_base:
+            resolved.append(f"{public_base}/{key}")
+        elif is_r2_configured():
             try:
                 resolved.append(presign_get(key, settings.r2_presign_get_seconds))
             except Exception as e:

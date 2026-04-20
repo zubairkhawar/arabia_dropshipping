@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
     r2_presign_get_seconds: int = 3600
     # Optional public base for R2 (e.g. https://pub-xxxxx.r2.dev or custom domain). Used for stored image URLs.
     r2_public_base_url: Optional[str] = None
+    r2_public_url: Optional[str] = None  # alias — merged into r2_public_base_url below
     
     # JWT
     jwt_secret_key: str
@@ -71,6 +73,13 @@ class Settings(BaseSettings):
     smtp_user: Optional[str] = None
     smtp_password: Optional[str] = None
     smtp_from_email: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _merge_r2_public_url(self) -> "Settings":
+        """Accept R2_PUBLIC_URL as an alias for R2_PUBLIC_BASE_URL."""
+        if not self.r2_public_base_url and self.r2_public_url:
+            self.r2_public_base_url = self.r2_public_url
+        return self
 
     class Config:
         env_file = ".env"
