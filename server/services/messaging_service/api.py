@@ -2055,6 +2055,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             try:
                 wa_response = None
                 if isinstance(wa_images, list) and wa_images:
+                    # --- Phase 1: POST every image, wait for each to be ACKed
+                    # by Meta before moving on. Sequential awaits make our
+                    # outbound order deterministic; a tiny yield between
+                    # sends keeps the gallery visually tidy on the client.
+                    image_sends_attempted = 0
+                    image_sends_succeeded = 0
                     for idx, item in enumerate(wa_images):
                         if not isinstance(item, dict):
                             continue
@@ -2062,20 +2068,19 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                         if not img_url:
                             continue
                         cap = str(item.get("caption") or "").strip() or None
-                        # Sequential awaits mostly preserve order on Meta's
-                        # side, but back-to-back sends inside 100ms sometimes
-                        # reorder. A tiny yield keeps the gallery tidy.
                         if idx > 0:
                             try:
                                 await asyncio.sleep(0.15)
                             except Exception:
                                 pass
+                        image_sends_attempted += 1
                         try:
                             wa_response = await client.send_image_message(
                                 to_phone=from_phone,
                                 image_url=img_url,
                                 caption=cap,
                             )
+                            image_sends_succeeded += 1
                         except Exception:
                             logger.exception(
                                 "WhatsApp send_image_message failed (conversation_id=%s) url=%s",
@@ -2083,6 +2088,24 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                                 img_url[:160],
                             )
                             wa_response = {"error": "meta_image_send_failed"}
+                    # --- Phase 2: trailing text. Only fires after every
+                    # image POST above has been awaited. We add a short
+                    # breathing room before the FIRST text so Meta has time
+                    # to finalise delivery of the last image bubble — this
+                    # prevents the text from racing ahead of the last image
+                    # on the recipient's phone.
+                    logger.info(
+                        "WhatsApp bot reply: conversation_id=%s images_sent=%d/%d tail_parts=%d",
+                        conversation.id,
+                        image_sends_succeeded,
+                        image_sends_attempted,
+                        len(wa_tail_parts),
+                    )
+                    if image_sends_succeeded and wa_tail_parts:
+                        try:
+                            await asyncio.sleep(0.5)
+                        except Exception:
+                            pass
                     for _pi, _part in enumerate(wa_tail_parts):
                         if _pi > 0:
                             try:
