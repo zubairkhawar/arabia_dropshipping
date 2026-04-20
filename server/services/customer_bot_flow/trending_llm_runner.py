@@ -430,15 +430,18 @@ _ALLOWED_STATES = {"trending_active", "trending_awaiting_country", "done"}
 _ALLOWED_MODES = {"trending", "non_trending"}
 _ALLOWED_COUNTRIES = {"KSA", "UAE", "PK"}
 
-# Regexes that catch common "I just rattled off a product list" patterns.
-# If product_ids_shown is empty but the text contains any of these, the LLM
-# almost certainly invented items — reject the whole turn.
-_LIST_LINE_PATTERNS = (
+# Strict signals that mean the LLM rattled off a product list even though
+# product_ids_shown is empty. Any match here → reject the turn.
+_STRICT_LIST_SIGNALS = (
     re.compile(r"[1-9]\s*[\uFE0F]?\u20E3"),                 # 1️⃣ … 9️⃣
     re.compile(r"\U0001F51F"),                              # 🔟
-    re.compile(r"(?mi)^\s*\d+[\).\-]\s*\S"),                # "1) Foo" / "1. Foo" / "1 - Foo"
     re.compile(r"(?i)\b\d+(?:[.,]\d+)?\s*(?:SAR|AED|PKR|Rs\.?)\b"),
 )
+# Plain numbered bullets ("1) Foo", "1. Foo", "1 - Foo"). The LLM legitimately
+# uses these to present two or three clarification choices — we only treat
+# them as a hallucinated list when there are *many* in a row.
+_PLAIN_NUMBERED_BULLET = re.compile(r"(?mi)^\s*\d+[\).\-]\s*\S")
+_PLAIN_NUMBERED_BULLET_THRESHOLD = 3
 
 # Substrings that, if the model pastes them into reply_text, we scrub —
 # these are the kb_wrap footers the outer orchestrator owns. The runner's
@@ -474,9 +477,13 @@ def _scrub_reply_footer(text: str) -> str:
 
 
 def _looks_like_product_listing(text: str) -> bool:
-    for rx in _LIST_LINE_PATTERNS:
+    for rx in _STRICT_LIST_SIGNALS:
         if rx.search(text):
             return True
+    # Plain numbered bullets ("1) … 2) … 3) …"): a short option menu is fine,
+    # but 3+ lines in a row strongly implies an invented product list.
+    if len(_PLAIN_NUMBERED_BULLET.findall(text)) >= _PLAIN_NUMBERED_BULLET_THRESHOLD:
+        return True
     return False
 
 
@@ -700,13 +707,15 @@ async def run_trending_llm(
 
     data = _parse_json(raw)
     if data is None:
-        logger.warning("trending_llm_runner: could not parse LLM output: %r", raw[:200])
+        logger.warning("trending_llm_runner: could not parse LLM output: %r", raw[:1200])
         return TrendingLLMResult(ok=False, failure_reason="unparseable_json")
 
     ok, clean, reason = _validate_and_scrub(data, products=products, prior_memory=memory)
     if not ok:
         logger.warning(
-            "trending_llm_runner: validation failed reason=%s raw=%r", reason, raw[:200]
+            "trending_llm_runner: validation failed reason=%s raw=%r",
+            reason,
+            raw[:1200],
         )
         return TrendingLLMResult(ok=False, failure_reason=reason)
 

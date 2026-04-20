@@ -757,6 +757,82 @@ def _append_trending_followup_suggestions(
     return f"{base}{block}".strip() if block else base
 
 
+_EMPTY_CATALOG_FOLLOWUPS: Dict[str, Dict[str, List[str]]] = {
+    "en": {
+        "trending": [
+            "Show trending in {other_a}",
+            "Show trending in {other_b}",
+            "Show non-trending in {country}",
+        ],
+        "non_trending": [
+            "Show non-trending in {other_a}",
+            "Show non-trending in {other_b}",
+            "Show trending in {country}",
+        ],
+    },
+    "ar": {
+        "trending": [
+            "أرني المنتجات الرائجة في {other_a}",
+            "أرني المنتجات الرائجة في {other_b}",
+            "أرني المنتجات غير الرائجة في {country}",
+        ],
+        "non_trending": [
+            "أرني المنتجات غير الرائجة في {other_a}",
+            "أرني المنتجات غير الرائجة في {other_b}",
+            "أرني المنتجات الرائجة في {country}",
+        ],
+    },
+    "roman_urdu": {
+        "trending": [
+            "{other_a} ke trending products dikhao",
+            "{other_b} ke trending products dikhao",
+            "{country} ke non-trending products dikhao",
+        ],
+        "non_trending": [
+            "{other_a} ke non-trending products dikhao",
+            "{other_b} ke non-trending products dikhao",
+            "{country} ke trending products dikhao",
+        ],
+    },
+    "ur": {
+        "trending": [
+            "{other_a} کے ٹرینڈنگ پراڈکٹس دکھاؤ",
+            "{other_b} کے ٹرینڈنگ پراڈکٹس دکھاؤ",
+            "{country} کے غیر ٹرینڈنگ پراڈکٹس دکھاؤ",
+        ],
+        "non_trending": [
+            "{other_a} کے غیر ٹرینڈنگ پراڈکٹس دکھاؤ",
+            "{other_b} کے غیر ٹرینڈنگ پراڈکٹس دکھاؤ",
+            "{country} کے ٹرینڈنگ پراڈکٹس دکھاؤ",
+        ],
+    },
+}
+
+
+def _empty_catalog_followups(country_code: str, mode: str, lang: str) -> List[str]:
+    """Three short next-step suggestions shown below an empty-catalogue reply.
+
+    Example (trending, UAE, roman_urdu):
+        • KSA ke trending products dikhao
+        • Pakistan ke trending products dikhao
+        • UAE ke non-trending products dikhao
+    """
+    if not bool(getattr(settings, "llm_followup_suggestions", True)):
+        return []
+    normalized_mode = "non_trending" if mode == "non_trending" else "trending"
+    lang_map = _EMPTY_CATALOG_FOLLOWUPS.get(lang) or _EMPTY_CATALOG_FOLLOWUPS["en"]
+    templates = lang_map.get(normalized_mode) or lang_map["trending"]
+    other_a, other_b = _trending_followup_other_markets(country_code)
+    country_label = _trending_footer_country_label(country_code)
+    out: List[str] = []
+    for tpl in templates:
+        try:
+            out.append(tpl.format(country=country_label, other_a=other_a, other_b=other_b))
+        except (IndexError, KeyError):
+            continue
+    return out
+
+
 def _exit_trending_for_greeting(flow: Dict[str, Any], flow_lang: str) -> Tuple[Dict[str, Any], str]:
     """Leave trending steps on hi/hello; keep customer_kind when set, else show new/existing greeting."""
     nf = {**flow, "lang": flow_lang}
@@ -2758,6 +2834,11 @@ class BotFlowResult:
     """Follow-up text(s) after image(s) on WhatsApp. Pass a list to emit each
     string as its own message (e.g. list + footer first, then a separate
     \"you might also want to ask…\" suggestion bubble)."""
+    suppress_kb_wrap: bool = False
+    """If True, the orchestrator MUST NOT append the kb_wrap footer even when
+    ``skip_store_api and bot.last_reply_used_kb``. Used by the trending flow's
+    fallback path so bail-to-LLM replies don't accidentally leak website /
+    support boilerplate while we're still inside a trending conversation."""
 
 
 async def process_customer_bot_message(
@@ -2850,17 +2931,26 @@ async def process_customer_bot_message(
             whatsapp_text_after_images=wa_text_after,
         )
 
-    def ai_forward(msg: str, f: Dict[str, Any], skip_api: bool):
+    def ai_forward(
+        msg: str,
+        f: Dict[str, Any],
+        skip_api: bool,
+        *,
+        suppress_kb_wrap: bool = False,
+    ):
         deterministic = _deterministic_kb_answer(msg, flow_lang)
         if deterministic:
+            if suppress_kb_wrap:
+                return save(f, deterministic, skip_api=True)
             return save(
                 f,
                 format_kb_reply(flow_lang, deterministic),
                 skip_api=True,
             )
         logger.debug(
-            "customer_bot_flow ai_forward skip_store_api=%s preview=%s",
+            "customer_bot_flow ai_forward skip_store_api=%s suppress_kb_wrap=%s preview=%s",
             skip_api,
+            suppress_kb_wrap,
             (msg or "")[:160].replace("\n", " "),
         )
         f["lang"] = flow_lang
@@ -2875,6 +2965,7 @@ async def process_customer_bot_message(
             handled=True,
             whatsapp_image_outbound=None,
             whatsapp_text_after_images=None,
+            suppress_kb_wrap=suppress_kb_wrap,
         )
 
     def _show_trending_for_country(
@@ -2916,7 +3007,26 @@ async def process_customer_bot_message(
                     country=_trending_footer_country_label(cc)
                 )
             retry = _t(flow_lang, MSGS["trending_country_retry"])
-            return save(nf, f"{no_msg}\n\n{retry}")
+            # Offer a few quick next-step suggestions so the empty-catalogue
+            # fallback still feels conversational (matches the LLM-runner UX
+            # where every turn ends with a short suggestion bubble).
+            followup_suggestions = _empty_catalog_followups(cc, mode, flow_lang)
+            followup_text = (
+                "\n".join(f"• {s}" for s in followup_suggestions)
+                if followup_suggestions
+                else ""
+            )
+            ch = (channel or "").strip().lower()
+            if ch == "whatsapp" and followup_text:
+                return save(
+                    nf,
+                    f"{no_msg}\n\n{retry}",
+                    wa_text_after=followup_text,
+                )
+            full = f"{no_msg}\n\n{retry}"
+            if followup_text:
+                full = f"{full}\n\n{followup_text}"
+            return save(nf, full)
         has_more = offset + len(page) < len(visible)
         fk, needs_c = _trending_footer_template_key(
             first_batch=True, has_more=has_more, mode=mode,
@@ -3376,7 +3486,12 @@ async def process_customer_bot_message(
             return save(nf, greet_reply, skip_api=False)
         if _is_natural_language(text) and _parse_trending_country_reply(text) is None:
             nf = _bail_to_conversational(flow, flow_lang)
-            return ai_forward(text, nf, skip_api=_default_skip_store_api(nf))
+            return ai_forward(
+                text,
+                nf,
+                skip_api=_default_skip_store_api(nf),
+                suppress_kb_wrap=True,
+            )
         cc = _parse_trending_country_reply(text)
         if not cc:
             return save(flow, _t(flow_lang, MSGS["trending_country_retry"]))
@@ -3402,9 +3517,15 @@ async def process_customer_bot_message(
             nf = _conversation_bail_from_trending(flow, flow_lang)
             hint = (
                 "[Context: Trending product list was not available in session. "
-                "Help them choose a country for trending products or answer their message naturally.]\n"
+                "Help them choose a country for trending products or answer their message naturally. "
+                'Do not end with a website URL, "type support", or any boilerplate sign-off.]\n'
             )
-            return ai_forward(hint + text, nf, skip_api=_default_skip_store_api(nf))
+            return ai_forward(
+                hint + text,
+                nf,
+                skip_api=_default_skip_store_api(nf),
+                suppress_kb_wrap=True,
+            )
 
         if _wants_trending_more(text):
             off_raw = flow.get("trending_offset")
@@ -3627,8 +3748,17 @@ async def process_customer_bot_message(
         if names:
             hint_parts.append(f"Last page shown (list numbers for reference): {names}.")
         hint_parts.append('They can ask by number, general questions about Arabia Dropshipping, or acknowledgments.]')
+        hint_parts.append('Do not end with a website URL, "type support", or any boilerplate sign-off.')
         hint = " ".join(hint_parts) + "\n"
-        return ai_forward(hint + text, nf, skip_api=_default_skip_store_api(nf))
+        # suppress_kb_wrap: the LLM runner already had a turn and declined.
+        # We still let LangChain craft a natural reply, but we must not tack
+        # on the kb_wrap website / support footer inside the trending flow.
+        return ai_forward(
+            hint + text,
+            nf,
+            skip_api=_default_skip_store_api(nf),
+            suppress_kb_wrap=True,
+        )
 
     if step == "sourcing_collecting_details":
         # Customer is providing product details for sourcing — collect and hand off
