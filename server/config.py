@@ -56,6 +56,15 @@ class Settings(BaseSettings):
     # set CUSTOMER_BOT_INACTIVITY_RESET_DAYS=0 to disable.
     customer_bot_inactivity_reset_days: int = 7
 
+    # Customer bot: route the trending / non-trending product flow through the LLM-driven
+    # runner instead of the deterministic state machine. "off" keeps legacy logic;
+    # "shadow" runs the LLM in parallel (logs only, deterministic reply wins); "on" uses the
+    # LLM reply and falls back to deterministic only on failure.
+    trending_llm_mode: str = "on"
+    # Optional comma-separated allowlist of customer phones that opt into the LLM
+    # trending flow regardless of ``trending_llm_mode``. Leave empty to apply the mode to all.
+    trending_llm_allowlist: str = ""
+
     # Customer bot: script verification (email/mobile) expires after N days. Default 3;
     # set CUSTOMER_BOT_VERIFICATION_EXPIRY_DAYS=0 to disable auto-expiry.
     customer_bot_verification_expiry_days: int = 3

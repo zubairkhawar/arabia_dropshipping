@@ -39,6 +39,11 @@ from services.human_handoff_intent import (
     wants_human_agent,
 )
 from services.customer_bot_flow.templates import BOT_FLOW_TEMPLATES
+from services.customer_bot_flow.trending_llm_runner import (
+    TrendingLLMResult,
+    memory_to_flow_patch,
+    run_trending_llm,
+)
 from services.tenant_schedule_text import format_tenant_schedule_for_customer
 try:
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -649,6 +654,44 @@ def _trending_tpl(mode: str, key: str) -> str:
         if mapped in MSGS:
             return mapped
     return key
+
+
+# ---------------------------------------------------------------------------
+# LLM-driven trending flow gating
+# ---------------------------------------------------------------------------
+
+
+def _trending_llm_mode_global() -> str:
+    """Return the globally-configured LLM mode: "off" | "shadow" | "on"."""
+
+    mode = str(getattr(settings, "trending_llm_mode", "") or "").strip().lower()
+    if mode not in {"off", "shadow", "on"}:
+        return "off"
+    return mode
+
+
+def _trending_llm_allowlist_tokens() -> frozenset[str]:
+    raw = str(getattr(settings, "trending_llm_allowlist", "") or "")
+    tokens = {t.strip().lower() for t in raw.split(",") if t.strip()}
+    return frozenset(tokens)
+
+
+def _trending_llm_effective_mode(phone: Optional[str]) -> str:
+    """Resolve the effective mode for *this* conversation.
+
+    Allowlist semantics: if the allowlist is non-empty, only matching
+    customer phones get the configured mode; everyone else stays on "off".
+    If the allowlist is empty, the global mode applies to everyone.
+    """
+
+    base = _trending_llm_mode_global()
+    if base == "off":
+        return "off"
+    allow = _trending_llm_allowlist_tokens()
+    if not allow:
+        return base
+    ident = str(phone or "").strip().lower()
+    return base if ident and ident in allow else "off"
 TRENDING_CATEGORY_ALIASES: Dict[str, tuple[str, ...]] = {
     "Electronics": ("electronics", "electronic", "gadgets", "gadget", "mobile", "phone"),
     "Fashion": ("fashion", "clothes", "clothing", "apparel"),
@@ -2937,6 +2980,154 @@ async def process_customer_bot_message(
                 wa_aft = [first_bubble, followup] if followup else [first_bubble]
         return save(nf, full_reply, wa_images=wa_imgs, wa_text_after=wa_aft)
 
+    async def _try_trending_llm(entry_intent: Optional[str] = None) -> Optional[BotFlowResult]:
+        """Delegate this turn to the LLM-driven trending runner, when enabled.
+
+        Returns ``None`` if the flag is off, the runner fails, or the current
+        user is not in the allowlist — in which case the caller must continue
+        with the deterministic path. On success, returns a ready-to-send
+        ``BotFlowResult`` mirroring the legacy WhatsApp-split layout.
+
+        ``entry_intent`` is a soft hint ("trending" or "non_trending") that
+        callers set when they've already classified the turn as a trending
+        entry request; it seeds the memory so the runner doesn't have to
+        re-derive it from the raw message.
+        """
+
+        effective = _trending_llm_effective_mode(phone)
+        if effective not in {"shadow", "on"}:
+            return None
+
+        # Build a compact conversation-history block so the LLM has context.
+        history_block = ""
+        try:
+            if conversation is not None and getattr(conversation, "id", None):
+                rows = (
+                    db.query(Message)
+                    .filter(Message.conversation_id == conversation.id)
+                    .order_by(desc(Message.id))
+                    .limit(8)
+                    .all()
+                )
+                rows.reverse()
+                lines: List[str] = []
+                for m in rows:
+                    label = "Customer" if m.sender_type == "customer" else (
+                        "Agent" if m.sender_type == "agent" else "Bot"
+                    )
+                    body = (m.content or "").strip().replace("\n", " ")
+                    if len(body) > 400:
+                        body = body[:397] + "…"
+                    if body:
+                        lines.append(f"{label}: {body}")
+                history_block = "\n".join(lines)
+        except Exception:  # pragma: no cover — history is best-effort
+            logger.exception("trending_llm: loading history failed")
+
+        seed_flow = dict(flow)
+        if entry_intent in {"trending", "non_trending"}:
+            seed_flow["trending_mode"] = entry_intent
+            # Entry requests always start from a clean list; don't leak
+            # shown_ids from a previous session.
+            seed_flow["trending_shown_ids"] = []
+
+        try:
+            llm_result = await run_trending_llm(
+                user_message=text,
+                channel=ch,
+                language=flow_lang,
+                flow=seed_flow,
+                db=db,
+                tenant_id=tenant_id,
+                conversation_history_block=history_block,
+            )
+        except Exception:
+            logger.exception("trending_llm: runner crashed; falling back")
+            return None
+
+        if not llm_result.ok:
+            logger.info("trending_llm: runner ok=False reason=%s — falling back",
+                        llm_result.failure_reason)
+            return None
+
+        # Shadow mode: log what the LLM would have said but keep the legacy
+        # reply the caller is about to build. Returning ``None`` triggers
+        # the fallback path.
+        if effective == "shadow":
+            logger.info(
+                "trending_llm_shadow: state=%s esc=%s chars=%d images=%d",
+                llm_result.state,
+                llm_result.escalate,
+                len(llm_result.reply_text),
+                len(llm_result.image_urls),
+            )
+            return None
+
+        return _build_botflowresult_from_llm(llm_result)
+
+    def _build_botflowresult_from_llm(llm_result: TrendingLLMResult) -> BotFlowResult:
+        """Turn a ``TrendingLLMResult`` into the flow's BotFlowResult contract."""
+
+        mem_patch = memory_to_flow_patch(llm_result.memory)
+        nf = {**flow, "lang": flow_lang}
+
+        if llm_result.state == "trending_awaiting_country":
+            nf["step"] = "trending_awaiting_country"
+        elif llm_result.state == "trending_active":
+            nf["step"] = "trending_showing_products"
+        else:
+            # state == "done" — leave the trending flow.
+            nf["step"] = "conversational"
+            nf["intro_shown"] = bool(flow.get("intro_shown") or True)
+            # Wipe trending-specific keys so the next turn starts clean.
+            for k in TRENDING_STATE_KEYS:
+                nf.pop(k, None)
+            nf["trending_shown_ids"] = []
+
+        # For active / awaiting states, persist the compact memory.
+        if llm_result.state in {"trending_active", "trending_awaiting_country"}:
+            nf.update(mem_patch)
+            # Keep legacy mirrors (country/mode) in sync so downstream
+            # helpers that still read them behave correctly.
+            if mem_patch.get("trending_country"):
+                nf["trending_country"] = mem_patch["trending_country"]
+            nf["trending_mode"] = mem_patch.get("trending_mode") or "trending"
+
+        # Compose the outgoing reply block. On web/portal we inline the
+        # suggestions; on WhatsApp we split them into a second bubble so
+        # the images → list → suggestions order stays readable.
+        reply_text = llm_result.reply_text.strip()
+        followup_text = ""
+        if llm_result.suggested_followups:
+            followup_lines = [f"• {line}" for line in llm_result.suggested_followups]
+            followup_text = "\n".join(followup_lines)
+
+        full_reply = (
+            f"{reply_text}\n\n{followup_text}".strip() if followup_text else reply_text
+        )
+
+        wa_imgs: Optional[List[Dict[str, str]]] = None
+        wa_after: Optional[Union[str, List[str]]] = None
+        if ch == "whatsapp" and llm_result.shown_products:
+            wa_l: List[Dict[str, str]] = []
+            for i, it in enumerate(llm_result.shown_products):
+                row_imgs = _wa_images_for_trending_row(it, rank=i + 1)
+                if row_imgs:
+                    wa_l.extend(row_imgs)
+            if wa_l:
+                wa_imgs = wa_l
+                wa_after = [reply_text, followup_text] if followup_text else [reply_text]
+
+        team = TEAM_NEW_CUSTOMER if llm_result.escalate else None
+        return save(
+            nf,
+            full_reply,
+            team=team,
+            esc=bool(llm_result.escalate),
+            wa_images=wa_imgs,
+            wa_text_after=wa_after,
+        )
+
     ch = (channel or "web").strip().lower()
     text = (user_message or "").strip()
 
@@ -3049,6 +3240,9 @@ async def process_customer_bot_message(
         # Trending / sourcing before the entry LLM so phrases like "Give me trending products"
         # are never treated as an unclear 1/2 menu reply.
         if _wants_non_trending_products(text):
+            llm_res = await _try_trending_llm(entry_intent="non_trending")
+            if llm_res is not None:
+                return llm_res
             inline_cc = _parse_trending_country_reply(text)
             base = {
                 **flow,
@@ -3064,6 +3258,9 @@ async def process_customer_bot_message(
             base["step"] = "trending_awaiting_country"
             return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
         if _wants_trending_products(text):
+            llm_res = await _try_trending_llm(entry_intent="trending")
+            if llm_res is not None:
+                return llm_res
             inline_cc = _parse_trending_country_reply(text)
             base = {
                 **flow,
@@ -3167,6 +3364,9 @@ async def process_customer_bot_message(
         return ai_forward(text, nf, skip_api=True)
 
     if step == "trending_awaiting_country":
+        llm_res = await _try_trending_llm()
+        if llm_res is not None:
+            return llm_res
         if _looks_like_greeting(text):
             nf, greet_reply = _exit_trending_for_greeting(flow, flow_lang)
             return save(nf, greet_reply, skip_api=False)
@@ -3179,6 +3379,9 @@ async def process_customer_bot_message(
         return _show_trending_for_country(cc, flow, text, mode=_trending_mode(flow))
 
     if step == "trending_showing_products":
+        llm_res = await _try_trending_llm()
+        if llm_res is not None:
+            return llm_res
         cache_raw = flow.get("trending_products_cache")
         cache: List[Dict[str, Any]] = cache_raw if isinstance(cache_raw, list) else []
         all_raw = flow.get("trending_products_all")
@@ -3659,6 +3862,9 @@ async def process_customer_bot_message(
         kind = flow.get("customer_kind")
 
         if _wants_non_trending_products(text):
+            llm_res = await _try_trending_llm(entry_intent="non_trending")
+            if llm_res is not None:
+                return llm_res
             inline_cc = _parse_trending_country_reply(text)
             base = {
                 **flow,
@@ -3673,6 +3879,9 @@ async def process_customer_bot_message(
             base["step"] = "trending_awaiting_country"
             return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
         if _wants_trending_products(text):
+            llm_res = await _try_trending_llm(entry_intent="trending")
+            if llm_res is not None:
+                return llm_res
             inline_cc = _parse_trending_country_reply(text)
             base = {
                 **flow,
