@@ -853,6 +853,35 @@ def _wa_caption_for_trending_row(it: Dict[str, Any], *, rank: Optional[int] = No
     return f"📦 {name}"
 
 
+def _wa_images_for_trending_row(
+    it: Dict[str, Any], *, rank: Optional[int] = None
+) -> List[Dict[str, str]]:
+    """Build the WhatsApp image payload(s) for a single trending product.
+
+    The first entry carries the caption; subsequent images use an empty
+    caption so they render as a compact gallery under the first one. Covers
+    both the multi-image ``image_urls`` list (populated by the resolver) and
+    the legacy single ``image_url`` field.
+    """
+    urls: List[str] = []
+    raw = it.get("image_urls")
+    if isinstance(raw, list):
+        for u in raw:
+            s = str(u or "").strip()
+            if s and s not in urls:
+                urls.append(s)
+    primary = str(it.get("image_url") or "").strip()
+    if primary and primary not in urls:
+        urls.insert(0, primary)
+    if not urls:
+        return []
+    caption = _wa_caption_for_trending_row(it, rank=rank)
+    out: List[Dict[str, str]] = [{"image_url": urls[0], "caption": caption}]
+    for u in urls[1:]:
+        out.append({"image_url": u, "caption": ""})
+    return out
+
+
 def _trending_global_rank(visible: List[Dict[str, Any]], row: Dict[str, Any]) -> Optional[int]:
     rid = row.get("id")
     if rid is not None:
@@ -2684,16 +2713,18 @@ async def process_customer_bot_message(
             wa_l: List[Dict[str, str]] = []
             no_u: List[str] = []
             for i, it in enumerate(page):
-                url = (it.get("image_url") or "").strip()
-                cap = _wa_caption_for_trending_row(it, rank=offset + i + 1)
+                row_imgs = _wa_images_for_trending_row(it, rank=offset + i + 1)
                 logger.info(
-                    "trending WA image: product=%s image_url=%s",
+                    "trending WA images: country=%s product=%s images=%d first_url=%s",
+                    cc,
                     (it.get("product_name") or "")[:40],
-                    url[:120] if url else "(empty)",
+                    len(row_imgs),
+                    (row_imgs[0]["image_url"][:120] if row_imgs else "(none)"),
                 )
-                if url:
-                    wa_l.append({"image_url": url, "caption": cap})
+                if row_imgs:
+                    wa_l.extend(row_imgs)
                 else:
+                    cap = _wa_caption_for_trending_row(it, rank=offset + i + 1)
                     no_u.append(f"{cap}\n(no image URL — open chat on web for full list)")
             if wa_l:
                 wa_imgs = wa_l
@@ -2991,11 +3022,17 @@ async def process_customer_bot_message(
                 wa_list2: List[Dict[str, str]] = []
                 no_url2: List[str] = []
                 for i, it in enumerate(page):
-                    url = (it.get("image_url") or "").strip()
-                    cap = _wa_caption_for_trending_row(it, rank=new_offset + i + 1)
-                    if url:
-                        wa_list2.append({"image_url": url, "caption": cap})
+                    row_imgs = _wa_images_for_trending_row(it, rank=new_offset + i + 1)
+                    logger.info(
+                        "trending WA images (more): country=%s product=%s images=%d",
+                        cc,
+                        (it.get("product_name") or "")[:40],
+                        len(row_imgs),
+                    )
+                    if row_imgs:
+                        wa_list2.extend(row_imgs)
                     else:
+                        cap = _wa_caption_for_trending_row(it, rank=new_offset + i + 1)
                         no_url2.append(f"{cap}\n(no image URL — open chat on web for full list)")
                 if wa_list2:
                     wa_after2 = full_reply.strip()
@@ -3057,11 +3094,18 @@ async def process_customer_bot_message(
                 wa_list: List[Dict[str, str]] = []
                 no_url_lines: List[str] = []
                 for i, it in enumerate(page):
-                    url = (it.get("image_url") or "").strip()
-                    cap = _wa_caption_for_trending_row(it, rank=offset + i + 1)
-                    if url:
-                        wa_list.append({"image_url": url, "caption": cap})
+                    row_imgs = _wa_images_for_trending_row(it, rank=offset + i + 1)
+                    logger.info(
+                        "trending WA images (category=%s): country=%s product=%s images=%d",
+                        wanted_category,
+                        cc,
+                        (it.get("product_name") or "")[:40],
+                        len(row_imgs),
+                    )
+                    if row_imgs:
+                        wa_list.extend(row_imgs)
                     else:
+                        cap = _wa_caption_for_trending_row(it, rank=offset + i + 1)
                         no_url_lines.append(f"{cap}\n(no image URL — open chat on web for full list)")
                 if wa_list:
                     wa_after = full_reply.strip()
@@ -3094,14 +3138,19 @@ async def process_customer_bot_message(
                 detail_msg = _t(flow_lang, MSGS["trending_product_detail_missing"]).format(name=nm)
             detail_msg = _append_trending_followup_suggestions(flow_lang, cc, detail_msg)
             if ch == "whatsapp":
-                img_u = str(p.get("image_url") or "").strip()
-                if img_u:
-                    rk = _trending_global_rank(visible, p)
-                    cap = _wa_caption_for_trending_row(p, rank=rk) if rk else _wa_caption_for_trending_row(p)
+                rk = _trending_global_rank(visible, p)
+                row_imgs = _wa_images_for_trending_row(p, rank=rk)
+                logger.info(
+                    "trending WA images (detail): country=%s product=%s images=%d",
+                    cc,
+                    nm[:40],
+                    len(row_imgs),
+                )
+                if row_imgs:
                     return save(
                         nf,
                         detail_msg,
-                        wa_images=[{"image_url": img_u, "caption": cap}],
+                        wa_images=row_imgs,
                         wa_text_after=detail_msg,
                     )
             return save(nf, detail_msg)
