@@ -3159,22 +3159,9 @@ async def process_customer_bot_message(
             else:
                 detail_msg = _t(flow_lang, MSGS["trending_product_detail_missing"]).format(name=nm)
             detail_msg = _append_trending_followup_suggestions(flow_lang, cc, detail_msg)
-            if ch == "whatsapp":
-                rk = _trending_global_rank(visible, p)
-                row_imgs = _wa_images_for_trending_row(p, rank=rk)
-                logger.info(
-                    "trending WA images (detail): country=%s product=%s images=%d",
-                    cc,
-                    nm[:40],
-                    len(row_imgs),
-                )
-                if row_imgs:
-                    return save(
-                        nf,
-                        detail_msg,
-                        wa_images=row_imgs,
-                        wa_text_after=detail_msg,
-                    )
+            # Product-detail replies are text-only. Images were already sent
+            # with the trending list, so re-sending them when the user asks
+            # "tell me more about this" would be noisy/redundant.
             return save(nf, detail_msg)
 
         # Anything else (thanks, acknowledgments in any language, questions, noise):
