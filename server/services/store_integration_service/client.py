@@ -291,20 +291,36 @@ class StoreIntegrationClient:
         seller_id: str,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        all_invoices: bool = False,
+        invoice_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        GET /customers/invoice?seller_id={seller_id}[&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD]
+        GET /customers/invoice?seller_id={seller_id}
+            [&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD]
+            [&all=1]
+            [&invoice_id={id}]
+
+        Returns the raw invoice payload. When `all_invoices` is True the
+        response typically carries `invoices: [...]` with `total` count;
+        otherwise it's a single latest-invoice object under `invoice`.
         """
         if not self.base_url:
             return {}
         sid = (seller_id or "").strip()
-        if not sid:
+        if not sid and not (invoice_id or "").strip():
             return {}
-        params: Dict[str, Any] = {"seller_id": sid}
+        params: Dict[str, Any] = {}
+        if sid:
+            params["seller_id"] = sid
         if (date_from or "").strip():
             params["date_from"] = date_from.strip()
         if (date_to or "").strip():
             params["date_to"] = date_to.strip()
+        if all_invoices:
+            params["all"] = 1
+        iid = (invoice_id or "").strip()
+        if iid:
+            params["invoice_id"] = iid
         try:
             async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
                 resp = await client.get("/customers/invoice", params=params)
@@ -319,6 +335,36 @@ class StoreIntegrationClient:
                 return {}
         except httpx.HTTPError:
             return {}
+
+    async def get_order_invoice_mapping(
+        self, order_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        GET /orders/{order_id}/invoice
+
+        Returns the invoice that contains the given order, or None.
+        The payload mirrors a single invoice object: typically
+        `{"invoice": {date, payable, pay_status, order_ids, ...}}`.
+        """
+        if not self.base_url:
+            return None
+        oid = (order_id or "").strip()
+        if not oid:
+            return None
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.base_url, headers=self._headers(), timeout=10.0
+            ) as client:
+                resp = await client.get(f"/orders/{oid}/invoice")
+                if resp.status_code == 404:
+                    return None
+                resp.raise_for_status()
+                payload = resp.json()
+                if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+                    return payload.get("data")
+                return payload if isinstance(payload, dict) else None
+        except httpx.HTTPError:
+            return None
 
     async def get_orders_all(
         self,

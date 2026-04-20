@@ -1774,6 +1774,275 @@ def _legacy_format_order_details(lang: str, o: Dict[str, Any]) -> str:  # pragma
     return " ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Invoice + tracking intents and formatters
+# ---------------------------------------------------------------------------
+
+_ORDER_INVOICE_MARKERS = (
+    "invoice for order",
+    "invoice of order",
+    "which invoice",
+    "order invoice",
+    "invoice for this order",
+    "order ka invoice",
+    "is order ka invoice",
+    "order ki invoice",
+    "فاتورة الطلب",
+    "فاتورة هذا الطلب",
+)
+_LATEST_INVOICE_MARKERS = (
+    "my invoice",
+    "my latest invoice",
+    "latest invoice",
+    "current invoice",
+    "recent invoice",
+    "last invoice",
+    "meri invoice",
+    "meri latest invoice",
+    "meri recent invoice",
+    "آخر فاتورة",
+    "فاتورتي",
+    "الفاتورة الحالية",
+)
+_ALL_INVOICES_MARKERS = (
+    "all my invoices",
+    "all invoices",
+    "invoice history",
+    "all invoice",
+    "how many invoices",
+    "total invoices",
+    "meri sari invoices",
+    "saari invoices",
+    "sari invoice",
+    "kitni invoices",
+    "kitne invoices",
+    "كل فواتيري",
+    "جميع الفواتير",
+    "كم فاتورة",
+)
+_TRACKING_INTENT_MARKERS = (
+    "track",
+    "tracking",
+    "شحنة",
+    "تتبع",
+    "tracking number",
+    "tracking id",
+)
+
+
+def _looks_like_invoice_for_order(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(m in t for m in _ORDER_INVOICE_MARKERS)
+
+
+def _looks_like_latest_invoice(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if _looks_like_invoice_for_order(text):
+        return False
+    if _looks_like_all_invoices(text):
+        return False
+    return any(m in t for m in _LATEST_INVOICE_MARKERS)
+
+
+def _looks_like_all_invoices(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(m in t for m in _ALL_INVOICES_MARKERS)
+
+
+# Typical Arabia tracking IDs: PT + digits, or long digit-only refs.
+_TRACKING_ID_RE = re.compile(
+    r"\b((?:PT|AWB|PK|UAE|KSA|SP|SA|AE)[A-Z0-9]{4,})\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_tracking_id_from_message(text: str) -> str:
+    """Pull out an explicit tracking reference (e.g. PT25252071) if present."""
+    if not text:
+        return ""
+    m = _TRACKING_ID_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    # Fallback: "tracking number 11770000002800" → the trailing digit run.
+    t = text.lower()
+    if "tracking" in t:
+        m2 = re.search(r"\btracking(?:\s+(?:number|no|id|#))?\s*[:#]?\s*([A-Z0-9\-]{6,})", text, re.IGNORECASE)
+        if m2:
+            return m2.group(1).strip()
+    return ""
+
+
+def _looks_like_tracking_by_id(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    has_intent = any(m in t for m in _TRACKING_INTENT_MARKERS)
+    return bool(has_intent and _extract_tracking_id_from_message(text))
+
+
+def _extract_invoice(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Unwrap either `{invoice: {...}}` or a plain invoice dict."""
+    if not isinstance(payload, dict):
+        return {}
+    inner = payload.get("invoice")
+    if isinstance(inner, dict):
+        return inner
+    return payload
+
+
+def _format_invoice_sentence(
+    lang: str, inv: Dict[str, Any], *, for_order: Optional[str] = None
+) -> str:
+    """Build one natural sentence describing an invoice.
+
+    for_order: when provided the sentence is framed as "Order #X is in the
+    invoice dated DATE ..." otherwise "Your latest invoice dated DATE ...".
+    """
+    date = _pick(inv, "date")
+    payable = _pick(inv, "net_payable", "payable")
+    pay_status = _pick(inv, "pay_status")
+    items = _pick(inv, "no_of_items")
+    delivered = _pick(inv, "d_pkgs")
+    returned = _pick(inv, "r_pkgs")
+    penalties = _pick(inv, "penalties")
+    orders_field = inv.get("order_ids")
+    if isinstance(orders_field, list):
+        order_count = len([x for x in orders_field if x])
+    else:
+        order_count = 0
+
+    paid = pay_status.strip().lower() in ("yes", "paid", "true", "1")
+
+    if lang == "roman_urdu":
+        head = (
+            (f"Aapka order #{for_order} {date} wali invoice mein hai" if date
+             else f"Aapka order #{for_order} ek invoice mein hai")
+            if for_order
+            else (f"Aapki latest invoice {date} ki hai" if date else "Aapki latest invoice tayar hai")
+        )
+        bits: List[str] = []
+        if items:
+            bits.append(f"{items} items")
+        if delivered:
+            bits.append(f"{delivered} delivered")
+        if returned:
+            bits.append(f"{returned} returned")
+        tail: List[str] = []
+        if bits:
+            tail.append("(" + ", ".join(bits) + ")")
+        if payable:
+            status_word = "paid ho chuki" if paid else "abhi unpaid"
+            tail.append(f"payable {payable} AED, {status_word}")
+        if penalties and penalties not in ("0", "0.00", "0.0"):
+            tail.append(f"penalties {penalties} AED")
+        if order_count and not for_order:
+            tail.append(f"{order_count} orders shamil hain")
+        out = head + ((" " + ", ".join(tail)) if tail else "")
+        return out.rstrip(",. ") + "."
+
+    if lang == "arabic":
+        head = (
+            (f"طلبك رقم #{for_order} ضمن فاتورة بتاريخ {date}" if date
+             else f"طلبك رقم #{for_order} ضمن فاتورتك")
+            if for_order
+            else (f"أحدث فاتورة لك بتاريخ {date}" if date else "إليك أحدث فاتورة لك")
+        )
+        bits = []
+        if items:
+            bits.append(f"عدد العناصر: {items}")
+        if delivered:
+            bits.append(f"تم توصيل {delivered}")
+        if returned:
+            bits.append(f"تم إرجاع {returned}")
+        tail = []
+        if bits:
+            tail.append("(" + "، ".join(bits) + ")")
+        if payable:
+            status_word = "تم الدفع" if paid else "غير مدفوعة حالياً"
+            tail.append(f"المبلغ المستحق {payable} درهم، {status_word}")
+        if penalties and penalties not in ("0", "0.00", "0.0"):
+            tail.append(f"الغرامات: {penalties} درهم")
+        if order_count and not for_order:
+            tail.append(f"تشمل {order_count} طلبات")
+        out = head + ((" " + "، ".join(tail)) if tail else "")
+        return out.rstrip(",. ") + "."
+
+    # English (default)
+    head = (
+        (f"Your order #{for_order} is in the invoice dated {date}" if date
+         else f"Your order #{for_order} is on one of your invoices")
+        if for_order
+        else (f"Your latest invoice is dated {date}" if date else "Here is your latest invoice")
+    )
+    bits = []
+    if items:
+        bits.append(f"{items} items")
+    if delivered:
+        bits.append(f"{delivered} delivered")
+    if returned:
+        bits.append(f"{returned} returned")
+    tail = []
+    if bits:
+        tail.append("(" + ", ".join(bits) + ")")
+    if payable:
+        status_word = "paid" if paid else "currently unpaid"
+        tail.append(f"payable {payable} AED, {status_word}")
+    if penalties and penalties not in ("0", "0.00", "0.0"):
+        tail.append(f"penalties {penalties} AED")
+    if order_count and not for_order:
+        tail.append(f"covering {order_count} orders")
+    out = head + ((" " + ", ".join(tail)) if tail else "")
+    return out.rstrip(",. ") + "."
+
+
+def _format_all_invoices_sentence(lang: str, payload: Dict[str, Any]) -> str:
+    """Summary line for `all=1` invoices listing."""
+    total = payload.get("total")
+    invs = payload.get("invoices") if isinstance(payload.get("invoices"), list) else []
+    count = total if isinstance(total, int) else len(invs)
+    latest: Dict[str, Any] = invs[0] if invs and isinstance(invs[0], dict) else {}
+    latest_inv = _extract_invoice(latest) if isinstance(latest, dict) else {}
+    latest_date = _pick(latest_inv, "date") if latest_inv else ""
+    if lang == "roman_urdu":
+        base = f"Aapke account par kul {count} invoices hain" if count else "Abhi aapke account par koi invoice nahi hai"
+        if latest_date:
+            base += f"; sabse recent {latest_date} ki hai"
+        return base.rstrip(",. ") + "."
+    if lang == "arabic":
+        base = f"لديك إجمالي {count} فاتورة على حسابك" if count else "لا توجد فواتير على حسابك حالياً"
+        if latest_date:
+            base += f"؛ آخرها بتاريخ {latest_date}"
+        return base.rstrip(",. ") + "."
+    base = f"You have {count} invoices on your account in total" if count else "There are no invoices on your account right now"
+    if latest_date:
+        base += f"; the most recent is dated {latest_date}"
+    return base.rstrip(",. ") + "."
+
+
+def _format_tracking_sentence(lang: str, tr: Dict[str, Any]) -> str:
+    """Render a /tracking/{id} response as a single sentence."""
+    tid = _pick(tr, "shipped_ref", "tracking_number", "tracking_id") or _pick(tr, "id")
+    status = _pick(tr, "tracking_result", "status")
+    phrase = _humanize_status(status, lang) if status else ""
+    if lang == "roman_urdu":
+        head = f"Tracking number {tid}" if tid else "Yeh tracking number"
+        tail = f" {phrase}" if phrase else (f" ki status: {status}" if status else " ki status abhi available nahi hai")
+        return (head + " abhi" + (tail if phrase else tail)).rstrip(",. ") + "."
+    if lang == "arabic":
+        head = f"رقم التتبع {tid}" if tid else "هذا الشحنة"
+        tail = f" {phrase}" if phrase else (f" الحالة: {status}" if status else " الحالة غير متوفرة حالياً")
+        return (head + tail).rstrip(",. ") + "."
+    head = f"Tracking {tid}" if tid else "That tracking reference"
+    tail = f" {phrase}" if phrase else (f" — status: {status}" if status else " is not currently available")
+    return (head + tail).rstrip(",. ") + "."
+
+
 @dataclass
 class BotFlowResult:
     """Result of one customer message through the structured bot flow."""
@@ -2736,6 +3005,101 @@ async def process_customer_bot_message(
 
         # --- Existing customer (verified) path ---
         if flow.get("verified"):
+            # Tracking-by-number: explicit tracking ref like "track PT25252071".
+            if _looks_like_tracking_by_id(text):
+                tid = _extract_tracking_id_from_message(text)
+                if tid:
+                    try:
+                        tr = await store_client.get_tracking_status(
+                            tid, seller_id=flow.get("seller_id")
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.exception("tracking lookup failed for %s", tid)
+                        tr = None
+                    if tr:
+                        return save(
+                            {**flow, "step": "conversational", "lang": flow_lang},
+                            _format_tracking_sentence(flow_lang, tr),
+                        )
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _t(flow_lang, MSGS["tracking_lookup_error"]),
+                    )
+
+            # Invoice for a specific order: "which invoice is order 157955 in?"
+            if _looks_like_invoice_for_order(text):
+                ref = (_extract_order_id_from_message(text, phone) or "").strip()
+                if not ref and _is_likely_order_id_only(text):
+                    ref = re.sub(r"[^\d\-#]", "", (text or "").strip())
+                if ref:
+                    try:
+                        payload = await store_client.get_order_invoice_mapping(ref)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("order-invoice mapping lookup failed for %s", ref)
+                        payload = None
+                    inv = _extract_invoice(payload or {})
+                    if inv:
+                        return save(
+                            {**flow, "step": "conversational", "lang": flow_lang},
+                            _format_invoice_sentence(flow_lang, inv, for_order=ref),
+                        )
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _t(flow_lang, MSGS["invoice_not_found"]),
+                    )
+                # No order id yet → ask for one.
+                nf = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
+                return save(nf, _t(flow_lang, MSGS["ask_order"]))
+
+            # Latest / current invoice.
+            if _looks_like_latest_invoice(text):
+                sid = str(flow.get("seller_id") or "").strip()
+                if not sid:
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _t(flow_lang, MSGS["invoice_lookup_error"]),
+                    )
+                try:
+                    payload = await store_client.get_invoice_by_seller_id(sid)
+                except Exception:  # noqa: BLE001
+                    logger.exception("latest invoice lookup failed for seller_id=%s", sid)
+                    payload = {}
+                inv = _extract_invoice(payload or {})
+                if inv:
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _format_invoice_sentence(flow_lang, inv),
+                    )
+                return save(
+                    {**flow, "step": "conversational", "lang": flow_lang},
+                    _t(flow_lang, MSGS["invoice_not_found"]),
+                )
+
+            # All invoices summary.
+            if _looks_like_all_invoices(text):
+                sid = str(flow.get("seller_id") or "").strip()
+                if not sid:
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _t(flow_lang, MSGS["invoice_lookup_error"]),
+                    )
+                try:
+                    payload = await store_client.get_invoice_by_seller_id(
+                        sid, all_invoices=True
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("all-invoices lookup failed for seller_id=%s", sid)
+                    payload = {}
+                if payload:
+                    return save(
+                        {**flow, "step": "conversational", "lang": flow_lang},
+                        _format_all_invoices_sentence(flow_lang, payload),
+                    )
+                return save(
+                    {**flow, "step": "conversational", "lang": flow_lang},
+                    _t(flow_lang, MSGS["invoice_not_found"]),
+                )
+
             if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
                 ref = ""
                 if _is_likely_order_id_only(text):

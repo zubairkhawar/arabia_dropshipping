@@ -276,6 +276,48 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "ya **agent** / **support** likhein."
         ),
     },
+    "invoice_not_found": {
+        "english": (
+            "I couldn't find an invoice matching that request. "
+            "Please double-check the order/invoice number, or type **agent** for help."
+        ),
+        "arabic": (
+            "لم أتمكن من العثور على فاتورة مطابقة. "
+            "يرجى التحقق من رقم الطلب/الفاتورة، أو اكتب **agent** للمساعدة."
+        ),
+        "roman_urdu": (
+            "Koi matching invoice nahi mila. Order ya invoice number check karein, "
+            "ya **agent** likhein madad ke liye."
+        ),
+    },
+    "invoice_lookup_error": {
+        "english": (
+            "I'm having trouble reaching invoice data right now. Please try again in a moment, "
+            "or type **agent** / **support** if you need help."
+        ),
+        "arabic": (
+            "نواجه صعوبة في الوصول إلى بيانات الفاتورة حاليًا. يرجى المحاولة بعد قليل، "
+            "أو اكتب **agent** / **support** للمساعدة."
+        ),
+        "roman_urdu": (
+            "Abhi invoice data access mein masla aa raha hai. Thori dair baad dobara try karein, "
+            "ya **agent** / **support** likhein."
+        ),
+    },
+    "tracking_lookup_error": {
+        "english": (
+            "I couldn't pull tracking info for that number right now. Please double-check it, "
+            "or type **agent** / **support** for help."
+        ),
+        "arabic": (
+            "لم أتمكن من الحصول على معلومات التتبع لهذا الرقم الآن. يرجى التحقق منه، "
+            "أو اكتب **agent** / **support** للمساعدة."
+        ),
+        "roman_urdu": (
+            "Abhi is tracking number ki info nahi mil rahi. Number check karein, "
+            "ya **agent** / **support** likhein."
+        ),
+    },
     "connecting_agent_named": {
         "english": (
             "\n\nYou are now connected with {agent_name}. "
