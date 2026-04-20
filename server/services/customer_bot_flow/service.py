@@ -3828,6 +3828,24 @@ async def process_customer_bot_message(
         email = (text or "").strip().lower()
         if not _is_likely_email(email):
             return save(flow, _t(flow_lang, MSGS["email_invalid"]))
+        # Temporary debug path: skip the OTP round-trip and rely solely on the
+        # (email, mobile) match inside get_customer_by_email_mobile_first_hit.
+        # Controlled by CUSTOMER_BOT_SKIP_EMAIL_OTP so it can be flipped off
+        # without a code change once the store-API lookup is verified end-to-end.
+        if bool(getattr(settings, "customer_bot_skip_email_otp", False)):
+            logger.info(
+                "Verification flow: OTP bypassed (CUSTOMER_BOT_SKIP_EMAIL_OTP=true); "
+                "jumping straight to mobile for %s",
+                email,
+            )
+            f = {
+                **flow,
+                "pending_email": email,
+                "verified": False,
+                "step": "existing_awaiting_mobile",
+                "lang": flow_lang,
+            }
+            return save(f, _t(flow_lang, MSGS["ask_mobile"]))
         logger.info("Verification flow: sending code to %s", email)
         sent = await store_client.send_verification_code(email)
         logger.info("Verification flow: send_verification_code result for %s = %s", email, sent)

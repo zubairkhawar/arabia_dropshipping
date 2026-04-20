@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # set CUSTOMER_BOT_VERIFICATION_EXPIRY_DAYS=0 to disable auto-expiry.
     customer_bot_verification_expiry_days: int = 3
 
+    # Customer bot: temporarily bypass the email OTP step. When True, the existing-
+    # customer flow jumps straight from email → mobile, and identity is proven purely
+    # by a matching (email, mobile) pair in get_customer_by_email_mobile_first_hit.
+    # Leave False in production; flip to True (CUSTOMER_BOT_SKIP_EMAIL_OTP=true) only
+    # while debugging the store-API customer lookup end-to-end.
+    customer_bot_skip_email_otp: bool = False
+
     # Application
     environment: str = "development"
     debug: bool = True
