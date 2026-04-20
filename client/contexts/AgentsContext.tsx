@@ -223,15 +223,29 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
     const handleAuthChanged = () => {
       void hydrateFromSession();
     };
+    // Keep the in-memory agent list fresh when the admin deletes someone in another
+    // tab / window — otherwise inbox/rail avatars can linger after removal.
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void fetchAgentsListOnly();
+      }
+    };
+    const handleFocus = () => {
+      void fetchAgentsListOnly();
+    };
     if (typeof window !== 'undefined') {
       window.addEventListener('auth-changed', handleAuthChanged);
+      window.addEventListener('focus', handleFocus);
+      document.addEventListener('visibilitychange', handleVisibility);
     }
     return () => {
       if (typeof window !== 'undefined') {
         window.removeEventListener('auth-changed', handleAuthChanged);
+        window.removeEventListener('focus', handleFocus);
+        document.removeEventListener('visibilitychange', handleVisibility);
       }
     };
-  }, [hydrateFromSession]);
+  }, [hydrateFromSession, fetchAgentsListOnly]);
 
   const getCurrentAgent = useCallback(() => {
     if (!currentAgentId) return null;
@@ -388,14 +402,25 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
       try {
         const res = await fetch(`${API_BASE_URL}/api/agents/${numericId}`, {
           method: 'DELETE',
+          headers: getAuthHeaders(),
         });
-        if (!res.ok) return false;
+        if (!res.ok) {
+          // Server rejected the delete (e.g. FK integrity). Put the local list back in
+          // sync with the server so the admin doesn't see a phantom removal while the
+          // agent still exists in the DB.
+          void refreshAgents();
+          return false;
+        }
+        // Re-sync from server so any other cleanup (conversations reassigned, etc.)
+        // surfaces consistently across the app.
+        void refreshAgents();
         return true;
       } catch {
+        void refreshAgents();
         return false;
       }
     },
-    [agents],
+    [agents, refreshAgents],
   );
 
   const setAgentStatus = useCallback(

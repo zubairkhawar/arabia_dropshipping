@@ -17,6 +17,17 @@ from models import (
     TeamEvent,
     Notification,
     Team,
+    InboxMessageReceipt,
+    DmMessageReceipt,
+    AgentAttendanceSession,
+    TeamMessageReceipt,
+    TeamChannelMemberReadState,
+    ConversationAgentReadState,
+    InternalDmMemberReadState,
+    InternalDmConversation,
+    InternalDmMessage,
+    TeamAsset,
+    TeamChannelMessage,
 )
 from services.auth_service.api import get_current_user, get_current_user_optional
 from services.auth_service.services import get_password_hash
@@ -458,17 +469,91 @@ async def delete_agent(agent_id: int, db: Session = Depends(get_db)):
             {Notification.from_agent_id: None}, synchronize_session=False
         )
 
+        # Delivery / read-state rows all reference agents.id as NOT NULL, so they must
+        # be hard-deleted before the agent row can be removed.
+        db.query(InboxMessageReceipt).filter(InboxMessageReceipt.agent_id == agent.id).delete(
+            synchronize_session=False
+        )
+        db.query(TeamMessageReceipt).filter(TeamMessageReceipt.agent_id == agent.id).delete(
+            synchronize_session=False
+        )
+        db.query(DmMessageReceipt).filter(
+            DmMessageReceipt.recipient_agent_id == agent.id
+        ).delete(synchronize_session=False)
+        db.query(TeamChannelMemberReadState).filter(
+            TeamChannelMemberReadState.agent_id == agent.id
+        ).delete(synchronize_session=False)
+        db.query(ConversationAgentReadState).filter(
+            ConversationAgentReadState.agent_id == agent.id
+        ).delete(synchronize_session=False)
+        db.query(InternalDmMemberReadState).filter(
+            InternalDmMemberReadState.agent_id == agent.id
+        ).delete(synchronize_session=False)
+
+        # Attendance sessions — drop the deleted agent's shift history.
+        db.query(AgentAttendanceSession).filter(
+            AgentAttendanceSession.agent_id == agent.id
+        ).delete(synchronize_session=False)
+
+        # Internal DMs: cascade-delete any thread where this agent is a participant,
+        # along with their messages and remaining receipts / read states.
+        dm_convo_ids = [
+            row[0]
+            for row in db.query(InternalDmConversation.id)
+            .filter(
+                (InternalDmConversation.agent_one_id == agent.id)
+                | (InternalDmConversation.agent_two_id == agent.id)
+            )
+            .all()
+        ]
+        if dm_convo_ids:
+            dm_message_ids = [
+                row[0]
+                for row in db.query(InternalDmMessage.id)
+                .filter(InternalDmMessage.conversation_id.in_(dm_convo_ids))
+                .all()
+            ]
+            if dm_message_ids:
+                db.query(DmMessageReceipt).filter(
+                    DmMessageReceipt.message_id.in_(dm_message_ids)
+                ).delete(synchronize_session=False)
+            db.query(InternalDmMessage).filter(
+                InternalDmMessage.conversation_id.in_(dm_convo_ids)
+            ).delete(synchronize_session=False)
+            db.query(InternalDmMemberReadState).filter(
+                InternalDmMemberReadState.conversation_id.in_(dm_convo_ids)
+            ).delete(synchronize_session=False)
+            db.query(InternalDmConversation).filter(
+                InternalDmConversation.id.in_(dm_convo_ids)
+            ).delete(synchronize_session=False)
+
+        # Any DM messages *authored* by this agent in threads where they aren't a
+        # participant (shouldn't happen, but guard for data integrity) must also go.
+        db.query(InternalDmMessage).filter(
+            InternalDmMessage.sender_agent_id == agent.id
+        ).delete(synchronize_session=False)
+
+        # Team channel messages / assets have nullable agent refs: preserve history.
+        db.query(TeamChannelMessage).filter(
+            TeamChannelMessage.sender_agent_id == agent.id
+        ).update(
+            {TeamChannelMessage.sender_agent_id: None}, synchronize_session=False
+        )
+        db.query(TeamAsset).filter(TeamAsset.created_by_agent_id == agent.id).update(
+            {TeamAsset.created_by_agent_id: None}, synchronize_session=False
+        )
+
         db.delete(agent)
         if user:
             db.delete(user)
 
         db.commit()
         return
-    except Exception:
+    except Exception as exc:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to delete agent due to related records",
+            detail=f"Failed to delete agent due to related records: {exc.__class__.__name__}",
         )
 
 
