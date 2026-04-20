@@ -500,15 +500,42 @@ def _looks_like_order_status_question(text: str) -> bool:
     )
     strict_order_markers = (
         "my order",
+        "my orders",
         "mera order",
         "mere order",
+        "mere orders",
+        "meray order",
         "order status",
+        "order details",
+        "order detail",
+        "order info",
+        "order information",
+        "orders details",
+        "orders detail",
+        "order ki detail",
+        "order ki tafseel",
         "track my order",
         "track order",
         "tracking id",
         "where is my order",
         "order id",
         "delivery status",
+        # Asking intent with "order" → "i want/need/show my order(s)..."
+        "want order",
+        "want my order",
+        "want to see my order",
+        "need order",
+        "show order",
+        "show my order",
+        "show me order",
+        "show me my order",
+        "give me order",
+        "give my order",
+        "get my order",
+        "check my order",
+        "check order",
+        "view my order",
+        "view order",
     )
     # If this looks like an FAQ and has no strict order marker, keep it out of order flow.
     if any(m in t for m in info_markers) and not any(k in t for k in strict_order_markers):
@@ -1400,6 +1427,31 @@ def _wants_trending_products(text: str) -> bool:
     if _wants_non_trending_products(text):
         return False
     if re.search(r"\bnot\s+trending\b|\bnon[\s-]?trending\b|\bwithout\s+trending\b", flat):
+        return False
+    # Order / account intent owns messages that mention "order", "tracking",
+    # "invoice", "parcel", etc. — even "give me product details" type phrases
+    # that happen to share the word "product" with the browse-catalog flow.
+    # The trending catalog is for *browsing*; anything about a specific order
+    # or a specific product's spec sheet must never land here.
+    if re.search(r"\border(s|ed)?\b", flat):
+        return False
+    if re.search(
+        r"\b(tracking|track|parcel|package|invoice|invoices|billing|statement|shipment|shipments|delivery)\b",
+        flat,
+    ):
+        return False
+    # "product details / info / information / specs / specifications" → the user
+    # wants data about *a* product, not to browse the catalog. Let it fall
+    # through to KB / LLM answer path instead of opening the trending flow.
+    if re.search(
+        r"\bproducts?\s+(details?|info(?:rmation)?|specs?|specification|price|rate|cost)\b",
+        flat,
+    ):
+        return False
+    if re.search(
+        r"\b(details?|info(?:rmation)?)\s+(of|about|for|regarding)\s+(the\s+|a\s+|my\s+)?products?\b",
+        flat,
+    ):
         return False
     markers = (
         "trending",
@@ -2968,6 +3020,52 @@ async def process_customer_bot_message(
             suppress_kb_wrap=suppress_kb_wrap,
         )
 
+    def _maybe_escape_trending_for_order_intent(
+        msg_text: str,
+    ) -> Optional[BotFlowResult]:
+        """Break out of the trending flow when the user clearly asks about an order.
+
+        Returns ``None`` when the message is NOT an order/account ask — the
+        caller should continue with its normal trending dispatch in that case.
+
+        When it IS an order ask (e.g. "i want order details", "where is my
+        order", or a bare order id) we:
+          1. clear trending state (``_conversation_bail_from_trending``),
+          2. pre-stash ``pending_order_ref`` if the message carried an id,
+          3. route to ``existing_awaiting_email`` with ``verify_reason="order"``
+             so the next turn continues the existing-customer identity path —
+             unless the customer is already verified, in which case we jump
+             straight to an order lookup or the ``existing_awaiting_order_id``
+             prompt. This mirrors the same branch used by the conversational
+             handler so behavior is consistent regardless of where the user
+             triggered the escape from.
+        """
+        if not (
+            _looks_like_order_status_question(msg_text)
+            or _is_likely_order_id_only(msg_text)
+            or _looks_like_account_question(msg_text)
+        ):
+            return None
+        base = _conversation_bail_from_trending(flow, flow_lang)
+        pre_ref = ""
+        if _is_likely_order_id_only(msg_text):
+            pre_ref = re.sub(r"[^\d\-#]", "", (msg_text or "").strip()) or (msg_text or "").strip()
+        else:
+            pre_ref = (_extract_order_id_from_message(msg_text, phone) or "").strip()
+        if base.get("verified"):
+            base["step"] = "existing_awaiting_order_id"
+            base["pending_order_ref"] = None
+            prompt_key = "ask_order"
+            return save(base, _t(flow_lang, MSGS[prompt_key]))
+        reason = "order" if _looks_like_order_status_question(msg_text) or _is_likely_order_id_only(msg_text) else "account"
+        base["step"] = "existing_awaiting_email"
+        base["customer_kind"] = "existing"
+        base["intro_shown"] = True
+        base["verify_reason"] = reason
+        base["pending_order_ref"] = pre_ref or None
+        intro_key = "order_verify_intro" if reason == "order" else "account_verify_intro"
+        return save(base, _t(flow_lang, MSGS[intro_key]))
+
     def _show_trending_for_country(
         cc: str,
         base_flow: Dict[str, Any],
@@ -3478,6 +3576,12 @@ async def process_customer_bot_message(
         return ai_forward(text, nf, skip_api=True)
 
     if step == "trending_awaiting_country":
+        # Order / account intent always beats trending — even mid-country-pick.
+        # Bypass the LLM runner entirely for these since any "trending" reply
+        # would be nonsensical for "give me order details" style messages.
+        order_escape = _maybe_escape_trending_for_order_intent(text)
+        if order_escape is not None:
+            return order_escape
         llm_res = await _try_trending_llm()
         if llm_res is not None:
             return llm_res
@@ -3498,6 +3602,9 @@ async def process_customer_bot_message(
         return _show_trending_for_country(cc, flow, text, mode=_trending_mode(flow))
 
     if step == "trending_showing_products":
+        order_escape = _maybe_escape_trending_for_order_intent(text)
+        if order_escape is not None:
+            return order_escape
         llm_res = await _try_trending_llm()
         if llm_res is not None:
             return llm_res
