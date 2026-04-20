@@ -752,25 +752,126 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "لا توجد منتجات {category} رائجة مسجّلة لـ {country} حالياً. جرّب فئة/دولة أخرى أو اسألني أي شيء آخر.",
         "roman_urdu": "Abhi {country} mein {category} category ke trending products list nahi hain. Doosri category/country try karein ya koi aur sawal pooch lein.",
     },
-    "non_trending_unavailable": {
+    # --- Non-trending product list (parallel set to trending_* above) ---
+    "non_trending_intro_first": {
+        "english": "Here are the non-trending products in {country}:",
+        "arabic": "إليك المنتجات غير الرائجة في {country}:",
+        "roman_urdu": "Yeh hain {country} ke non-trending products:",
+    },
+    "non_trending_intro_more": {
+        "english": "Here are more non-trending products in {country}:",
+        "arabic": "إليك المزيد من المنتجات غير الرائجة في {country}:",
+        "roman_urdu": "Yeh hain aur non-trending products {country} ke liye:",
+    },
+    "non_trending_intro_first_category": {
+        "english": "Here are the non-trending {category} products in {country}:",
+        "arabic": "إليك منتجات {category} غير الرائجة في {country}:",
+        "roman_urdu": "Yeh hain {country} ke non-trending {category} products:",
+    },
+    "non_trending_intro_more_category": {
+        "english": "Here are more non-trending {category} products in {country}:",
+        "arabic": "إليك المزيد من منتجات {category} غير الرائجة في {country}:",
+        "roman_urdu": "Yeh hain aur {category} non-trending products {country} ke liye:",
+    },
+    "non_trending_footer_first_has_more": {
+        "english": "Would you like to see more products? Just type \"show me more\".",
+        "arabic": "هل تريد رؤية المزيد من المنتجات؟ فقط اكتب \"show me more\".",
+        "roman_urdu": "Aur products dekhna chahen ge? Bas \"show me more\" likhein.",
+    },
+    "non_trending_footer_first_only": {
         "english": (
-            "I only showcase our *trending* picks here — the non-trending catalog "
-            "isn't available through the bot. For the full catalog please sign in "
-            "to your seller dashboard.\n\n"
-            "Would you like to see the trending products instead, or is there "
-            "anything else I can help with?"
+            "These are all the non-trending products in {country} right now.\n\n"
+            "Would you like me to help you with something else? You can also type \"agent\" to speak with a human."
         ),
         "arabic": (
-            "أعرض هنا فقط المنتجات *الرائجة* — الكتالوج الكامل غير متوفر عبر البوت. "
-            "للاطلاع على كل المنتجات يُرجى تسجيل الدخول إلى لوحة البائع.\n\n"
-            "هل تود رؤية المنتجات الرائجة بدلاً من ذلك، أم يمكنني مساعدتك بشيء آخر؟"
+            "هذه كل المنتجات غير الرائجة في {country} حالياً.\n\n"
+            "هل تريد مساعدة في شيء آخر؟ يمكنك أيضاً كتابة \"agent\" للتحدث مع موظف."
         ),
         "roman_urdu": (
-            "Main yahan sirf *trending* products dikhata hoon — baqi ke products "
-            "bot par available nahi hain. Poora catalogue dekhne ke liye apne "
-            "seller dashboard mein login karein.\n\n"
-            "Kya aap trending products dekhna chahenge, ya kisi aur cheez mein madad chahiye?"
+            "Abhi {country} ke liye yeh saare non-trending products hain.\n\n"
+            "Aur kuch madad chahiye? \"agent\" likh kar human se baat kar sakte hain."
         ),
+    },
+    "non_trending_footer_more_has_more": {
+        "english": (
+            "Would you like to see more? Type \"show me more\" or ask about a specific product by number."
+        ),
+        "arabic": (
+            "هل تريد المزيد؟ اكتب \"show me more\" أو اسأل عن منتج محدد برقمه."
+        ),
+        "roman_urdu": (
+            "Aur dekhna hai? \"show me more\" likhein ya number se kisi product ke baare mein pooch lein."
+        ),
+    },
+    "non_trending_footer_more_end": {
+        "english": (
+            "These are all the non-trending products in {country} right now.\n\n"
+            "Would you like me to help you with something else? You can also type \"agent\" to speak with a human."
+        ),
+        "arabic": (
+            "هذه كل المنتجات غير الرائجة في {country} حالياً.\n\n"
+            "هل تريد مساعدة في شيء آخر؟ يمكنك أيضاً كتابة \"agent\" للتحدث مع موظف."
+        ),
+        "roman_urdu": (
+            "Abhi {country} ke liye yeh saare non-trending products hain.\n\n"
+            "Aur kuch madad chahiye? \"agent\" likh kar human se baat kar sakte hain."
+        ),
+    },
+    "non_trending_followup_suggestions": {
+        "english": (
+            "\n\nYou might also want to ask:\n"
+            "• Show non-trending products in {other_a}\n"
+            "• Show non-trending products in {other_b}\n"
+            "• Tell me about a product by its list number\n\n"
+            "Is there anything else I can help with?"
+        ),
+        "arabic": (
+            "\n\nيمكنك أيضًا أن تسأل:\n"
+            "• عرض المنتجات غير الرائجة في {other_a}\n"
+            "• عرض المنتجات غير الرائجة في {other_b}\n"
+            "• أخبرني عن منتج برقمه في القائمة\n\n"
+            "هل هناك أي شيء آخر يمكنني المساعدة به؟"
+        ),
+        "roman_urdu": (
+            "\n\nAap yeh bhi pooch sakte hain:\n"
+            "• {other_a} mein non-trending products dikhao\n"
+            "• {other_b} mein non-trending products dikhao\n"
+            "• List number se kisi product ke baare mein batao\n\n"
+            "Kya aur koi madad chahiye?"
+        ),
+    },
+    "non_trending_no_more_pages": {
+        "english": (
+            "There are no more non-trending products to show for {country} right now. "
+            "Ask me anything else, pick another country, or type \"agent\" for a human."
+        ),
+        "arabic": (
+            "لا توجد منتجات غير رائجة إضافية لعرضها لـ {country} حالياً. "
+            "اسأل عن أي شيء آخر، أو اختر دولة أخرى، أو اكتب \"agent\" للتحدث مع موظف."
+        ),
+        "roman_urdu": (
+            "Abhi {country} ke liye aur non-trending products load karne ko nahi bacha. "
+            "Kuch aur pooch lein, doosri country try karein, ya \"agent\" likhein."
+        ),
+    },
+    "non_trending_no_products": {
+        "english": (
+            "There aren't any non-trending products listed for {country} right now. "
+            "Try another market or ask me anything else."
+        ),
+        "arabic": (
+            "لا توجد منتجات غير رائجة مسجّلة لـ {country} حالياً. "
+            "جرّب سوقاً آخر أو اسألني أي شيء آخر."
+        ),
+        "roman_urdu": (
+            "Abhi {country} ke liye koi non-trending product list nahi hai. "
+            "Aap doosra market try karein ya koi aur sawal pooch lein."
+        ),
+    },
+    "non_trending_no_products_category": {
+        "english": "No non-trending {category} products are listed for {country} right now. Try another category/country or ask me anything else.",
+        "arabic": "لا توجد منتجات {category} غير رائجة مسجّلة لـ {country} حالياً. جرّب فئة/دولة أخرى أو اسألني أي شيء آخر.",
+        "roman_urdu": "Abhi {country} mein {category} category ke non-trending products list nahi hain. Doosri category/country try karein ya koi aur sawal pooch lein.",
     },
     "sourcing_collect_details": {
         "english": (

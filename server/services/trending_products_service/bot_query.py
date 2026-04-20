@@ -90,10 +90,26 @@ def resolve_trending_image_urls(row: TrendingProduct) -> List[str]:
     return resolved
 
 
-def list_active_trending_for_country(
+def _row_to_bot_dict(r: TrendingProduct) -> Dict[str, Any]:
+    price_val = float(r.price) if r.price is not None else 0.0
+    return {
+        "id": r.id,
+        "product_name": r.product_name,
+        "price": price_val,
+        "currency": r.currency,
+        "category": r.category,
+        "description": (r.description or "").strip(),
+        "image_url": resolve_trending_image_url(r) or "",
+        "image_urls": resolve_trending_image_urls(r),
+    }
+
+
+def _list_active_for_country(
     db: Session,
     tenant_id: int,
     country: str,
+    *,
+    is_trending: bool,
 ) -> List[Dict[str, Any]]:
     c = (country or "").strip().upper()
     rows = (
@@ -102,32 +118,42 @@ def list_active_trending_for_country(
             TrendingProduct.tenant_id == tenant_id,
             TrendingProduct.country == c,
             TrendingProduct.is_active.is_(True),
+            TrendingProduct.is_trending.is_(is_trending),
         )
         .order_by(TrendingProduct.display_order.asc(), TrendingProduct.id.asc())
         .all()
     )
-    out: List[Dict[str, Any]] = []
-    for r in rows:
-        price_val = float(r.price) if r.price is not None else 0.0
-        out.append(
-            {
-                "id": r.id,
-                "product_name": r.product_name,
-                "price": price_val,
-                "currency": r.currency,
-                "category": r.category,
-                "description": (r.description or "").strip(),
-                "image_url": resolve_trending_image_url(r) or "",
-                "image_urls": resolve_trending_image_urls(r),
-            }
-        )
-    return out
+    return [_row_to_bot_dict(r) for r in rows]
+
+
+def list_active_trending_for_country(
+    db: Session,
+    tenant_id: int,
+    country: str,
+) -> List[Dict[str, Any]]:
+    """Active products for *country* that are flagged as trending."""
+    return _list_active_for_country(db, tenant_id, country, is_trending=True)
+
+
+def list_active_non_trending_for_country(
+    db: Session,
+    tenant_id: int,
+    country: str,
+) -> List[Dict[str, Any]]:
+    """Active products for *country* whose trending flag is OFF."""
+    return _list_active_for_country(db, tenant_id, country, is_trending=False)
 
 
 def get_trending_product_by_id(
     db: Session, tenant_id: int, product_id: int
 ) -> Optional[Dict[str, Any]]:
-    """Single active trending row for detail replies (authoritative vs cached list)."""
+    """Authoritative single-row fetch for product-detail replies.
+
+    The caller is driven from a list view that was already filtered by
+    ``is_active`` and the appropriate ``is_trending`` state, so we deliberately
+    do NOT re-apply ``is_trending`` here — otherwise picking a product from
+    the non-trending list would fail to resolve.
+    """
     r = (
         db.query(TrendingProduct)
         .filter(

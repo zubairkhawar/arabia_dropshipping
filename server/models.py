@@ -480,6 +480,12 @@ class TrendingProduct(Base):
     image_keys = Column(JSON, nullable=True)
     description = Column(Text, nullable=True)
     display_order = Column(Integer, nullable=False, default=1)
+    # is_active is the master switch: when False the bot never surfaces the
+    # product, regardless of whether it's marked as trending.
     is_active = Column(Boolean, nullable=False, default=True)
+    # is_trending controls whether the product is included in the bot's
+    # "trending products" response. Independent from is_active so admins can
+    # keep a product live but excluded from trending.
+    is_trending = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

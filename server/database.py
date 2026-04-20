@@ -352,6 +352,29 @@ def ensure_trending_product_unit_pieces_column() -> None:
         pass
 
 
+def ensure_trending_product_is_trending_column() -> None:
+    """Add is_trending flag so admins can toggle trending independently of active."""
+    try:
+        insp = inspect(engine)
+        if "trending_products" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("trending_products")}
+    except Exception:
+        return
+    if "is_trending" in cols:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE trending_products "
+                    "ADD COLUMN is_trending BOOLEAN NOT NULL DEFAULT TRUE"
+                )
+            )
+    except Exception:
+        pass
+
+
 def get_db():
     db = SessionLocal()
     try:

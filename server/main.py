@@ -21,6 +21,7 @@ from database import (
     ensure_pgvector_extension,
     ensure_trending_product_image_arrays,
     ensure_trending_product_unit_pieces_column,
+    ensure_trending_product_is_trending_column,
 )
 from models import Tenant, User
 from services.auth_service.services import get_password_hash
@@ -112,6 +113,7 @@ async def lifespan(app: FastAPI):
     ensure_dm_team_message_metadata_json()
     ensure_trending_product_image_arrays()
     ensure_trending_product_unit_pieces_column()
+    ensure_trending_product_is_trending_column()
     ensure_pgvector_extension()
     ensure_admin_user()
     hydrate_openai_api_key_from_db()

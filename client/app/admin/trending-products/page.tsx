@@ -90,6 +90,7 @@ interface TrendingProductRow {
   description: string | null;
   display_order: number;
   is_active: boolean;
+  is_trending: boolean;
 }
 
 interface UploadSignOut {
@@ -237,7 +238,7 @@ export default function AdminTrendingProductsPage() {
     setFormUnitPieces(row.unit_pieces ? String(row.unit_pieces) : '');
     setFormOrder(String(row.display_order));
     setFormActive(row.is_active);
-    setFormTrending(row.is_active);
+    setFormTrending(row.is_trending);
     setFormDesc(row.description || '');
     const existingKeys = Array.isArray(row.image_keys) && row.image_keys.length
       ? row.image_keys.filter(Boolean)
@@ -373,7 +374,8 @@ export default function AdminTrendingProductsPage() {
         image_url: image_urls[0] ?? undefined,
         description: formDesc.trim() || null,
         display_order: order,
-        is_active: formActive && formTrending,
+        is_active: formActive,
+        is_trending: formTrending,
       };
       if (editing) {
         const res = await fetchTrendingApi(`/${editing.id}`, {
@@ -507,9 +509,13 @@ export default function AdminTrendingProductsPage() {
                       </td>
                       <td className="px-4 py-2 text-text-secondary">{p.category}</td>
                       <td className="px-4 py-2">
-                        <span className={p.is_active ? 'text-emerald-600' : 'text-text-muted'}>
-                          {p.is_active ? 'Trending' : 'Not Trending'}
-                        </span>
+                        {!p.is_active ? (
+                          <span className="text-text-muted">Inactive</span>
+                        ) : p.is_trending ? (
+                          <span className="text-emerald-600">Trending</span>
+                        ) : (
+                          <span className="text-text-muted">Not Trending</span>
+                        )}
                       </td>
                       <td className="px-4 py-2 text-right">
                         <div className="inline-flex gap-1">
@@ -553,7 +559,9 @@ export default function AdminTrendingProductsPage() {
                   <div className="text-sm text-text-secondary">
                     {p.price} {p.currency} · {p.category}
                   </div>
-                  <div className="text-xs text-text-muted">{p.is_active ? 'Trending' : 'Not Trending'}</div>
+                  <div className="text-xs text-text-muted">
+                    {!p.is_active ? 'Inactive' : p.is_trending ? 'Trending' : 'Not Trending'}
+                  </div>
                   <div className="flex gap-2 pt-1">
                     <button
                       type="button"
@@ -682,6 +690,9 @@ export default function AdminTrendingProductsPage() {
                       />
                     </button>
                   </div>
+                  <p className="mt-2 text-[11px] leading-snug text-text-muted">
+                    Master switch. If inactive, the bot will not send this product to customers, regardless of trending.
+                  </p>
                 </div>
                 <div className="rounded-lg border border-border bg-scaffold p-3">
                   <div className="text-xs font-medium text-text-secondary">Trending</div>
@@ -702,6 +713,9 @@ export default function AdminTrendingProductsPage() {
                       />
                     </button>
                   </div>
+                  <p className="mt-2 text-[11px] leading-snug text-text-muted">
+                    When on, the product appears in the bot&apos;s trending list. Ignored if Status is inactive.
+                  </p>
                 </div>
               </div>
               <div>
@@ -758,7 +772,7 @@ export default function AdminTrendingProductsPage() {
                   />
                   <div className="text-base font-semibold text-text-primary">Upload files</div>
                   <div className="mt-1 text-sm text-text-secondary">Drag & drop or click to browse.</div>
-                  <div className="mt-1 text-xs text-text-muted">Only JPG, JPEG, or PNG allowed</div>
+                  <div className="mt-1 text-xs text-text-muted">JPG, JPEG, PNG</div>
                   <div className="mt-2 text-xs text-text-muted">
                     {formFiles.length ? `${formFiles.length} new image(s) selected` : 'No new files selected'}
                   </div>
@@ -809,8 +823,8 @@ export default function AdminTrendingProductsPage() {
                 <textarea
                   value={formDesc}
                   onChange={(e) => setFormDesc(e.target.value)}
-                  rows={3}
-                  className="mt-1 w-full rounded-lg border border-border bg-scaffold px-3 py-2 text-sm"
+                  rows={6}
+                  className="mt-1 w-full resize-y rounded-lg border border-border bg-scaffold px-3 py-2 text-sm leading-relaxed [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                 />
               </label>
             </div>

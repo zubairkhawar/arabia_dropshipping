@@ -125,6 +125,7 @@ class TrendingProductOut(BaseModel):
     description: Optional[str] = None
     display_order: int
     is_active: bool
+    is_trending: bool = True
     created_at: datetime
     updated_at: datetime
 
@@ -158,6 +159,7 @@ def _to_out(row: TrendingProduct) -> TrendingProductOut:
         description=row.description,
         display_order=row.display_order,
         is_active=bool(row.is_active),
+        is_trending=bool(getattr(row, "is_trending", True)),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -182,6 +184,7 @@ class TrendingProductCreate(BaseModel):
     description: Optional[str] = None
     display_order: int = Field(default=1, ge=1, le=100)
     is_active: bool = True
+    is_trending: bool = True
 
 
 class TrendingProductUpdate(BaseModel):
@@ -198,6 +201,7 @@ class TrendingProductUpdate(BaseModel):
     description: Optional[str] = None
     display_order: Optional[int] = Field(None, ge=1, le=100)
     is_active: Optional[bool] = None
+    is_trending: Optional[bool] = None
 
 
 def _validate_country_currency_category(
@@ -270,6 +274,7 @@ async def create_trending_product(
         description=(payload.description or "").strip() or None,
         display_order=payload.display_order,
         is_active=payload.is_active,
+        is_trending=payload.is_trending,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
@@ -324,6 +329,8 @@ async def update_trending_product(
         row.display_order = payload.display_order
     if payload.is_active is not None:
         row.is_active = payload.is_active
+    if payload.is_trending is not None:
+        row.is_trending = payload.is_trending
 
     new_key = None
     if payload.image_key is not None:
@@ -428,6 +435,7 @@ def public_list_trending_products(
             TrendingProduct.tenant_id == tenant_id,
             TrendingProduct.country == c,
             TrendingProduct.is_active.is_(True),
+            TrendingProduct.is_trending.is_(True),
         )
         .order_by(TrendingProduct.display_order.asc(), TrendingProduct.id.asc())
         .all()
@@ -491,6 +499,7 @@ def public_trending_products_page(
             TrendingProduct.tenant_id == tenant_id,
             TrendingProduct.country == c,
             TrendingProduct.is_active.is_(True),
+            TrendingProduct.is_trending.is_(True),
         )
         .order_by(TrendingProduct.display_order.asc(), TrendingProduct.id.asc())
     )

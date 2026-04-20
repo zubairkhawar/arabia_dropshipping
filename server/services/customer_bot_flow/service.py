@@ -29,6 +29,7 @@ from services.phone_lookup_variants import normalize_mobile_for_flow
 from services.store_integration_service.client import StoreIntegrationClient
 from services.trending_products_service.bot_query import (
     get_trending_product_by_id,
+    list_active_non_trending_for_country,
     list_active_trending_for_country,
 )
 from services.human_handoff_intent import (
@@ -626,7 +627,28 @@ TRENDING_STATE_KEYS = (
     "trending_products_all",
     "trending_category",
     "trending_offset",
+    "trending_mode",
 )
+
+
+def _trending_mode(flow: Dict[str, Any]) -> str:
+    """Read the active list mode from flow state. "trending" is the default."""
+    m = str(flow.get("trending_mode") or "").strip().lower()
+    return "non_trending" if m == "non_trending" else "trending"
+
+
+def _trending_tpl(mode: str, key: str) -> str:
+    """Map a ``trending_...`` template key to its ``non_trending_...`` sibling when appropriate.
+
+    Keys that don't start with ``trending_`` (or that lack a ``non_`` variant)
+    are returned unchanged so that reusable copy like product-detail replies
+    works for both modes.
+    """
+    if mode == "non_trending" and key.startswith("trending_"):
+        mapped = "non_" + key
+        if mapped in MSGS:
+            return mapped
+    return key
 TRENDING_CATEGORY_ALIASES: Dict[str, tuple[str, ...]] = {
     "Electronics": ("electronics", "electronic", "gadgets", "gadget", "mobile", "phone"),
     "Fashion": ("fashion", "clothes", "clothing", "apparel"),
@@ -670,20 +692,25 @@ def _trending_followup_other_markets(cc: str) -> Tuple[str, str]:
     return "UAE", "KSA"
 
 
-def _trending_followup_block(lang: str, country_code: str) -> str:
+def _trending_followup_block(
+    lang: str, country_code: str, *, mode: str = "trending"
+) -> str:
     """Return just the follow-up suggestions block (empty string when disabled)."""
     if not bool(getattr(settings, "llm_followup_suggestions", True)):
         return ""
     oa, ob = _trending_followup_other_markets(country_code)
-    return _t(lang, MSGS["trending_followup_suggestions"]).format(other_a=oa, other_b=ob)
+    tpl_key = _trending_tpl(mode, "trending_followup_suggestions")
+    return _t(lang, MSGS[tpl_key]).format(other_a=oa, other_b=ob)
 
 
-def _append_trending_followup_suggestions(lang: str, country_code: str, text: str) -> str:
+def _append_trending_followup_suggestions(
+    lang: str, country_code: str, text: str, *, mode: str = "trending"
+) -> str:
     """Append deterministic follow-ups when LLM_FOLLOWUP_SUGGESTIONS is enabled (trending is non-LLM)."""
     base = (text or "").strip()
     if not base:
         return base
-    block = _trending_followup_block(lang, country_code)
+    block = _trending_followup_block(lang, country_code, mode=mode)
     return f"{base}{block}".strip() if block else base
 
 
@@ -789,15 +816,25 @@ def _wants_trending_more(text: str) -> bool:
     return any(p in flat for p in phrases)
 
 
-def _trending_footer_template_key(*, first_batch: bool, has_more: bool) -> tuple[str, bool]:
-    """Return (MSGS key, whether template expects {country})."""
+def _trending_footer_template_key(
+    *, first_batch: bool, has_more: bool, mode: str = "trending"
+) -> tuple[str, bool]:
+    """Return (MSGS key, whether template expects {country}).
+
+    The ``mode`` argument is forwarded through :func:`_trending_tpl` so the
+    non-trending list reuses the same footer logic with its own copy.
+    """
     if first_batch and has_more:
-        return ("trending_footer_first_has_more", False)
+        base = "trending_footer_first_has_more"
+        return (_trending_tpl(mode, base), False)
     if first_batch and not has_more:
-        return ("trending_footer_first_only", True)
+        base = "trending_footer_first_only"
+        return (_trending_tpl(mode, base), True)
     if not first_batch and has_more:
-        return ("trending_footer_more_has_more", False)
-    return ("trending_footer_more_end", True)
+        base = "trending_footer_more_has_more"
+        return (_trending_tpl(mode, base), False)
+    base = "trending_footer_more_end"
+    return (_trending_tpl(mode, base), True)
 
 
 def _parse_trending_country_reply(text: str) -> Optional[str]:
@@ -907,16 +944,20 @@ def _trending_inbox_and_web_body(
     category: Optional[str] = None,
     start_rank: int = 1,
     is_more_batch: bool = False,
+    mode: str = "trending",
 ) -> str:
     if not items:
-        return _t(lang, MSGS["trending_no_products"]).format(
+        no_key = _trending_tpl(mode, "trending_no_products")
+        return _t(lang, MSGS[no_key]).format(
             country=_trending_footer_country_label(country)
         )
     if category:
-        intro_key = "trending_intro_more_category" if is_more_batch else "trending_intro_first_category"
+        base = "trending_intro_more_category" if is_more_batch else "trending_intro_first_category"
+        intro_key = _trending_tpl(mode, base)
         intro = _t(lang, MSGS[intro_key]).format(country=country, category=category)
     else:
-        intro_key = "trending_intro_more" if is_more_batch else "trending_intro_first"
+        base = "trending_intro_more" if is_more_batch else "trending_intro_first"
+        intro_key = _trending_tpl(mode, base)
         intro = _t(lang, MSGS[intro_key]).format(country=country)
     lines = [intro]
     for i, it in enumerate(items):
@@ -1114,9 +1155,11 @@ def _wants_non_trending_products(text: str) -> bool:
         - "non-trending products"
         - "المنتجات غير الرائجة"
 
-    The non-trending catalogue is not exposed through the bot, but we must
-    recognise the intent so we don't accidentally fall through to the
-    positive trending handler and show the opposite of what was asked.
+    The non-trending list is served from the same trending-flow pipeline with
+    ``trending_mode = "non_trending"`` (country selection, pagination,
+    product-detail fetch all work identically). We detect the intent here so
+    we don't fall through to the positive ``_wants_trending_products``
+    handler and show the opposite of what was asked.
     """
     t = (text or "").strip().lower()
     if not t or len(t) > 220:
@@ -2721,11 +2764,24 @@ async def process_customer_bot_message(
         )
 
     def _show_trending_for_country(
-        cc: str, base_flow: Dict[str, Any], msg_text: str
+        cc: str,
+        base_flow: Dict[str, Any],
+        msg_text: str,
+        *,
+        mode: str = "trending",
     ) -> BotFlowResult:
-        """Fetch and display trending products for *cc*. Reused by entry points and the country step."""
+        """Fetch and display trending/non-trending products for *cc*.
+
+        ``mode`` selects the data source and the template set:
+            - ``"trending"`` → :func:`list_active_trending_for_country` + ``trending_*`` copy.
+            - ``"non_trending"`` → :func:`list_active_non_trending_for_country`
+              + ``non_trending_*`` copy.
+        """
         wanted_category = _parse_trending_category(msg_text)
-        items_all = list_active_trending_for_country(db, tenant_id, cc)
+        if mode == "non_trending":
+            items_all = list_active_non_trending_for_country(db, tenant_id, cc)
+        else:
+            items_all = list_active_trending_for_country(db, tenant_id, cc)
         visible = _trending_visible_list(items_all, wanted_category)
         offset = 0
         page = visible[offset : offset + TRENDING_PAGE_SIZE]
@@ -2733,19 +2789,24 @@ async def process_customer_bot_message(
             nf = {**base_flow, "step": "trending_awaiting_country", "lang": flow_lang}
             for k in TRENDING_STATE_KEYS:
                 nf.pop(k, None)
+            nf["trending_mode"] = mode
             if wanted_category:
-                no_msg = _t(flow_lang, MSGS["trending_no_products_category"]).format(
+                no_key = _trending_tpl(mode, "trending_no_products_category")
+                no_msg = _t(flow_lang, MSGS[no_key]).format(
                     country=_trending_footer_country_label(cc),
                     category=wanted_category,
                 )
             else:
-                no_msg = _t(flow_lang, MSGS["trending_no_products"]).format(
+                no_key = _trending_tpl(mode, "trending_no_products")
+                no_msg = _t(flow_lang, MSGS[no_key]).format(
                     country=_trending_footer_country_label(cc)
                 )
             retry = _t(flow_lang, MSGS["trending_country_retry"])
             return save(nf, f"{no_msg}\n\n{retry}")
         has_more = offset + len(page) < len(visible)
-        fk, needs_c = _trending_footer_template_key(first_batch=True, has_more=has_more)
+        fk, needs_c = _trending_footer_template_key(
+            first_batch=True, has_more=has_more, mode=mode,
+        )
         footer = (
             _t(flow_lang, MSGS[fk]).format(country=_trending_footer_country_label(cc))
             if needs_c
@@ -2760,20 +2821,22 @@ async def process_customer_bot_message(
             "trending_products_all": items_all,
             "trending_products_cache": page,
             "trending_offset": offset,
+            "trending_mode": mode,
         }
         body = _trending_inbox_and_web_body(
             flow_lang, cc, page,
             category=wanted_category, start_rank=1, is_more_batch=False,
+            mode=mode,
         )
         base_reply = f"{body}\n\n{footer}".strip()
-        followup = _trending_followup_block(flow_lang, cc).lstrip()
+        followup = _trending_followup_block(flow_lang, cc, mode=mode).lstrip()
         full_reply = f"{base_reply}\n\n{followup}".strip() if followup else base_reply
         wa_imgs: Optional[List[Dict[str, str]]] = None
         wa_aft: Optional[Union[str, List[str]]] = None
         _ch = (channel or "web").strip().lower()
         logger.info(
-            "trending show: country=%s total_rows=%d visible=%d page_size=%d",
-            cc, len(items_all), len(visible), len(page),
+            "trending show: mode=%s country=%s total_rows=%d visible=%d page_size=%d",
+            mode, cc, len(items_all), len(visible), len(page),
         )
         if _ch == "whatsapp":
             wa_l: List[Dict[str, str]] = []
@@ -2915,8 +2978,20 @@ async def process_customer_bot_message(
         # Trending / sourcing before the entry LLM so phrases like "Give me trending products"
         # are never treated as an unclear 1/2 menu reply.
         if _wants_non_trending_products(text):
-            nf = {**flow, "intro_shown": True, "lang": flow_lang}
-            return save(nf, _t(flow_lang, MSGS["non_trending_unavailable"]))
+            inline_cc = _parse_trending_country_reply(text)
+            base = {
+                **flow,
+                "customer_kind": flow.get("customer_kind") or "new",
+                "intro_shown": True,
+                "lang": flow_lang,
+            }
+            for k in TRENDING_STATE_KEYS:
+                base.pop(k, None)
+            base["trending_mode"] = "non_trending"
+            if inline_cc:
+                return _show_trending_for_country(inline_cc, base, text, mode="non_trending")
+            base["step"] = "trending_awaiting_country"
+            return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
         if _wants_trending_products(text):
             inline_cc = _parse_trending_country_reply(text)
             base = {
@@ -2927,6 +3002,7 @@ async def process_customer_bot_message(
             }
             for k in TRENDING_STATE_KEYS:
                 base.pop(k, None)
+            base["trending_mode"] = "trending"
             if inline_cc:
                 return _show_trending_for_country(inline_cc, base, text)
             base["step"] = "trending_awaiting_country"
@@ -3029,7 +3105,7 @@ async def process_customer_bot_message(
         cc = _parse_trending_country_reply(text)
         if not cc:
             return save(flow, _t(flow_lang, MSGS["trending_country_retry"]))
-        return _show_trending_for_country(cc, flow, text)
+        return _show_trending_for_country(cc, flow, text, mode=_trending_mode(flow))
 
     if step == "trending_showing_products":
         cache_raw = flow.get("trending_products_cache")
@@ -3040,6 +3116,7 @@ async def process_customer_bot_message(
         flow_cat = flow.get("trending_category")
         visible = _trending_visible_list(all_items, flow_cat)
         wanted_category = _parse_trending_category(text)
+        mode = _trending_mode(flow)
         if _looks_like_greeting(text):
             nf, greet_reply = _exit_trending_for_greeting(flow, flow_lang)
             return save(nf, greet_reply, skip_api=False)
@@ -3059,15 +3136,18 @@ async def process_customer_bot_message(
                 offset = 0
             new_offset = offset + TRENDING_PAGE_SIZE
             if new_offset >= len(visible):
+                no_more_key = _trending_tpl(mode, "trending_no_more_pages")
                 return save(
                     flow,
-                    _t(flow_lang, MSGS["trending_no_more_pages"]).format(
+                    _t(flow_lang, MSGS[no_more_key]).format(
                         country=_trending_footer_country_label(cc)
                     ),
                 )
             page = visible[new_offset : new_offset + TRENDING_PAGE_SIZE]
             has_more = new_offset + len(page) < len(visible)
-            fk, needs_c = _trending_footer_template_key(first_batch=False, has_more=has_more)
+            fk, needs_c = _trending_footer_template_key(
+                first_batch=False, has_more=has_more, mode=mode,
+            )
             footer = (
                 _t(flow_lang, MSGS[fk]).format(country=_trending_footer_country_label(cc))
                 if needs_c
@@ -3079,6 +3159,7 @@ async def process_customer_bot_message(
                 "lang": flow_lang,
                 "trending_products_cache": page,
                 "trending_offset": new_offset,
+                "trending_mode": mode,
             }
             body = _trending_inbox_and_web_body(
                 flow_lang,
@@ -3087,9 +3168,10 @@ async def process_customer_bot_message(
                 category=flow_cat if isinstance(flow_cat, str) and flow_cat.strip() else None,
                 start_rank=new_offset + 1,
                 is_more_batch=True,
+                mode=mode,
             )
             base_reply2 = f"{body}\n\n{footer}".strip()
-            followup2 = _trending_followup_block(flow_lang, cc).lstrip()
+            followup2 = _trending_followup_block(flow_lang, cc, mode=mode).lstrip()
             full_reply = f"{base_reply2}\n\n{followup2}".strip() if followup2 else base_reply2
             if ch == "whatsapp":
                 wa_list2: List[Dict[str, str]] = []
@@ -3118,28 +3200,33 @@ async def process_customer_bot_message(
             return save(nf, full_reply)
 
         if _wants_non_trending_products(text):
-            # Bail out of the trending state; we don't showcase the rest of
-            # the catalogue via the bot.
-            nf = {**flow, "step": "conversational", "lang": flow_lang}
+            inline_cc = _parse_trending_country_reply(text)
+            base = {**flow, "lang": flow_lang}
             for k in TRENDING_STATE_KEYS:
-                nf.pop(k, None)
-            return save(nf, _t(flow_lang, MSGS["non_trending_unavailable"]))
+                base.pop(k, None)
+            base["trending_mode"] = "non_trending"
+            if inline_cc:
+                return _show_trending_for_country(inline_cc, base, text, mode="non_trending")
+            base["step"] = "trending_awaiting_country"
+            return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
         if _wants_trending_products(text):
             inline_cc = _parse_trending_country_reply(text)
             base = {**flow, "lang": flow_lang}
             for k in TRENDING_STATE_KEYS:
                 base.pop(k, None)
+            base["trending_mode"] = "trending"
             if inline_cc:
-                return _show_trending_for_country(inline_cc, base, text)
+                return _show_trending_for_country(inline_cc, base, text, mode="trending")
             base["step"] = "trending_awaiting_country"
             return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
 
         if wanted_category:
             next_visible = _filter_trending_items_by_category(all_items, wanted_category)
             if not next_visible:
+                no_cat_key = _trending_tpl(mode, "trending_no_products_category")
                 return save(
                     flow,
-                    _t(flow_lang, MSGS["trending_no_products_category"]).format(
+                    _t(flow_lang, MSGS[no_cat_key]).format(
                         country=_trending_footer_country_label(cc),
                         category=wanted_category,
                     ),
@@ -3147,7 +3234,9 @@ async def process_customer_bot_message(
             offset = 0
             page = next_visible[offset : offset + TRENDING_PAGE_SIZE]
             has_more = offset + len(page) < len(next_visible)
-            fk, needs_c = _trending_footer_template_key(first_batch=True, has_more=has_more)
+            fk, needs_c = _trending_footer_template_key(
+                first_batch=True, has_more=has_more, mode=mode,
+            )
             footer = (
                 _t(flow_lang, MSGS[fk]).format(country=_trending_footer_country_label(cc))
                 if needs_c
@@ -3161,6 +3250,7 @@ async def process_customer_bot_message(
                 "trending_products_cache": page,
                 "trending_products_all": all_items,
                 "trending_offset": offset,
+                "trending_mode": mode,
             }
             body = _trending_inbox_and_web_body(
                 flow_lang,
@@ -3169,9 +3259,10 @@ async def process_customer_bot_message(
                 category=wanted_category,
                 start_rank=1,
                 is_more_batch=False,
+                mode=mode,
             )
             base_reply_c = f"{body}\n\n{footer}".strip()
-            followup_c = _trending_followup_block(flow_lang, cc).lstrip()
+            followup_c = _trending_followup_block(flow_lang, cc, mode=mode).lstrip()
             full_reply = f"{base_reply_c}\n\n{followup_c}".strip() if followup_c else base_reply_c
             if ch == "whatsapp":
                 wa_list: List[Dict[str, str]] = []
@@ -3214,7 +3305,12 @@ async def process_customer_bot_message(
             nm = str(p.get("product_name") or "").strip() or "this product"
             desc = str(p.get("description") or "").strip()
             price_line = _trending_price_bit(p) or ""
-            nf = {**flow, "step": "trending_showing_products", "lang": flow_lang}
+            nf = {
+                **flow,
+                "step": "trending_showing_products",
+                "lang": flow_lang,
+                "trending_mode": mode,
+            }
             if desc:
                 detail_msg = _t(flow_lang, MSGS["trending_product_detail_ok"]).format(
                     name=nm,
@@ -3223,7 +3319,7 @@ async def process_customer_bot_message(
                 )
             else:
                 detail_msg = _t(flow_lang, MSGS["trending_product_detail_missing"]).format(name=nm)
-            detail_msg = _append_trending_followup_suggestions(flow_lang, cc, detail_msg)
+            detail_msg = _append_trending_followup_suggestions(flow_lang, cc, detail_msg, mode=mode)
             # Product-detail replies are text-only. Images were already sent
             # with the trending list, so re-sending them when the user asks
             # "tell me more about this" would be noisy/redundant.
@@ -3492,8 +3588,19 @@ async def process_customer_bot_message(
         kind = flow.get("customer_kind")
 
         if _wants_non_trending_products(text):
-            nf = {**flow, "intro_shown": True, "lang": flow_lang}
-            return save(nf, _t(flow_lang, MSGS["non_trending_unavailable"]))
+            inline_cc = _parse_trending_country_reply(text)
+            base = {
+                **flow,
+                "intro_shown": bool(flow.get("intro_shown")),
+                "lang": flow_lang,
+            }
+            for k in TRENDING_STATE_KEYS:
+                base.pop(k, None)
+            base["trending_mode"] = "non_trending"
+            if inline_cc:
+                return _show_trending_for_country(inline_cc, base, text, mode="non_trending")
+            base["step"] = "trending_awaiting_country"
+            return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
         if _wants_trending_products(text):
             inline_cc = _parse_trending_country_reply(text)
             base = {
@@ -3503,6 +3610,7 @@ async def process_customer_bot_message(
             }
             for k in TRENDING_STATE_KEYS:
                 base.pop(k, None)
+            base["trending_mode"] = "trending"
             if inline_cc:
                 return _show_trending_for_country(inline_cc, base, text)
             base["step"] = "trending_awaiting_country"
