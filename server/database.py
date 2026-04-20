@@ -195,6 +195,30 @@ def ensure_tenant_agent_management_columns() -> None:
         pass
 
 
+def ensure_agent_plaintext_password_column() -> None:
+    """
+    Add `agents.plaintext_password` on existing DBs.
+
+    Tenant admins need to view/share agent portal credentials across devices, so the
+    plaintext is retained alongside `users.hashed_password`. The column is nullable
+    for older rows that predate this feature.
+    """
+    try:
+        insp = inspect(engine)
+        if "agents" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("agents")}
+    except Exception:
+        return
+    if "plaintext_password" in cols:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE agents ADD COLUMN plaintext_password VARCHAR"))
+    except Exception:
+        pass
+
+
 def ensure_user_avatar_url_column() -> None:
     try:
         insp = inspect(engine)

@@ -539,7 +539,8 @@ export default function AdminAgents() {
                   <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 rounded border border-border bg-panel">
                     <code className="text-xs font-mono min-w-0 flex-1 truncate">
                       {showPassword
-                        ? selectedAgent.password || 'Not available (only shown when set at creation on this browser)'
+                        ? selectedAgent.password ||
+                          'Not available — create a new agent or update this agent\u2019s password to make it viewable'
                         : '••••••••'}
                     </code>
                     <button

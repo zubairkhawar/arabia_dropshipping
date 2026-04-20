@@ -55,7 +55,14 @@ interface AgentApiModel {
   team: string | null;
   max_concurrent_chats?: number;
   can_transfer_conversations?: boolean;
+  plaintext_password?: string | null;
   created_at: string;
+}
+
+function getAuthHeaders(): HeadersInit {
+  if (typeof window === 'undefined') return {};
+  const token = localStorage.getItem('auth_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function normalizeAgentStatus(value: string | null | undefined): 'online' | 'busy' | 'offline' {
@@ -85,12 +92,15 @@ function saveStoredPasswords(passwords: Record<string, string>): void {
 }
 
 function mapApiToRecord(a: AgentApiModel, storedPasswords: Record<string, string>): AgentRecord {
+  const serverPassword = typeof a.plaintext_password === 'string' ? a.plaintext_password : '';
   return {
     id: String(a.id),
     email: a.email,
     name: a.full_name || a.email.split('@')[0] || 'Agent',
     status: normalizeAgentStatus(a.status),
-    password: storedPasswords[String(a.id)] ?? '',
+    // Prefer server-stored plaintext so the admin panel works on any device; fall back
+    // to localStorage for older agents whose password hasn't been reset yet.
+    password: serverPassword || storedPasswords[String(a.id)] || '',
     avatarUrl: a.avatar_url ?? null,
     createdAt: a.created_at,
     maxConcurrentChats: typeof a.max_concurrent_chats === 'number' ? a.max_concurrent_chats : 5,
@@ -111,6 +121,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
   const fetchAgentsListOnly = useCallback(async (): Promise<boolean> => {
     const res = await fetch(`${API_BASE_URL}/api/agents?tenant_id=${DEFAULT_TENANT_ID}`, {
       method: 'GET',
+      headers: getAuthHeaders(),
     });
     if (!res.ok) {
       return false;
@@ -147,7 +158,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
       try {
         const [meRes, listRes] = await Promise.all([
           fetch(`${API_BASE_URL}/api/agents/me`, { headers }),
-          fetch(`${API_BASE_URL}/api/agents?tenant_id=${DEFAULT_TENANT_ID}`),
+          fetch(`${API_BASE_URL}/api/agents?tenant_id=${DEFAULT_TENANT_ID}`, { headers }),
         ]);
         const meJson = meRes.ok ? ((await meRes.json()) as AgentApiModel) : null;
         const listJson = listRes.ok ? ((await listRes.json()) as AgentApiModel[]) : null;
@@ -234,6 +245,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...getAuthHeaders(),
           },
           body: JSON.stringify({
             email,
@@ -246,12 +258,14 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           return false;
         }
         const created = (await res.json()) as AgentApiModel;
+        const serverPassword =
+          typeof created.plaintext_password === 'string' ? created.plaintext_password : '';
         const record: AgentRecord = {
           id: String(created.id),
           email: created.email,
           name: created.full_name || name,
           status: normalizeAgentStatus(created.status),
-          password,
+          password: serverPassword || password,
           avatarUrl: created.avatar_url ?? null,
           createdAt: created.created_at,
           maxConcurrentChats: typeof created.max_concurrent_chats === 'number' ? created.max_concurrent_chats : 5,
@@ -283,6 +297,28 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         saveStoredPasswords(storedPasswords);
       }
 
+      // Password changes go through a dedicated endpoint so the backend can rehash
+      // and update the stored plaintext copy in one transaction.
+      if (updates.password !== undefined) {
+        try {
+          const pwRes = await fetch(`${API_BASE_URL}/api/agents/${numericId}/password`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              ...getAuthHeaders(),
+            },
+            body: JSON.stringify({ password: updates.password }),
+          });
+          if (!pwRes.ok) {
+            void refreshAgents();
+            return false;
+          }
+        } catch {
+          void refreshAgents();
+          return false;
+        }
+      }
+
       const payload: { full_name?: string; avatar_url?: string | null } = {};
       if (updates.name !== undefined) payload.full_name = updates.name;
       if (updates.avatarUrl !== undefined) payload.avatar_url = updates.avatarUrl;
@@ -296,6 +332,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
+            ...getAuthHeaders(),
           },
           body: JSON.stringify(payload),
         });

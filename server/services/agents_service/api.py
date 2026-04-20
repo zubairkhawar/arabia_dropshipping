@@ -76,10 +76,23 @@ class AgentOut(BaseModel):
     team: Optional[str] = None
     max_concurrent_chats: int = 5
     can_transfer_conversations: bool = True
+    # Plaintext login password, kept so tenant admins can view/share credentials
+    # from the admin panel across devices. Older agents created before this feature
+    # will return None until their password is next reset.
+    plaintext_password: Optional[str] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class AgentPasswordUpdate(BaseModel):
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return _validate_password(value)
 
 
 class AgentCreate(BaseModel):
@@ -113,10 +126,25 @@ class AgentUpdate(BaseModel):
         return _normalize_profile_full_name(value)
 
 
+def _caller_is_tenant_admin(
+    current_user: Optional[User], tenant_id: int
+) -> bool:
+    if current_user is None:
+        return False
+    if (getattr(current_user, "role", "") or "").lower() != "admin":
+        return False
+    return int(getattr(current_user, "tenant_id", 0) or 0) == int(tenant_id)
+
+
 @router.get("", response_model=List[AgentOut])
-async def list_agents(tenant_id: int, db: Session = Depends(get_db)):
+async def list_agents(
+    tenant_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
     """
     List all agents for a tenant with basic profile info.
+    Plaintext passwords are only attached when the caller is a tenant admin.
     """
     rows = (
         db.query(Agent, User)
@@ -124,6 +152,7 @@ async def list_agents(tenant_id: int, db: Session = Depends(get_db)):
         .filter(Agent.tenant_id == tenant_id)
         .all()
     )
+    expose_passwords = _caller_is_tenant_admin(current_user, tenant_id)
     agents: List[AgentOut] = []
     for agent, user in rows:
         agents.append(
@@ -139,6 +168,9 @@ async def list_agents(tenant_id: int, db: Session = Depends(get_db)):
                 max_concurrent_chats=int(agent.max_concurrent_chats or 5),
                 can_transfer_conversations=bool(
                     getattr(agent, "can_transfer_conversations", True)
+                ),
+                plaintext_password=(
+                    getattr(agent, "plaintext_password", None) if expose_passwords else None
                 ),
                 created_at=agent.created_at,
             )
@@ -182,6 +214,7 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
         team=payload.team,
         max_concurrent_chats=cap,
         can_transfer_conversations=True,
+        plaintext_password=payload.password,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
@@ -265,6 +298,7 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),
+        plaintext_password=getattr(agent, "plaintext_password", None),
         created_at=agent.created_at,
     )
 
@@ -331,6 +365,54 @@ async def update_agent(
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),
+        plaintext_password=getattr(agent, "plaintext_password", None),
+        created_at=agent.created_at,
+    )
+
+
+@router.patch("/{agent_id}/password", response_model=AgentOut)
+async def update_agent_password(
+    agent_id: int,
+    payload: AgentPasswordUpdate,
+    db: Session = Depends(get_db),
+):
+    """
+    Admin-only path to change an agent's login password. We store the new bcrypt
+    hash for authentication *and* keep the plaintext on the agent row so the admin
+    panel can show/copy it from any device.
+    """
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    user = db.query(User).filter(User.id == agent.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.hashed_password = get_password_hash(payload.password)
+    user.updated_at = datetime.utcnow()
+    agent.plaintext_password = payload.password
+    agent.updated_at = datetime.utcnow()
+
+    db.add(user)
+    db.add(agent)
+    db.commit()
+    db.refresh(agent)
+    db.refresh(user)
+
+    return AgentOut(
+        id=agent.id,
+        tenant_id=agent.tenant_id,
+        user_id=agent.user_id,
+        email=user.email,
+        full_name=user.full_name,
+        avatar_url=getattr(user, "avatar_url", None),
+        status=agent.status,
+        team=agent.team,
+        max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+        can_transfer_conversations=bool(
+            getattr(agent, "can_transfer_conversations", True)
+        ),
+        plaintext_password=getattr(agent, "plaintext_password", None),
         created_at=agent.created_at,
     )
 
@@ -416,6 +498,7 @@ async def get_me(current_user: User = Depends(get_current_user), db: Session = D
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),
+        plaintext_password=getattr(agent, "plaintext_password", None),
         created_at=agent.created_at,
     )
 
