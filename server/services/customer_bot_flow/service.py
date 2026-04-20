@@ -740,16 +740,15 @@ def _trending_emoji_rank(i: int) -> str:
 
 
 def _trending_list_line(rank: int, it: Dict[str, Any]) -> str:
+    """Product list line: name + price only. Description is shown only when user picks a product."""
     nm = str(it.get("product_name") or "").strip()
     pb = _trending_price_bit(it)
-    desc = str(it.get("description") or "").strip()
     bullet = _trending_emoji_rank(rank)
     if not nm:
         return bullet
-    tail_bits = [x for x in (pb, desc) if x]
-    if not tail_bits:
-        return f"{bullet} {nm}"
-    return f"{bullet} {nm} - " + " - ".join(tail_bits)
+    if pb:
+        return f"{bullet} {nm} - {pb}"
+    return f"{bullet} {nm}"
 
 
 def _wants_trending_more(text: str) -> bool:
@@ -1076,6 +1075,9 @@ def _wants_trending_products(text: str) -> bool:
     if not t or len(t) > 220:
         return False
     flat = t.replace("\n", " ")
+    # Negation — user explicitly does NOT want trending products
+    if re.search(r"\bnot\s+trending\b|\bnon[\s-]?trending\b|\bwithout\s+trending\b", flat):
+        return False
     markers = (
         "trending",
         "trend ",
@@ -1344,6 +1346,16 @@ def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
     """
     return {
         "order_number": _pick(raw, "order_number", "order_id", "id") or ref,
+        "order_date": _pick(
+            raw,
+            "order_date",
+            "placed_at",
+            "ordered_at",
+            "created_at",
+            "date",
+            "booking_date",
+            "order_placed_date",
+        ),
         "status": _pick(raw, "status"),
         "delivery_status": _pick(raw, "delivery_status", "fulfillment_status", "shipping_status"),
         "expected_delivery": _pick(raw, "expected_delivery", "estimated_delivery", "delivery_date", "expected_delivery_date"),
@@ -1368,15 +1380,20 @@ async def _lookup_order(
     tenant_id: int,
     order_ref: str,
     store_client: StoreIntegrationClient,
+    seller_id: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     """
     Returns (order_dict_or_None, source).
 
     source is one of: \"db\" | \"api\" | \"not_found\" | \"api_error\"
+    When the order comes from the API, a secondary call to
+    /orders/{order_id}/tracking is attempted to fill in status/tracking id
+    so the reply can name the current logistics state without a second DB hit.
     """
     ref = (order_ref or "").strip()
     if not ref:
         return None, "not_found"
+    sid = (str(seller_id).strip() if seller_id is not None else "") or None
 
     row = (
         db.query(Order)
@@ -1396,23 +1413,171 @@ async def _lookup_order(
 
     detail: Optional[Dict[str, Any]] = None
     try:
-        detail = await store_client.get_order_by_id(ref)
+        detail = await store_client.get_order_by_id(ref, seller_id=sid)
         if not detail:
             detail = await store_client.get_order_by_number(ref)
-    except Exception:
+    except Exception:  # noqa: BLE001
+        logger.exception("order lookup: /orders/%s failed", ref)
         return None, "api_error"
 
     if not detail:
         return None, "not_found"
 
+    try:
+        tracking = await store_client.get_order_tracking(ref, seller_id=sid)
+    except Exception:  # noqa: BLE001
+        logger.exception("order lookup: /orders/%s/tracking failed (continuing)", ref)
+        tracking = None
+
+    if isinstance(tracking, dict):
+        merged: Dict[str, Any] = dict(detail)
+        for k, v in tracking.items():
+            if v is None or v == "":
+                continue
+            # Prefer live tracking status/id over order payload.
+            if k in {"status", "delivery_status", "tracking_id", "tracking_number", "awb", "awb_number"}:
+                merged[k] = v
+            else:
+                merged.setdefault(k, v)
+        detail = merged
+
     return _extract_order_fields(detail, ref), "api"
+
+
+# Each phrase already contains its auxiliary verb so it can slot into the
+# sentence as: "Your order #X was placed on DATE, and {phrase}[, tracking …]".
+_STATUS_PHRASES = {
+    "english": {
+        "in_transit": "is currently in transit",
+        "in transit": "is currently in transit",
+        "shipped": "has been shipped",
+        "dispatched": "has been dispatched",
+        "delivered": "has been delivered",
+        "returned": "has been returned",
+        "return received": "has been returned",
+        "return_received": "has been returned",
+        "return moving hub to hub": "is currently being returned",
+        "return moving": "is currently being returned",
+        "cancelled": "has been cancelled",
+        "canceled": "has been cancelled",
+        "pending": "is being processed",
+        "processing": "is being processed",
+        "confirmed": "has been confirmed",
+        "failed": "has failed",
+    },
+    "roman_urdu": {
+        "in_transit": "transit mein hai",
+        "in transit": "transit mein hai",
+        "shipped": "ship ho chuka hai",
+        "dispatched": "dispatch ho chuka hai",
+        "delivered": "deliver ho chuka hai",
+        "returned": "return ho chuka hai",
+        "return received": "return ho chuka hai",
+        "return_received": "return ho chuka hai",
+        "return moving hub to hub": "wapas bhejne ke process mein hai",
+        "return moving": "wapas bhejne ke process mein hai",
+        "cancelled": "cancel ho chuka hai",
+        "canceled": "cancel ho chuka hai",
+        "pending": "process ho raha hai",
+        "processing": "process ho raha hai",
+        "confirmed": "confirm ho chuka hai",
+        "failed": "fail ho gaya hai",
+    },
+    "arabic": {
+        "in_transit": "قيد التوصيل حالياً",
+        "in transit": "قيد التوصيل حالياً",
+        "shipped": "تم شحنه",
+        "dispatched": "تم إرساله",
+        "delivered": "تم توصيله",
+        "returned": "تم إرجاعه",
+        "return received": "تم إرجاعه",
+        "return_received": "تم إرجاعه",
+        "return moving hub to hub": "قيد الإرجاع",
+        "return moving": "قيد الإرجاع",
+        "cancelled": "تم إلغاؤه",
+        "canceled": "تم إلغاؤه",
+        "pending": "قيد المعالجة",
+        "processing": "قيد المعالجة",
+        "confirmed": "تم تأكيده",
+        "failed": "فشل",
+    },
+}
+
+
+def _humanize_status(raw_status: str, lang: str) -> str:
+    """Map an API status string to a user-facing phrase in the given language."""
+    key = (raw_status or "").strip().lower()
+    if not key:
+        return ""
+    table = _STATUS_PHRASES.get(lang) or _STATUS_PHRASES["english"]
+    if key in table:
+        return table[key]
+    # Fallback: humanise "return_moving_hub_to_hub" etc. for any unmapped status.
+    return (raw_status or "").replace("_", " ").strip().lower()
 
 
 def _format_order_sentence(lang: str, o: Dict[str, Any]) -> str:
     """
-    Build a natural-language sentence from all available order fields.
-    Matches user language (English / Arabic / Roman Urdu).
+    Build ONE natural sentence describing the order.
+
+    Example (English):
+        Your order #157955 was placed on February 10, 2026, and is currently
+        being returned with tracking number 6021626316464.
+
+    Falls back gracefully when fields are missing.
     """
+    oid = o.get("order_number") or "?"
+    order_date = (o.get("order_date") or "").strip()
+    status_raw = (o.get("status") or o.get("delivery_status") or "").strip()
+    tracking = (o.get("tracking_id") or "").strip()
+    cancel_type = (o.get("cancellation_type") or "").lower()
+    cancel_reason = (o.get("cancellation_reason") or "").strip()
+    ret_reason = (o.get("return_reason") or "").strip()
+
+    status_phrase = _humanize_status(status_raw, lang)
+    status_key = (status_raw or "").strip().lower()
+    cancelled = status_key in {"cancelled", "canceled"}
+
+    # Per-language connectors / labels used to assemble the sentence.
+    if lang == "roman_urdu":
+        head = f"Aapka order #{oid}"
+        placed_tpl = " {date} ko place hua tha"
+        join_status = " aur "
+        tracking_tpl = ", tracking number {tracking}"
+        reason_tpl = " (wajah: {reason})"
+    elif lang == "arabic":
+        head = f"طلبك رقم #{oid}"
+        placed_tpl = " تم تسجيله في {date}"
+        join_status = " و"
+        tracking_tpl = " برقم التتبع {tracking}"
+        reason_tpl = " (السبب: {reason})"
+    else:
+        head = f"Your order #{oid}"
+        placed_tpl = " was placed on {date}"
+        join_status = ", and "
+        tracking_tpl = " with tracking number {tracking}"
+        reason_tpl = " — reason: {reason}"
+
+    sentence = head
+    if order_date:
+        sentence += placed_tpl.format(date=order_date)
+    if status_phrase:
+        sentence += join_status + status_phrase
+        if tracking and not cancelled:
+            sentence += tracking_tpl.format(tracking=tracking)
+    elif tracking:
+        sentence += tracking_tpl.format(tracking=tracking)
+
+    reason = cancel_reason if cancelled else (ret_reason if ret_reason else "")
+    if reason:
+        sentence += reason_tpl.format(reason=reason)
+
+    return sentence.rstrip(",. ") + "."
+
+
+def _legacy_format_order_details(lang: str, o: Dict[str, Any]) -> str:  # pragma: no cover
+    """Detailed multi-line breakdown; kept as an opt-in helper for callers
+    that want the long-form report instead of the single-sentence summary."""
     oid = o.get("order_number") or "?"
     status = (o.get("status") or "").lower()
     delivery = (o.get("delivery_status") or "").lower()
@@ -1912,6 +2077,19 @@ async def process_customer_bot_message(
                     _t(flow_lang, MSGS["sourcing_with_product"]).format(product=product_hint),
                 )
             return save(nf, _t(flow_lang, MSGS["sourcing_collect_details"]))
+        # Simple acknowledgments (okay, good, fine, hmm, etc.) — just re-prompt the menu
+        _ack_words = {
+            "ok", "okay", "okey", "oki", "oki doki", "k",
+            "good", "fine", "nice", "great", "cool", "alright", "right",
+            "yes", "yeah", "yep", "yea", "yah", "haan", "han", "ji",
+            "hmm", "hm", "hmmmm", "achha", "acha", "accha", "theek",
+            "theek hai", "thik", "thik hai", "sahi", "sahi hai",
+            "thanks", "thank you", "shukriya", "shukria",
+            "no", "nahi", "nhi", "na",
+        }
+        if text.strip().lower() in _ack_words:
+            return save(flow, _t(flow_lang, MSGS["customer_type_unclear"]))
+
         # Typo / FAQ on the 1–2 menu: LLM classifies new vs existing vs agent hours vs other.
         entry_intent = await _classify_entry_menu_intent_llm(text)
         if entry_intent == "agent_hours":
@@ -2381,7 +2559,10 @@ async def process_customer_bot_message(
         parts: list[str] = [intro_line]
 
         if oref:
-            order, src = await _lookup_order(db, tenant_id, oref, store_client)
+            order, src = await _lookup_order(
+                db, tenant_id, oref, store_client,
+                seller_id=base_f.get("seller_id"),
+            )
             if order:
                 parts.append(_format_order_sentence(flow_lang, order))
                 parts.append(_t(flow_lang, MSGS["verified_followup"]))
@@ -2406,7 +2587,10 @@ async def process_customer_bot_message(
     if step == "existing_awaiting_order_id":
         raw = (text or "").strip()
         ref = raw if _is_likely_order_id_only(raw) else (_extract_order_id_from_message(raw, phone) or raw)
-        order, src = await _lookup_order(db, tenant_id, ref, store_client)
+        order, src = await _lookup_order(
+            db, tenant_id, ref, store_client,
+            seller_id=flow.get("seller_id"),
+        )
         if order:
             f = {**flow, "step": "conversational", "lang": flow_lang}
             return save(f, _format_order_sentence(flow_lang, order))
@@ -2513,6 +2697,31 @@ async def process_customer_bot_message(
             }
             return save(nf, _t(flow_lang, MSGS["greeting"]))
 
+        # Simple acknowledgments (okay, good, fine, hmm, etc.) — reply naturally
+        _lowered_text = text.strip().lower()
+        _thank_words = {
+            "thanks", "thank you", "shukriya", "shukria", "jazakallah",
+            "thank u", "thankyou", "thnx", "thnks",
+        }
+        _ack_words_conv = {
+            "ok", "okay", "okey", "oki", "k",
+            "good", "fine", "nice", "great", "cool", "alright", "right",
+            "yes", "yeah", "yep", "yea", "yah", "haan", "han", "ji",
+            "hmm", "hm", "hmmmm", "achha", "acha", "accha", "theek",
+            "theek hai", "thik", "thik hai", "sahi", "sahi hai",
+            "no", "nahi", "nhi", "na",
+        }
+        if _lowered_text in _thank_words:
+            return save(
+                {**flow, "step": "conversational"},
+                _t(flow_lang, MSGS["thanks_ack"]),
+            )
+        if _lowered_text in _ack_words_conv:
+            return save(
+                {**flow, "step": "conversational"},
+                _t(flow_lang, MSGS["hello_ack"]),
+            )
+
         # customer_kind not set yet — first real message without a greeting
         # Treat as implicit new customer and answer directly
         if not kind:
@@ -2534,7 +2743,10 @@ async def process_customer_bot_message(
                 else:
                     ref = (_extract_order_id_from_message(text, phone) or "").strip()
                 if ref:
-                    order, src = await _lookup_order(db, tenant_id, ref, store_client)
+                    order, src = await _lookup_order(
+                        db, tenant_id, ref, store_client,
+                        seller_id=flow.get("seller_id"),
+                    )
                     if order:
                         f = {**flow, "step": "conversational", "lang": flow_lang}
                         return save(f, _format_order_sentence(flow_lang, order))

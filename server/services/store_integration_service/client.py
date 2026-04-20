@@ -209,6 +209,37 @@ class StoreIntegrationClient:
         except httpx.HTTPError:
             return None
 
+    async def get_order_tracking(
+        self, order_id: str, seller_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        GET /orders/{order_id}/tracking
+        Returns the live tracking status payload for an order, or None.
+        """
+        if not self.base_url:
+            return None
+        oid = (order_id or "").strip()
+        if not oid:
+            return None
+        try:
+            params: Dict[str, Any] = {}
+            sid = (seller_id or "").strip()
+            if sid:
+                params["seller_id"] = sid
+            async with httpx.AsyncClient(
+                base_url=self.base_url, headers=self._headers(), timeout=10.0
+            ) as client:
+                resp = await client.get(f"/orders/{oid}/tracking", params=params or None)
+                if resp.status_code == 404:
+                    return None
+                resp.raise_for_status()
+                payload = resp.json()
+                if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+                    return payload.get("data")
+                return payload if isinstance(payload, dict) else None
+        except httpx.HTTPError:
+            return None
+
     async def get_tracking_status(self, tracking_id: str, seller_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         GET /tracking/{tracking_id}
@@ -255,18 +286,28 @@ class StoreIntegrationClient:
         except httpx.HTTPError:
             return []
 
-    async def get_invoice_by_seller_id(self, seller_id: str) -> Dict[str, Any]:
+    async def get_invoice_by_seller_id(
+        self,
+        seller_id: str,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        GET /customers/invoice?seller_id={seller_id}
+        GET /customers/invoice?seller_id={seller_id}[&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD]
         """
         if not self.base_url:
             return {}
         sid = (seller_id or "").strip()
         if not sid:
             return {}
+        params: Dict[str, Any] = {"seller_id": sid}
+        if (date_from or "").strip():
+            params["date_from"] = date_from.strip()
+        if (date_to or "").strip():
+            params["date_to"] = date_to.strip()
         try:
             async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
-                resp = await client.get("/customers/invoice", params={"seller_id": sid})
+                resp = await client.get("/customers/invoice", params=params)
                 if resp.status_code >= 400:
                     return {}
                 payload = resp.json()

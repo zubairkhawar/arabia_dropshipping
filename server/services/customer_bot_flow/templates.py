@@ -32,6 +32,11 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "مرحبًا! كيف يمكنني مساعدتك اليوم؟",
         "roman_urdu": "Hello! Aaj kya madad karoon?",
     },
+    "thanks_ack": {
+        "english": "You're welcome! Is there anything else I can help you with?",
+        "arabic": "على الرحب والسعة! هل هناك أي شيء آخر يمكنني مساعدتك به؟",
+        "roman_urdu": "Shukriya! Kya aur koi madad chahiye?",
+    },
     "customer_type_menu_reminder": {
         "english": "To continue, reply **1** if you are a new customer or **2** if you are an existing customer.",
         "arabic": "للمتابعة، أجب بـ **1** إذا كنت عميلاً جديداً أو **2** إذا كنت عميلاً حالياً.",
@@ -39,19 +44,22 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "customer_type_unclear": {
         "english": (
-            "I could not tell whether you are a new or an existing customer.\n"
-            "Please reply with **1** for new customer or **2** for existing customer "
-            "(or type \"new customer\" / \"existing customer\")."
+            "No problem! To help you better, please let me know:\n\n"
+            "**1** — I'm a new customer\n"
+            "**2** — I'm an existing customer\n\n"
+            "Just reply with 1 or 2."
         ),
         "arabic": (
-            "لم أتمكن من معرفة إن كنت عميلاً جديداً أو حالياً.\n"
-            "يرجى الرد بـ **1** للعميل الجديد أو **2** للعميل الحالي "
-            "(أو اكتب \"عميل جديد\" / \"عميل حالي\")."
+            "لا مشكلة! لمساعدتك بشكل أفضل، يرجى إخباري:\n\n"
+            "**1** — أنا عميل جديد\n"
+            "**2** — أنا عميل حالي\n\n"
+            "فقط أرسل 1 أو 2."
         ),
         "roman_urdu": (
-            "Samajh nahi aa saka ke aap new customer hain ya existing.\n"
-            "Please **1** likhein agar new customer, **2** likhein agar existing "
-            "(ya \"new customer\" / \"existing customer\" likhein)."
+            "Koi masla nahi! Aapki behtar madad ke liye batayein:\n\n"
+            "**1** — Main new customer hoon\n"
+            "**2** — Main existing customer hoon\n\n"
+            "Sirf 1 ya 2 likhein."
         ),
     },
     "greeting": {
@@ -238,9 +246,21 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": "Apna Order ID bhejein 📦",
     },
     "order_not_found": {
-        "english": "Order nahi mila. Dobara check karein ya support likhein.",
-        "arabic": "لم يتم العثور على الطلب. يرجى التحقق مرة أخرى أو اكتب support.",
-        "roman_urdu": "Order nahi mila. Dobara check karein ya support likhein.",
+        "english": (
+            "I couldn't find that order on your account. "
+            "Please double-check the order number and try again, "
+            "or type **agent** / **support** if you need help."
+        ),
+        "arabic": (
+            "لم يتم العثور على الطلب في حسابك. "
+            "يرجى التحقق من رقم الطلب والمحاولة مرة أخرى، "
+            "أو اكتب **agent** / **support** للمساعدة."
+        ),
+        "roman_urdu": (
+            "Mujhe aapke account mein yeh order nahi mila. "
+            "Order number check karke dobara try karein, "
+            "ya **agent** / **support** likhein."
+        ),
     },
     "order_lookup_error": {
         "english": (
