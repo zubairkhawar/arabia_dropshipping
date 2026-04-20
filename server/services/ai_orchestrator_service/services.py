@@ -8,6 +8,22 @@ from services.store_integration_service.client import StoreIntegrationClient
 logger = logging.getLogger(__name__)
 
 
+def _customer_record_is_linked(customer: Optional[Dict[str, Any]]) -> bool:
+    """True if the store payload clearly identifies a customer row.
+
+    Some merchant APIs return ``_id`` or ``customer_id`` but not ``id``;
+    the old ``customer.get("id")`` check alone made ``is_store_customer`` false
+    and the LLM thought no account was linked even after script verification.
+    """
+    if not isinstance(customer, dict) or not customer:
+        return False
+    for k in ("id", "_id", "customer_id", "user_id"):
+        v = customer.get(k)
+        if v is not None and str(v).strip():
+            return True
+    return False
+
+
 def _extract_order_id_from_message(message: str, phone: Optional[str]) -> Optional[str]:
     """
     Best-effort order reference from free text (e.g. "order 123432", "#123432").
@@ -17,6 +33,7 @@ def _extract_order_id_from_message(message: str, phone: Optional[str]) -> Option
         return None
     phone_digits = re.sub(r"\D", "", phone or "")
     for pattern in (
+        r"(?i)\b(?:order|ord)\s+id\s*[#:\-]?\s*(\d{4,14})\b",
         r"(?i)\b(?:order|ord)\s*[#:\-]?\s*(\d{4,14})\b",
         r"#\s*(\d{4,14})\b",
     ):
@@ -352,9 +369,25 @@ class AIOrchestrator:
                     orders = [x for x in inv_payload.get("data") if isinstance(x, dict)]
                 if isinstance(inv_payload.get("invoices"), list):
                     invoices = [x for x in inv_payload.get("invoices") if isinstance(x, dict)]
+                # Invoice payload often has no ``orders`` array even when the seller
+                # has live rows — fall back to /orders/all for LLM + tooling context.
+                if not orders:
+                    try:
+                        orders = await self.store_client.get_orders_all(seller_id)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("Store API orders/all fallback failed")
+                        store_context_error = (store_context_error or "") + f" orders_all:{exc!s}"[:220]
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Store API invoice by seller_id failed")
                 store_context_error = f"invoice_fetch:{exc!s}"[:220]
+                if not orders:
+                    try:
+                        orders = await self.store_client.get_orders_all(seller_id)
+                    except Exception as exc2:  # noqa: BLE001
+                        logger.exception("Store API orders/all after invoice failure")
+                        store_context_error = (
+                            (store_context_error or "") + f" orders_all:{exc2!s}"
+                        )[:220]
 
         if not seller_id and phone:
             # Preserve compatibility for channels that still only provide phone.
@@ -372,6 +405,12 @@ class AIOrchestrator:
         if order_id:
             try:
                 detail = await self.store_client.get_order_by_id(order_id, seller_id=seller_id)
+                if not detail:
+                    detail = await self.store_client.get_order_by_number(order_id)
+                if not detail and seller_id:
+                    detail = await self.store_client.resolve_order_by_reference(
+                        order_id, seller_id
+                    )
                 if detail:
                     orders = [detail] + [
                         o for o in orders if str(o.get("id", o)) != str(detail.get("id", detail))
@@ -397,10 +436,23 @@ class AIOrchestrator:
             logger.exception("Store API faq failed")
             store_context_error = (store_context_error or "") + f" faq_fetch:{exc!s}"[:220]
 
+        store_linked = _customer_record_is_linked(customer)
+        if (
+            not store_linked
+            and isinstance(flow, dict)
+            and flow.get("verified")
+            and isinstance(customer, dict)
+            and customer
+            and seller_id
+        ):
+            # Script verified email+mobile and we have a non-empty store customer
+            # payload + seller scope, but no canonical id field the API uses.
+            store_linked = True
+
         return {
             "customer": customer or {},
             "recent_orders": orders,
-            "is_store_customer": bool(customer and customer.get("id")),
+            "is_store_customer": store_linked,
             "verification_method": verification_method,
             "store_context_error": store_context_error,
             "seller_id": seller_id,

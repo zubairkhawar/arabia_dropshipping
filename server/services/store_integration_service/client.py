@@ -366,6 +366,52 @@ class StoreIntegrationClient:
         except httpx.HTTPError:
             return None
 
+    @staticmethod
+    def _order_dict_identity_values(o: Dict[str, Any]) -> List[str]:
+        """All string forms of id / order_number that might match user input."""
+        out: List[str] = []
+        for k in (
+            "id",
+            "_id",
+            "order_id",
+            "order_number",
+            "number",
+            "orderNo",
+            "order_no",
+        ):
+            v = o.get(k)
+            if v is None or v == "":
+                continue
+            s = str(v).strip()
+            if s:
+                out.append(s)
+        return out
+
+    async def resolve_order_by_reference(
+        self, ref: str, seller_id: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        When GET /orders/{ref} fails, the store may still key orders by an internal
+        id while shoppers see a numeric ``order_number``. Scan GET /orders/all for
+        this seller and return the row whose id / order_number matches ``ref``.
+        """
+        r = (ref or "").strip().lstrip("#")
+        sid = (seller_id or "").strip()
+        if not r or not sid:
+            return None
+        try:
+            orders = await self.get_orders_all(sid)
+        except Exception:  # noqa: BLE001
+            logger.exception("resolve_order_by_reference: get_orders_all failed for seller_id=%s", sid)
+            return None
+        for o in orders:
+            if not isinstance(o, dict):
+                continue
+            for cand in self._order_dict_identity_values(o):
+                if cand == r or cand.lstrip("#") == r:
+                    return o
+        return None
+
     async def get_orders_all(
         self,
         seller_id: str,

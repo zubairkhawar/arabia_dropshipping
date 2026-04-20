@@ -542,6 +542,10 @@ def _looks_like_order_status_question(text: str) -> bool:
         return False
     if any(k in t for k in strict_order_markers):
         return True
+    # "order 185196", "order #185196" — user gives the id inline without
+    # "order id" / "my order" wording; the secondary gate below would miss these.
+    if re.search(r"\border\b\s*[#:]?\s*\d{4,14}\b", t):
+        return True
 
     # Secondary gate: require both order-domain and "asking" intent.
     # Use word boundaries — substring "order" matches inside "inventory" and misroutes FAQ to verify.
@@ -1795,11 +1799,23 @@ async def _lookup_order(
         logger.exception("order lookup: /orders/%s failed", ref)
         return None, "api_error"
 
+    if not detail and sid:
+        try:
+            detail = await store_client.resolve_order_by_reference(ref, sid)
+        except Exception:  # noqa: BLE001
+            logger.exception("order lookup: resolve_order_by_reference failed for %s", ref)
+
     if not detail:
         return None, "not_found"
 
     try:
-        tracking = await store_client.get_order_tracking(ref, seller_id=sid)
+        oid_track = str(
+            (detail.get("id") if isinstance(detail, dict) else None)
+            or (detail.get("_id") if isinstance(detail, dict) else None)
+            or (detail.get("order_id") if isinstance(detail, dict) else None)
+            or ref,
+        ).strip()
+        tracking = await store_client.get_order_tracking(oid_track, seller_id=sid)
     except Exception:  # noqa: BLE001
         logger.exception("order lookup: /orders/%s/tracking failed (continuing)", ref)
         tracking = None
@@ -4119,6 +4135,34 @@ async def process_customer_bot_message(
 
     if step == "conversational":
         kind = flow.get("customer_kind")
+
+        # Order / tracking intent must win over trending + sourcing + LLM for
+        # verified shoppers — otherwise "give me order details" after a product
+        # browse can loop on empty catalog suggestions, and the model invents
+        # "no orders linked" from stale context.
+        if flow.get("verified") and (
+            _looks_like_order_status_question(text) or _is_likely_order_id_only(text)
+        ):
+            ref_o = ""
+            if _is_likely_order_id_only(text):
+                ref_o = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
+            else:
+                ref_o = (_extract_order_id_from_message(text, phone) or "").strip()
+            if ref_o:
+                order_o, src_o = await _lookup_order(
+                    db, tenant_id, ref_o, store_client,
+                    seller_id=flow.get("seller_id"),
+                )
+                if order_o:
+                    f_o = {**flow, "step": "conversational", "lang": flow_lang}
+                    return save(f_o, _format_order_sentence(flow_lang, order_o))
+                if src_o == "api_error":
+                    f_o = {**flow, "step": "conversational", "lang": flow_lang}
+                    return save(f_o, _t(flow_lang, MSGS["order_lookup_error"]))
+                f_o = {**flow, "step": "conversational", "lang": flow_lang}
+                return save(f_o, _t(flow_lang, MSGS["order_not_found"]))
+            nf_o = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
+            return save(nf_o, _t(flow_lang, MSGS["ask_order"]))
 
         if _wants_non_trending_products(text):
             llm_res = await _try_trending_llm(entry_intent="non_trending")
