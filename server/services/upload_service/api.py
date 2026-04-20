@@ -17,6 +17,7 @@ from services.media_storage.r2 import (
     trending_product_object_key,
     validate_upload_request,
 )
+from services.media_storage.image_convert import convert_to_whatsapp_safe_image
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -125,13 +126,20 @@ async def upload_product_image(
 
     raw_ct = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
     try:
-        _, ext = validate_upload_request("image", raw_ct, len(body))
+        _, _ext = validate_upload_request("image", raw_ct, len(body))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
-    object_key = trending_product_object_key(folder, ext)
+    # Transcode webp/heic/heif/avif/gif/tiff/bmp → JPEG once at upload so every
+    # stored trending-product image is a WhatsApp-safe jpeg/png. jpeg/png
+    # bytes pass through unchanged (preserving the original quality).
+    stored_body, stored_ext, stored_ct = convert_to_whatsapp_safe_image(
+        body, content_type=raw_ct
+    )
+
+    object_key = trending_product_object_key(folder, stored_ext)
     try:
-        put_bytes(object_key, body, raw_ct or "application/octet-stream")
+        put_bytes(object_key, stored_body, stored_ct or "application/octet-stream")
     except Exception as e:
         logger.exception("R2 put_bytes failed for trending product image: %s", e)
         raise HTTPException(
