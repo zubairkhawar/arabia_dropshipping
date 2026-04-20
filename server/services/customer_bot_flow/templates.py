@@ -734,9 +734,18 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         ),
     },
     "trending_no_products": {
-        "english": "No trending products are listed for {country} yet.",
-        "arabic": "لا توجد منتجات رائجة مسجّلة لـ {country} حتى الآن.",
-        "roman_urdu": "Abhi {country} ke liye koi trending product list nahi hai.",
+        "english": (
+            "There aren't any trending products listed for {country} yet — our team is "
+            "still adding them. In the meantime, try another market or ask me anything else."
+        ),
+        "arabic": (
+            "لا توجد منتجات رائجة مسجّلة لـ {country} حتى الآن — فريقنا يعمل على إضافتها. "
+            "في غضون ذلك، جرّب سوقاً آخر أو اسألني أي شيء آخر."
+        ),
+        "roman_urdu": (
+            "Abhi {country} ke liye koi trending product list nahi hai — team add kar rahi "
+            "hai. Aap doosra market try karein ya koi aur sawal pooch lein."
+        ),
     },
     "trending_no_products_category": {
         "english": "No trending {category} products are listed for {country} yet. Try another category/country or ask me anything else.",

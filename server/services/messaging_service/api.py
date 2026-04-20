@@ -2031,7 +2031,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     wa_response: Dict[str, Any] | None = None
     client = MetaWhatsAppClient()
     wa_images = getattr(flow, "whatsapp_image_outbound", None) or []
-    wa_tail = (getattr(flow, "whatsapp_text_after_images", None) or "").strip()
+    _wa_tail_raw = getattr(flow, "whatsapp_text_after_images", None)
+    wa_tail_parts: List[str] = []
+    if isinstance(_wa_tail_raw, list):
+        for _p in _wa_tail_raw:
+            s = str(_p or "").strip()
+            if s:
+                wa_tail_parts.append(s)
+    elif _wa_tail_raw:
+        s = str(_wa_tail_raw).strip()
+        if s:
+            wa_tail_parts.append(s)
 
     if reply_text or wa_images:
         if not client.is_configured():
@@ -2063,9 +2073,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                                 conversation.id,
                             )
                             wa_response = {"error": "meta_image_send_failed"}
-                    if wa_tail:
+                    for _part in wa_tail_parts:
                         wa_response = await client.send_text_message(
-                            to_phone=from_phone, text=wa_tail[:4096]
+                            to_phone=from_phone, text=_part[:4096]
                         )
                 elif (reply_text or "").strip():
                     wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)

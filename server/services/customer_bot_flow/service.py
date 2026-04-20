@@ -13,7 +13,7 @@ import unicodedata
 from dataclasses import dataclass
 import calendar
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -670,16 +670,21 @@ def _trending_followup_other_markets(cc: str) -> Tuple[str, str]:
     return "UAE", "KSA"
 
 
+def _trending_followup_block(lang: str, country_code: str) -> str:
+    """Return just the follow-up suggestions block (empty string when disabled)."""
+    if not bool(getattr(settings, "llm_followup_suggestions", True)):
+        return ""
+    oa, ob = _trending_followup_other_markets(country_code)
+    return _t(lang, MSGS["trending_followup_suggestions"]).format(other_a=oa, other_b=ob)
+
+
 def _append_trending_followup_suggestions(lang: str, country_code: str, text: str) -> str:
     """Append deterministic follow-ups when LLM_FOLLOWUP_SUGGESTIONS is enabled (trending is non-LLM)."""
-    if not bool(getattr(settings, "llm_followup_suggestions", True)):
-        return (text or "").strip()
     base = (text or "").strip()
     if not base:
         return base
-    oa, ob = _trending_followup_other_markets(country_code)
-    block = _t(lang, MSGS["trending_followup_suggestions"]).format(other_a=oa, other_b=ob)
-    return f"{base}{block}".strip()
+    block = _trending_followup_block(lang, country_code)
+    return f"{base}{block}".strip() if block else base
 
 
 def _exit_trending_for_greeting(flow: Dict[str, Any], flow_lang: str) -> Tuple[Dict[str, Any], str]:
@@ -2537,8 +2542,10 @@ class BotFlowResult:
     """False means caller should use legacy behavior (e.g. human agent owns chat)."""
     whatsapp_image_outbound: Optional[List[Dict[str, str]]] = None
     """Each item: {"image_url": str, "caption": str} for Meta image messages (WhatsApp only)."""
-    whatsapp_text_after_images: Optional[str] = None
-    """When set with whatsapp_image_outbound, sent as the text message after images on WhatsApp."""
+    whatsapp_text_after_images: Optional[Union[str, List[str]]] = None
+    """Follow-up text(s) after image(s) on WhatsApp. Pass a list to emit each
+    string as its own message (e.g. list + footer first, then a separate
+    \"you might also want to ask…\" suggestion bubble)."""
 
 
 async def process_customer_bot_message(
@@ -2613,7 +2620,7 @@ async def process_customer_bot_message(
         esc: bool = False,
         skip_api: Optional[bool] = None,
         wa_images: Optional[List[Dict[str, str]]] = None,
-        wa_text_after: Optional[str] = None,
+        wa_text_after: Optional[Union[str, List[str]]] = None,
     ):
         f["lang"] = flow_lang
         if skip_api is None:
@@ -2703,12 +2710,16 @@ async def process_customer_bot_message(
             flow_lang, cc, page,
             category=wanted_category, start_rank=1, is_more_batch=False,
         )
-        full_reply = _append_trending_followup_suggestions(
-            flow_lang, cc, f"{body}\n\n{footer}".strip()
-        )
+        base_reply = f"{body}\n\n{footer}".strip()
+        followup = _trending_followup_block(flow_lang, cc).lstrip()
+        full_reply = f"{base_reply}\n\n{followup}".strip() if followup else base_reply
         wa_imgs: Optional[List[Dict[str, str]]] = None
-        wa_aft: Optional[str] = None
+        wa_aft: Optional[Union[str, List[str]]] = None
         _ch = (channel or "web").strip().lower()
+        logger.info(
+            "trending show: country=%s total_rows=%d visible=%d page_size=%d",
+            cc, len(items_all), len(visible), len(page),
+        )
         if _ch == "whatsapp":
             wa_l: List[Dict[str, str]] = []
             no_u: List[str] = []
@@ -2728,9 +2739,13 @@ async def process_customer_bot_message(
                     no_u.append(f"{cap}\n(no image URL — open chat on web for full list)")
             if wa_l:
                 wa_imgs = wa_l
-                wa_aft = full_reply.strip()
-                if no_u:
-                    wa_aft = "\n\n".join([*no_u, full_reply]).strip()
+                # WhatsApp: images first, then list+footer as one bubble,
+                # then the "you might also want to ask" block as a second
+                # bubble so the user sees them as distinct messages.
+                first_bubble = (
+                    "\n\n".join([*no_u, base_reply]).strip() if no_u else base_reply
+                )
+                wa_aft = [first_bubble, followup] if followup else [first_bubble]
         return save(nf, full_reply, wa_images=wa_imgs, wa_text_after=wa_aft)
 
     ch = (channel or "web").strip().lower()
@@ -3015,9 +3030,9 @@ async def process_customer_bot_message(
                 start_rank=new_offset + 1,
                 is_more_batch=True,
             )
-            full_reply = _append_trending_followup_suggestions(
-                flow_lang, cc, f"{body}\n\n{footer}".strip()
-            )
+            base_reply2 = f"{body}\n\n{footer}".strip()
+            followup2 = _trending_followup_block(flow_lang, cc).lstrip()
+            full_reply = f"{base_reply2}\n\n{followup2}".strip() if followup2 else base_reply2
             if ch == "whatsapp":
                 wa_list2: List[Dict[str, str]] = []
                 no_url2: List[str] = []
@@ -3035,9 +3050,12 @@ async def process_customer_bot_message(
                         cap = _wa_caption_for_trending_row(it, rank=new_offset + i + 1)
                         no_url2.append(f"{cap}\n(no image URL — open chat on web for full list)")
                 if wa_list2:
-                    wa_after2 = full_reply.strip()
-                    if no_url2:
-                        wa_after2 = "\n\n".join([*no_url2, full_reply]).strip()
+                    first_bubble2 = (
+                        "\n\n".join([*no_url2, base_reply2]).strip() if no_url2 else base_reply2
+                    )
+                    wa_after2: Union[str, List[str]] = (
+                        [first_bubble2, followup2] if followup2 else [first_bubble2]
+                    )
                     return save(nf, full_reply, wa_images=wa_list2, wa_text_after=wa_after2)
             return save(nf, full_reply)
 
@@ -3087,9 +3105,9 @@ async def process_customer_bot_message(
                 start_rank=1,
                 is_more_batch=False,
             )
-            full_reply = _append_trending_followup_suggestions(
-                flow_lang, cc, f"{body}\n\n{footer}".strip()
-            )
+            base_reply_c = f"{body}\n\n{footer}".strip()
+            followup_c = _trending_followup_block(flow_lang, cc).lstrip()
+            full_reply = f"{base_reply_c}\n\n{followup_c}".strip() if followup_c else base_reply_c
             if ch == "whatsapp":
                 wa_list: List[Dict[str, str]] = []
                 no_url_lines: List[str] = []
@@ -3108,9 +3126,13 @@ async def process_customer_bot_message(
                         cap = _wa_caption_for_trending_row(it, rank=offset + i + 1)
                         no_url_lines.append(f"{cap}\n(no image URL — open chat on web for full list)")
                 if wa_list:
-                    wa_after = full_reply.strip()
-                    if no_url_lines:
-                        wa_after = "\n\n".join([*no_url_lines, full_reply]).strip()
+                    first_bubble_c = (
+                        "\n\n".join([*no_url_lines, base_reply_c]).strip()
+                        if no_url_lines else base_reply_c
+                    )
+                    wa_after: Union[str, List[str]] = (
+                        [first_bubble_c, followup_c] if followup_c else [first_bubble_c]
+                    )
                     return save(nf, full_reply, wa_images=wa_list, wa_text_after=wa_after)
             return save(nf, full_reply)
 
