@@ -31,6 +31,7 @@ from services.trending_products_service.bot_query import (
     get_trending_product_by_id,
     list_active_trending_for_country,
 )
+from services.media_proxy_service.api import ensure_wa_safe_image_url
 from services.human_handoff_intent import (
     is_slash_reset_command,
     solo_menu_digit,
@@ -880,9 +881,14 @@ def _wa_images_for_trending_row(
         urls.insert(0, primary)
     if not urls:
         return []
+    # Meta's WhatsApp Cloud API only accepts jpeg/png by link; route anything
+    # else (webp/heic/heif/avif/gif/tiff/bmp/…) through the on-the-fly
+    # transcoder so merchants who upload non-standard formats still see images.
+    proxy_base = (getattr(settings, "server_public_base_url", None) or "").strip() or None
+    safe_urls = [ensure_wa_safe_image_url(u, base_url=proxy_base) for u in urls]
     caption = _wa_caption_for_trending_row(it, rank=rank)
-    out: List[Dict[str, str]] = [{"image_url": urls[0], "caption": caption}]
-    for u in urls[1:]:
+    out: List[Dict[str, str]] = [{"image_url": safe_urls[0], "caption": caption}]
+    for u in safe_urls[1:]:
         out.append({"image_url": u, "caption": ""})
     return out
 

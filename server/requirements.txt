@@ -27,3 +27,5 @@ openpyxl
 xlrd
 pypdf>=4.0.0
 pdfplumber>=0.10.0
+Pillow>=10.2.0
+pillow-heif>=0.15.0

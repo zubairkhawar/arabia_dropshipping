@@ -45,6 +45,7 @@ from services.trending_products_service.api import (
     router as trending_products_admin_router,
     trending_page_router,
 )
+from services.media_proxy_service.api import router as media_proxy_router
 
 
 def ensure_admin_user() -> None:
@@ -163,6 +164,8 @@ app.include_router(upload_router, prefix="/api/upload", tags=["upload"])
 app.include_router(trending_products_admin_router)
 app.include_router(trending_public_router)
 app.include_router(trending_page_router)
+# Public WhatsApp image transcoder (must be reachable by Meta Cloud servers).
+app.include_router(media_proxy_router)
 
 
 @app.get("/")
