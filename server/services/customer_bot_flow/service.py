@@ -2999,27 +2999,31 @@ async def process_customer_bot_message(
             return None
 
         # Build a compact conversation-history block so the LLM has context.
+        # IMPORTANT: only include the customer's own recent messages — never
+        # prior bot replies. Including bot replies in the history causes the
+        # LLM to mimic its own past kb_wrap footers (website URLs, "type
+        # support" etc.) into the trending runner's output, which is wrong.
         history_block = ""
         try:
             if conversation is not None and getattr(conversation, "id", None):
                 rows = (
                     db.query(Message)
-                    .filter(Message.conversation_id == conversation.id)
+                    .filter(
+                        Message.conversation_id == conversation.id,
+                        Message.sender_type == "customer",
+                    )
                     .order_by(desc(Message.id))
-                    .limit(8)
+                    .limit(4)
                     .all()
                 )
                 rows.reverse()
                 lines: List[str] = []
                 for m in rows:
-                    label = "Customer" if m.sender_type == "customer" else (
-                        "Agent" if m.sender_type == "agent" else "Bot"
-                    )
                     body = (m.content or "").strip().replace("\n", " ")
-                    if len(body) > 400:
-                        body = body[:397] + "…"
+                    if len(body) > 200:
+                        body = body[:197] + "…"
                     if body:
-                        lines.append(f"{label}: {body}")
+                        lines.append(f"Customer: {body}")
                 history_block = "\n".join(lines)
         except Exception:  # pragma: no cover — history is best-effort
             logger.exception("trending_llm: loading history failed")

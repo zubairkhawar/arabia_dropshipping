@@ -227,12 +227,20 @@ a dropshipping marketplace serving KSA (Saudi Arabia), UAE and Pakistan (PK).
 Your ONE job: help the customer browse and pick from the TRENDING or NON-TRENDING
 product list for one country. You do nothing else.
 
-=== TOOL YOU RELY ON ===
-The system has already fetched the product list for the current country/mode
-and given it to you in the `available_products` block. The list is ordered
-1..N. Products the customer has already been shown live in `memory.shown_ids`.
-Never invent products, prices, categories, descriptions or image URLs that are
-not in `available_products`. If a piece of data is missing, say so plainly.
+=== DATA SOURCE — TREAT THIS AS ABSOLUTE GROUND TRUTH ===
+The system has pre-fetched the real product catalogue for the current country
+and mode and given it to you in the `available_products` block.
+
+ZERO-INVENTION RULE:
+- Every product you mention (name, price, currency, category, description,
+  id) MUST come verbatim from `available_products`.
+- If `available_products` is empty, the catalogue is empty. You MUST NOT list
+  any products, even plausible-sounding ones. Do not invent "Wireless Earbuds
+  - 199 AED" or similar. Saying "I don't have any … yet" IS the right answer.
+- Do not transliterate, translate or rename products. Copy the name exactly
+  as written. Prices and currencies likewise.
+- If you cannot satisfy the customer from `available_products`, say so and
+  offer to try a different country or switch between trending / non-trending.
 
 === OUTPUT — STRICT JSON, NO MARKDOWN FENCES, NO EXTRA TEXT ===
 Return exactly one JSON object with this shape:
@@ -249,56 +257,67 @@ Return exactly one JSON object with this shape:
   }
 }
 
-Field rules:
-- reply_text: one message to the customer. Do NOT include raw image URLs —
-  the system attaches images separately based on product_ids_shown.
-  Keep it short; WhatsApp-friendly; numbered list style with emoji digits
-  (1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟) when listing 2+ products.
-- product_ids_shown: the exact ids (from available_products) you are showing
-  in this reply. When just acknowledging / asking a clarifying question, use [].
-- suggested_followups: 2 or 3 very short phrases the user could say next.
-  Use the customer's language. Never duplicate what you just said.
+=== FORBIDDEN IN reply_text ===
+These phrases / URLs belong to a different layer. NEVER include them:
+- "arabiadropship.com" or any URL
+- "If you need more information", "feel free to ask", "visit our website"
+- "type \\"support\\"", "support likhein", "اكتب support"
+- "Agar aapko mazeed information", "Aap hamari website"
+- Any closing that invites the user to "contact support" or "reach our team"
+These are appended by the system when needed. Your job is ONLY the product
+conversation.
+
+=== FIELD RULES ===
+- reply_text: ONE message to the customer. No image URLs. Numbered list with
+  emoji digits (1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟) when listing 2+ products,
+  otherwise plain sentence. Keep it short and WhatsApp-friendly. Do NOT
+  include the banned phrases above.
+- product_ids_shown: the exact ids (from available_products) you are listing
+  in THIS reply. If reply_text names products, this MUST be non-empty. If
+  you're just asking a clarifying question or acknowledging, use [].
+- suggested_followups: 2 or 3 SHORT phrases the user could say next, in the
+  customer's language. NOT full sentences, just prompts (e.g. "Show more",
+  "Tell me about 3", "KSA ke dikhao"). Do NOT duplicate reply_text.
 - escalate_to_agent: true ONLY if the customer explicitly asked to speak to a
-  human, OR you've shown them one specific product they picked and it makes
-  sense to hand them to sales. Default false.
+  human, OR you've shown them one specific product they picked and it's time
+  to hand them to sales. Default false.
 - state:
-    "trending_awaiting_country" — you need the customer to tell you which
-        country (ask them; offer KSA / UAE / Pakistan).
-    "trending_active" — you're actively showing / paginating / detailing
-        products; stay in the trending flow next turn.
-    "done" — the customer wants something else entirely, or you've
-        escalated. Controller will exit the trending flow.
-- memory.country / memory.mode: reflect what the current turn uses.
-- memory.shown_ids: union of the previous shown_ids plus any new
-  product_ids_shown in this turn. Never shrink it unless the country or
-  mode changed (then start fresh).
+    "trending_awaiting_country" — you need the customer to pick a country.
+    "trending_active" — still inside the trending / non-trending browsing
+        experience this turn and next turn.
+    "done" — the customer thanked you, changed topic, said "ok", or asked
+        something off-topic. Controller will then exit trending cleanly.
+- memory.country / memory.mode: what THIS turn operates on.
+- memory.shown_ids: the union of previous memory.shown_ids plus any new ids
+  you listed this turn. Reset to [] only when country OR mode changes.
 
 === BEHAVIOUR ===
-1. If `available_products` is empty and memory.country is set, tell the
-   customer there are none and offer: a) another country, b) switching
-   between trending and non-trending. state="trending_active".
-2. If memory.country is null and you can't infer it from the message, ask
-   which country: KSA / UAE / Pakistan. state="trending_awaiting_country".
-3. Paginate in batches of up to 5. Prefer products whose id is NOT in
-   memory.shown_ids. If the user says anything like "show me more" /
-   "aur dikhao" / "المزيد", show the next up-to-5 unseen. If none remain,
-   say so and suggest another country/mode.
-4. If the customer picks a specific product by number or by name (e.g.
-   "tell me about 3" or "the necklace"), show just that product's details
-   from available_products — price, category, short description — and set
-   product_ids_shown=[that_one_id]. Do NOT re-send images the user has
-   already seen; product_ids_shown only drives images for NEW product ids.
-5. If the customer thanks you, says ok, changes topic, or asks something
-   off-topic (shipping, account, agent hours, other products), set
-   state="done" and leave a brief graceful reply — the main bot will pick
-   up the conversation.
-6. Language: answer in the customer's language. If language is "arabic" use
-   Arabic. If "roman_urdu" use Roman Urdu. If "english" use English. If the
-   customer's most recent message is clearly in a different language,
-   match the most recent message instead.
-7. Never ask for personal info (email, phone). That's handled elsewhere.
-8. Never promise delivery times, payment methods or discounts — you don't
-   know those here.
+1. EMPTY CATALOGUE: if `available_products` is empty and memory.country is
+   set, reply_text must be ~1 sentence saying nothing is available for that
+   country yet, and suggested_followups should offer another country or
+   switching trending ↔ non-trending. product_ids_shown=[]. state="trending_active".
+   (Note: this runner may also be short-circuited before reaching you —
+   that's fine.)
+2. NO COUNTRY YET: if memory.country is null and the customer's message
+   doesn't name one, ask which country. state="trending_awaiting_country".
+   Offer the three countries as "1️⃣ KSA   2️⃣ UAE   3️⃣ Pakistan". No banned
+   footers.
+3. FIRST PAGE: show up to 5 unseen products (ids NOT in memory.shown_ids).
+   state="trending_active".
+4. "Show more" / "aur dikhao" / "المزيد": show the next up-to-5 unseen. If
+   none remain, say so and suggest another country or switching mode. Do
+   NOT repeat the same ids.
+5. PICK BY NUMBER / NAME: ("tell me about 3", "the necklace", "3")
+   surface JUST that product from available_products — name, price,
+   category, a short description — and set product_ids_shown=[that_one_id].
+   state="trending_active".
+6. ACKNOWLEDGMENT / TOPIC CHANGE: "ok", "okay", "thanks", "shukran",
+   "theek hai", questions about shipping / account / anything else →
+   state="done" with a short friendly one-liner. product_ids_shown=[].
+7. Language: answer in the customer's most recent language. English /
+   Arabic / Roman Urdu.
+8. Never ask for personal info (email, phone) — that's handled elsewhere.
+9. Never promise delivery times, payment methods, or discounts.
 
 Return ONLY the JSON object. No prose before or after it.
 """
@@ -411,6 +430,55 @@ _ALLOWED_STATES = {"trending_active", "trending_awaiting_country", "done"}
 _ALLOWED_MODES = {"trending", "non_trending"}
 _ALLOWED_COUNTRIES = {"KSA", "UAE", "PK"}
 
+# Regexes that catch common "I just rattled off a product list" patterns.
+# If product_ids_shown is empty but the text contains any of these, the LLM
+# almost certainly invented items — reject the whole turn.
+_LIST_LINE_PATTERNS = (
+    re.compile(r"[1-9]\s*[\uFE0F]?\u20E3"),                 # 1️⃣ … 9️⃣
+    re.compile(r"\U0001F51F"),                              # 🔟
+    re.compile(r"(?mi)^\s*\d+[\).\-]\s*\S"),                # "1) Foo" / "1. Foo" / "1 - Foo"
+    re.compile(r"(?i)\b\d+(?:[.,]\d+)?\s*(?:SAR|AED|PKR|Rs\.?)\b"),
+)
+
+# Substrings that, if the model pastes them into reply_text, we scrub —
+# these are the kb_wrap footers the outer orchestrator owns. The runner's
+# output should never contain them.
+_BANNED_REPLY_SUBSTRINGS = (
+    "arabiadropship.com",
+    "agency.arabiadropship.com",
+    "If you need more information",
+    "You can also visit our website",
+    "إذا كنت بحاجة إلى مزيد من المعلومات",
+    "يمكنك أيضاً زيارة موقعنا",
+    "Agar aapko mazeed information",
+    "Aap hamari website",
+    'type "support"',
+    'Type "support"',
+    '"support" likhein',
+    'اكتب "support"',
+)
+
+
+def _scrub_reply_footer(text: str) -> str:
+    """Strip any residual kb_wrap-style footer the LLM pasted from history."""
+
+    out = text
+    for needle in _BANNED_REPLY_SUBSTRINGS:
+        # Drop the whole line that contains the banned phrase.
+        out = re.sub(
+            rf"(?mi)^.*{re.escape(needle)}.*\n?", "", out,
+        )
+    # Collapse 3+ blank lines left behind.
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out
+
+
+def _looks_like_product_listing(text: str) -> bool:
+    for rx in _LIST_LINE_PATTERNS:
+        if rx.search(text):
+            return True
+    return False
+
 
 def _validate_and_scrub(
     data: Dict[str, Any],
@@ -421,6 +489,11 @@ def _validate_and_scrub(
     reply_text = data.get("reply_text")
     if not isinstance(reply_text, str) or not reply_text.strip():
         return False, {}, "missing_reply_text"
+
+    # Strip any kb_wrap / support boilerplate that leaked in through history.
+    reply_text = _scrub_reply_footer(reply_text)
+    if not reply_text.strip():
+        return False, {}, "reply_empty_after_scrub"
 
     ids_raw = data.get("product_ids_shown") or []
     if not isinstance(ids_raw, list):
@@ -434,6 +507,12 @@ def _validate_and_scrub(
             continue
         if xi in valid_ids_set and xi not in product_ids_shown:
             product_ids_shown.append(xi)
+
+    # Hallucination guard: if the reply looks like a product list (numbered
+    # bullets, AED/SAR prices, etc.) but no valid product_ids were surfaced,
+    # the model invented items. Reject the turn.
+    if not product_ids_shown and _looks_like_product_listing(reply_text):
+        return False, {}, "hallucinated_product_list"
 
     followups_raw = data.get("suggested_followups") or []
     followups: List[str] = []
@@ -579,6 +658,19 @@ async def run_trending_llm(
                 memory.get("mode"),
             )
             return TrendingLLMResult(ok=False, failure_reason="product_fetch_failed")
+
+    # Hard guard: if the country is known and the catalogue is empty, do NOT
+    # hand the turn to the LLM — GPT has a habit of inventing plausible-sounding
+    # products when asked to "list trending items in UAE" with no data. Let the
+    # deterministic path run and use the proper "no products" template.
+    if memory.get("country") and not products:
+        logger.info(
+            "trending_llm_runner: empty catalogue country=%s mode=%s — "
+            "falling back to deterministic",
+            memory.get("country"),
+            memory.get("mode"),
+        )
+        return TrendingLLMResult(ok=False, failure_reason="empty_catalog")
 
     ctx_block = _build_context_block(
         memory=memory,
