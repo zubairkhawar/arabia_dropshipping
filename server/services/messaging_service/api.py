@@ -4,8 +4,6 @@ import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-from services.media_proxy_service.api import ensure_wa_safe_image_url
-
 from fastapi import APIRouter, WebSocket, Request, Depends, HTTPException, status, Query, Body
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
@@ -2057,30 +2055,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             try:
                 wa_response = None
                 if isinstance(wa_images, list) and wa_images:
-                    # Meta only accepts jpeg/png via a public link. Upstream
-                    # callers (e.g. the trending flow) already route unknown
-                    # formats through the media proxy, but we re-check here
-                    # as a safety net for any other sender.
-                    proxy_base = (
-                        getattr(settings, "server_public_base_url", None) or ""
-                    ).strip() or None
-                    fallback_lines: List[str] = []
                     for idx, item in enumerate(wa_images):
                         if not isinstance(item, dict):
                             continue
-                        raw_url = str(item.get("image_url") or "").strip()
-                        if not raw_url:
+                        img_url = str(item.get("image_url") or "").strip()
+                        if not img_url:
                             continue
                         cap = str(item.get("caption") or "").strip() or None
-                        safe_url = ensure_wa_safe_image_url(
-                            raw_url, base_url=proxy_base
-                        )
-                        if safe_url != raw_url:
-                            logger.info(
-                                "WA image rewritten through proxy (conversation_id=%s) raw=%s",
-                                conversation.id,
-                                raw_url[:160],
-                            )
                         # Sequential awaits mostly preserve order on Meta's
                         # side, but back-to-back sends inside 100ms sometimes
                         # reorder. A tiny yield keeps the gallery tidy.
@@ -2092,31 +2073,16 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                         try:
                             wa_response = await client.send_image_message(
                                 to_phone=from_phone,
-                                image_url=safe_url,
+                                image_url=img_url,
                                 caption=cap,
                             )
                         except Exception:
                             logger.exception(
                                 "WhatsApp send_image_message failed (conversation_id=%s) url=%s",
                                 conversation.id,
-                                safe_url[:160],
+                                img_url[:160],
                             )
                             wa_response = {"error": "meta_image_send_failed"}
-                            # Final fallback: if even the proxied URL failed
-                            # (e.g. proxy unreachable), include the image as a
-                            # clickable link so the customer still gets it.
-                            line = (cap or "Image").strip()
-                            fallback_lines.append(
-                                f"{line}\n{raw_url}" if raw_url else line
-                            )
-                    # Prepend any fallback lines to the first text bubble so
-                    # customers always see the missing images inline.
-                    if fallback_lines:
-                        joined = "\n\n".join(fallback_lines)
-                        if wa_tail_parts:
-                            wa_tail_parts[0] = f"{joined}\n\n{wa_tail_parts[0]}"
-                        else:
-                            wa_tail_parts.append(joined)
                     for _pi, _part in enumerate(wa_tail_parts):
                         if _pi > 0:
                             try:

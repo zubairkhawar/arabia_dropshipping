@@ -64,10 +64,6 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = True
     frontend_base_url: str = "http://localhost:3000"
-    # Publicly reachable base URL of THIS backend service (e.g. https://backend.arabiadropship.com).
-    # Used to build proxy URLs for on-the-fly WhatsApp image transcoding (webp/heic/…-> jpeg).
-    # When empty, we still attempt to send the source URL as-is (WhatsApp may reject unsupported formats).
-    server_public_base_url: Optional[str] = None
     admin_email: Optional[str] = None
     admin_password: Optional[str] = None
 

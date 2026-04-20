@@ -24,6 +24,32 @@ const CURRENCY_BY_COUNTRY: Record<CountryCode, string> = {
   PK: 'PKR',
 };
 
+// Only JPEG/PNG are allowed because Meta's WhatsApp Cloud API only accepts
+// those when sending an image by link — keeping uploads to these formats
+// means every stored product image is guaranteed deliverable on WhatsApp.
+const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/jpg', 'image/png']);
+const ALLOWED_IMAGE_EXTS = ['.jpg', '.jpeg', '.png'];
+
+const isAllowedImageFile = (file: File): boolean => {
+  const mime = (file.type || '').toLowerCase();
+  if (mime && ALLOWED_IMAGE_MIMES.has(mime)) return true;
+  // Some browsers leave `type` empty for drag-and-drop; fall back to ext.
+  const name = (file.name || '').toLowerCase();
+  return ALLOWED_IMAGE_EXTS.some((ext) => name.endsWith(ext));
+};
+
+const partitionAllowedImages = (
+  files: File[],
+): { ok: File[]; rejected: File[] } => {
+  const ok: File[] = [];
+  const rejected: File[] = [];
+  for (const f of files) {
+    if (isAllowedImageFile(f)) ok.push(f);
+    else rejected.push(f);
+  }
+  return { ok, rejected };
+};
+
 const CATEGORIES = [
   'Electronics',
   'Fashion',
@@ -693,28 +719,46 @@ export default function AdminTrendingProductsPage() {
                     e.preventDefault();
                     setUploadDragOver(false);
                     const dropped = Array.from(e.dataTransfer.files || []);
-                    const next = dropped.filter((f) => f.type.startsWith('image/'));
-                    if (!next.length) return;
-                    setFormFiles((prev) => [...prev, ...next]);
-                    setFormNewFilePreviews((prev) => [...prev, ...next.map((f) => URL.createObjectURL(f))]);
+                    const { ok, rejected } = partitionAllowedImages(dropped);
+                    if (rejected.length) {
+                      toast(
+                        `Only JPG, JPEG, and PNG images are allowed. Skipped: ${rejected
+                          .map((f) => f.name)
+                          .join(', ')}`,
+                      );
+                    }
+                    if (!ok.length) return;
+                    setFormFiles((prev) => [...prev, ...ok]);
+                    setFormNewFilePreviews((prev) => [...prev, ...ok.map((f) => URL.createObjectURL(f))]);
                   }}
                 >
                   <input
                     type="file"
-                    accept="image/jpg,image/jpeg,image/png,image/webp,image/heic,image/heif"
+                    accept="image/jpeg,image/png,.jpg,.jpeg,.png"
                     multiple
                     className="hidden"
                     onChange={(e) => {
                       const selected = Array.from(e.target.files || []);
-                      if (!selected.length) return;
-                      setFormFiles((prev) => [...prev, ...selected]);
-                      setFormNewFilePreviews((prev) => [...prev, ...selected.map((f) => URL.createObjectURL(f))]);
+                      const { ok, rejected } = partitionAllowedImages(selected);
+                      if (rejected.length) {
+                        toast(
+                          `Only JPG, JPEG, and PNG images are allowed. Skipped: ${rejected
+                            .map((f) => f.name)
+                            .join(', ')}`,
+                        );
+                      }
+                      if (!ok.length) {
+                        e.currentTarget.value = '';
+                        return;
+                      }
+                      setFormFiles((prev) => [...prev, ...ok]);
+                      setFormNewFilePreviews((prev) => [...prev, ...ok.map((f) => URL.createObjectURL(f))]);
                       e.currentTarget.value = '';
                     }}
                   />
                   <div className="text-base font-semibold text-text-primary">Upload files</div>
                   <div className="mt-1 text-sm text-text-secondary">Drag & drop or click to browse.</div>
-                  <div className="mt-1 text-xs text-text-muted">JPG, JPEG, PNG, WEBP, HEIC</div>
+                  <div className="mt-1 text-xs text-text-muted">Only JPG, JPEG, or PNG allowed</div>
                   <div className="mt-2 text-xs text-text-muted">
                     {formFiles.length ? `${formFiles.length} new image(s) selected` : 'No new files selected'}
                   </div>

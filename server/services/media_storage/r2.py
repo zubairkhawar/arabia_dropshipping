@@ -60,29 +60,12 @@ def validate_upload_request(
         ext = ".webm" if "webm" in ct else ".ogg" if "ogg" in ct else ".mp3" if "mpeg" in ct else ".m4a" if "mp4" in ct else ".wav"
         return k, ext
     if k == "image":
-        if ct not in (
-            "image/jpeg",
-            "image/png",
-            "image/webp",
-            "image/gif",
-            "image/heic",
-            "image/heif",
-            "image/avif",
-            "image/tiff",
-            "image/bmp",
-        ):
-            raise ValueError("Unsupported image content type")
-        ext = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "image/gif": ".gif",
-            "image/heic": ".heic",
-            "image/heif": ".heif",
-            "image/avif": ".avif",
-            "image/tiff": ".tiff",
-            "image/bmp": ".bmp",
-        }.get(ct, ".bin")
+        if ct not in ("image/jpeg", "image/png"):
+            raise ValueError(
+                "Unsupported image format. Only JPEG (.jpg, .jpeg) and PNG "
+                "(.png) images are allowed."
+            )
+        ext = {"image/jpeg": ".jpg", "image/png": ".png"}.get(ct, ".bin")
         return k, ext
     if k in ("file", "document"):
         return "file", ""
