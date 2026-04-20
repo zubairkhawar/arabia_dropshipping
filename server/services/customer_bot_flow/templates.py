@@ -99,19 +99,46 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "order_verify_intro": {
         "english": (
-            "I can help you check your order status.\n\n"
-            "To do this, I need to verify your account first.\n\n"
-            "Please reply with your email address associated with your account."
+            "I understand you want to check your order details. Let me help you with that.\n\n"
+            "To protect your privacy, orders are linked to specific accounts, and I couldn't "
+            "find any under your current session.\n\n"
+            "*Quick ways to resolve this:*\n\n"
+            "1. *Share your order number* (for example #157955)\n"
+            "2. *Send the email address* you used when ordering\n"
+            "3. *Check your inbox* for the order confirmation email\n\n"
+            "Once you provide your order number or email, I'll instantly show you:\n"
+            "• Current status & tracking\n"
+            "• Delivery estimate\n"
+            "• Complete order summary\n\n"
+            "Which would you prefer to share?"
         ),
         "arabic": (
-            "يمكنني مساعدتك في التحقق من حالة طلبك.\n\n"
-            "لذلك أحتاج أولاً إلى التحقق من حسابك.\n\n"
-            "يرجى إرسال عنوان البريد الإلكتروني المرتبط بحسابك."
+            "أفهم أنك تريد الاطلاع على تفاصيل طلبك. سأساعدك في ذلك.\n\n"
+            "للحفاظ على خصوصيتك، الطلبات مرتبطة بحسابات محددة، ولم أجد أي طلبات "
+            "ضمن جلستك الحالية.\n\n"
+            "*طرق سريعة للحل:*\n\n"
+            "1. *أرسل رقم الطلب* (مثلاً #157955)\n"
+            "2. *أرسل البريد الإلكتروني* الذي استخدمته عند الطلب\n"
+            "3. *تحقق من بريدك الإلكتروني* بحثاً عن رسالة تأكيد الطلب\n\n"
+            "فور إرسال رقم الطلب أو البريد الإلكتروني، سأعرض لك فوراً:\n"
+            "• الحالة الحالية ومعلومات التتبع\n"
+            "• الموعد التقديري للتسليم\n"
+            "• ملخص الطلب الكامل\n\n"
+            "أيهما تفضل أن ترسل؟"
         ),
         "roman_urdu": (
-            "Main aap ki order status check karne mein madad kar sakta hoon.\n\n"
-            "Is ke liye pehle aap ka account verify karna zaroori hai.\n\n"
-            "Apne account se jura hua email address bhejein."
+            "Main samajh gaya ke aap order details dekhna chahte hain — main madad karta hoon.\n\n"
+            "Aap ki privacy ke liye orders sirf specific accounts se linked hote hain, aur mujhe "
+            "aap ki current session mein koi order nahi mila.\n\n"
+            "*Jaldi solve karne ke teen tareeqay:*\n\n"
+            "1. *Order number bhejein* (misal #157955)\n"
+            "2. *Woh email bhejein* jo order ke waqt use ki thi\n"
+            "3. *Apna inbox check karein* — order confirmation email mil sakti hai\n\n"
+            "Order number ya email milte hi main fauran ye dikhaoonga:\n"
+            "• Current status aur tracking\n"
+            "• Delivery ka takhmeeni waqt\n"
+            "• Poora order summary\n\n"
+            "Aap kaun sa bhejna chahenge?"
         ),
     },
     "verification_expired_reverify": {
@@ -130,19 +157,39 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
     },
     "account_verify_intro": {
         "english": (
-            "I can help with account details (orders, invoices, etc.).\n\n"
-            "To do this, I need to verify your account first.\n\n"
-            "Please reply with your email address associated with your account."
+            "I understand you want to check your account details (orders, invoices, tracking). "
+            "Let me help you with that.\n\n"
+            "To protect your privacy, account data is tied to a verified email, and I couldn't "
+            "find any under your current session.\n\n"
+            "*Quick ways to resolve this:*\n\n"
+            "1. *Send the email address* you used when signing up\n"
+            "2. *Share an order number* (for example #157955) if you just want that order's details\n"
+            "3. *Check your inbox* for our latest email — your account email will be the \"To\" address\n\n"
+            "Once you share either, I'll instantly show you orders, invoices, or tracking.\n\n"
+            "Which would you prefer to share?"
         ),
         "arabic": (
-            "يمكنني المساعدة في تفاصيل الحساب (الطلبات، الفواتير، وغيرها).\n\n"
-            "لذلك أحتاج أولاً إلى التحقق من حسابك.\n\n"
-            "يرجى إرسال عنوان البريد الإلكتروني المرتبط بحسابك."
+            "أفهم أنك تريد الاطلاع على تفاصيل حسابك (الطلبات والفواتير والتتبع). سأساعدك في ذلك.\n\n"
+            "للحفاظ على خصوصيتك، بيانات الحساب مرتبطة ببريد إلكتروني مُحقَّق، ولم أجد أي بيانات "
+            "ضمن جلستك الحالية.\n\n"
+            "*طرق سريعة للحل:*\n\n"
+            "1. *أرسل البريد الإلكتروني* الذي استخدمته عند التسجيل\n"
+            "2. *أرسل رقم طلب* (مثلاً #157955) إذا كنت تريد تفاصيل طلب واحد فقط\n"
+            "3. *تحقق من بريدك الإلكتروني* — آخر رسالة منّا ستكون على عنوان حسابك\n\n"
+            "فور إرسال أحدها، سأعرض لك الطلبات أو الفواتير أو التتبع فوراً.\n\n"
+            "أيهما تفضل أن ترسل؟"
         ),
         "roman_urdu": (
-            "Main account se mutaliq cheezon (orders, invoices, waghera) mein madad kar sakta hoon.\n\n"
-            "Is ke liye pehle aap ka account verify karna zaroori hai.\n\n"
-            "Apne account se jura hua email address bhejein."
+            "Main samajh gaya ke aap account details (orders, invoices, tracking) dekhna chahte "
+            "hain — main madad karta hoon.\n\n"
+            "Privacy ke liye account data sirf verified email se linked hota hai, aur mujhe aap ki "
+            "current session mein koi record nahi mila.\n\n"
+            "*Jaldi solve karne ke teen tareeqay:*\n\n"
+            "1. *Sign-up ki email* bhejein\n"
+            "2. *Order number bhejein* (misal #157955) agar sirf usi order ki details chahiye\n"
+            "3. *Apna inbox check karein* — hamari latest email aap ki account email par aayi hogi\n\n"
+            "Koi bhi bhejte hi main fauran orders, invoices ya tracking dikha doonga.\n\n"
+            "Aap kaun sa bhejna chahenge?"
         ),
     },
     "ask_email": {
@@ -316,6 +363,34 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": (
             "Abhi is tracking number ki info nahi mil rahi. Number check karein, "
             "ya **agent** / **support** likhein."
+        ),
+    },
+    "cannot_find_order_help": {
+        "english": (
+            "No worries — here's how to find it quickly:\n\n"
+            "1. *Check your inbox and spam folder* for an email from Arabia Dropship with the "
+            "subject \"Order confirmation\" — the order number is in the subject and body.\n"
+            "2. *Check your WhatsApp history* for messages from us when the order was placed.\n"
+            "3. *Search by email*: just reply with the email address you used when ordering and "
+            "I'll look it up for you.\n\n"
+            "If you still can't find it, type *agent* and a human will take over."
+        ),
+        "arabic": (
+            "لا مشكلة — إليك طرقاً سريعة للعثور عليه:\n\n"
+            "1. *تحقق من بريدك الإلكتروني وصندوق الرسائل غير المرغوب فيها* بحثاً عن رسالة من Arabia "
+            "Dropship بعنوان \"تأكيد الطلب\" — رقم الطلب موجود في الموضوع والمحتوى.\n"
+            "2. *تحقق من محادثات واتساب* من وقت إنشاء الطلب.\n"
+            "3. *ابحث عبر البريد الإلكتروني*: أرسل البريد الإلكتروني الذي استخدمته عند الطلب وسأبحث لك.\n\n"
+            "إذا لم تجد، اكتب *agent* وسيتولى أحد الموظفين المحادثة."
+        ),
+        "roman_urdu": (
+            "Koi baat nahi — jaldi dhoondhne ke tareeqay:\n\n"
+            "1. *Inbox aur spam folder check karein* — Arabia Dropship ki \"Order confirmation\" "
+            "subject wali email mein order number mil jayega.\n"
+            "2. *WhatsApp history check karein* — order place karte waqt bheji gayi messages.\n"
+            "3. *Email se dhundhwaein*: aap wo email bhejein jo order ke waqt use ki thi, main dekh "
+            "leta hoon.\n\n"
+            "Agar phir bhi na miley to *agent* likhein, aap ko insaan connect kar doonga."
         ),
     },
     "orders_period_lookup_error": {

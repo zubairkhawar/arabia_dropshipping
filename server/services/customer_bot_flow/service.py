@@ -2320,6 +2320,51 @@ def _looks_like_invoices_in_period(text: str) -> bool:
     return _parse_date_range(text) is not None
 
 
+_CANT_FIND_ORDER_MARKERS = (
+    "don't have",
+    "dont have",
+    "do not have",
+    "can't find",
+    "cant find",
+    "cannot find",
+    "don't know",
+    "dont know",
+    "do not know",
+    "not sure",
+    "forgot",
+    "lost it",
+    "lost my order",
+    "i don't",
+    "i dont",
+    "no email",
+    "no order number",
+    "no order id",
+    "nahi pata",
+    "nahi mil raha",
+    "nahi mil rahi",
+    "bhool gaya",
+    "bhool gayi",
+    "yaad nahi",
+    "pata nahi",
+    "mujhe nahi pata",
+    "لا أعرف",
+    "لا اعرف",
+    "لا أتذكر",
+    "لا اتذكر",
+    "ليس لدي",
+    "ما عندي",
+)
+
+
+def _wants_cannot_find_order_help(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if _is_likely_email(t) or _is_likely_order_id_only(t):
+        return False
+    return any(m in t for m in _CANT_FIND_ORDER_MARKERS)
+
+
 def _looks_like_orders_in_period(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t:
@@ -3121,6 +3166,35 @@ async def process_customer_bot_message(
         if _wants_new_customer_path(text):
             nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+
+        # 1) Short-circuit: if the user just shares an order id, look it up
+        #    without requiring email verification. Possession of the order id
+        #    is itself proof enough for a single-order lookup.
+        maybe_ref = ""
+        if _is_likely_order_id_only(text):
+            maybe_ref = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
+        else:
+            maybe_ref = (_extract_order_id_from_message(text, phone) or "").strip()
+        if maybe_ref:
+            order, src = await _lookup_order(
+                db, tenant_id, maybe_ref, store_client,
+                seller_id=flow.get("seller_id"),
+            )
+            if order:
+                f = {**flow, "step": "conversational", "lang": flow_lang, "pending_order_ref": None}
+                return save(f, _format_order_sentence(flow_lang, order))
+            if src == "api_error":
+                return save(flow, _t(flow_lang, MSGS["order_lookup_error"]))
+            # Not found → keep them in the email step; show not-found and
+            # re-prompt with a one-liner so the convo stays on rails.
+            not_found = _t(flow_lang, MSGS["order_not_found"])
+            ask_email = _t(flow_lang, MSGS["ask_email"])
+            return save(flow, f"{not_found}\n\n{ask_email}")
+
+        # 2) "I don't have either / can't find" → gentle help message.
+        if _wants_cannot_find_order_help(text):
+            return save(flow, _t(flow_lang, MSGS["cannot_find_order_help"]))
+
         if _is_natural_language(text) and not _is_likely_email(text):
             nf = _bail_to_conversational(flow, flow_lang)
             return ai_forward(text, nf, skip_api=True)
