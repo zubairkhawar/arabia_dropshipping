@@ -89,6 +89,11 @@ class ConversationMemory:
     MAX_INTENT_QUEUE = 3
 
     @classmethod
+    def configured_ttl_seconds(cls) -> int:
+        """TTL seconds applied to memory keys (from settings.redis_ttl_days)."""
+        return _ttl_seconds()
+
+    @classmethod
     def _ttl(cls) -> int:
         return _ttl_seconds()
 
@@ -115,15 +120,10 @@ class ConversationMemory:
         if queue_previous:
             existing = cls.get_pending_intent(phone)
             if existing:
-                old_pair = (
-                    (existing.get("topic") or "").strip().lower(),
-                    (existing.get("intent_type") or "").strip().lower(),
-                )
-                new_pair = (
-                    (topic or "").strip().lower(),
-                    (intent_type or "").strip().lower(),
-                )
-                if old_pair != new_pair:
+                old_topic = (existing.get("topic") or "").strip().lower()
+                new_topic = (topic or "").strip().lower()
+                # Queue only when switching to a different topic (same topic updates pending in place).
+                if old_topic != new_topic:
                     cls.add_to_intent_queue(
                         phone,
                         str(existing.get("topic") or "general"),
@@ -247,6 +247,22 @@ class ConversationMemory:
             r.setex(key, cls._ttl(), json.dumps(queue))
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory: add_to_intent_queue failed: %s", exc)
+
+    @classmethod
+    def get_intent_queue(cls, phone: str) -> List[Dict[str, Any]]:
+        r = cls._r()
+        if not r:
+            return []
+        key = cls.REDIS_KEYS["intent_queue"].format(phone=phone)
+        try:
+            raw = r.get(key)
+            if not raw:
+                return []
+            q = json.loads(raw)
+            return q if isinstance(q, list) else []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory: get_intent_queue failed: %s", exc)
+        return []
 
     @classmethod
     def get_next_intent_from_queue(cls, phone: str) -> Optional[Dict[str, Any]]:

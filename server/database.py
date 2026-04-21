@@ -1,17 +1,27 @@
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from config import settings
 
 # Keep a warm pool to avoid frequent connect/disconnect churn under traffic.
 # Set DATABASE_URL in .env e.g. postgresql://user:password@localhost:5432/arabia
-engine = create_engine(
-    settings.database_url,
-    pool_size=20,
-    max_overflow=10,
-    pool_pre_ping=True,
-    pool_recycle=3600,
-)
+# SQLite (e.g. pytest) uses StaticPool — PG pool kwargs are invalid for sqlite.
+_db_url = settings.database_url
+if _db_url.startswith("sqlite"):
+    engine = create_engine(
+        _db_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+else:
+    engine = create_engine(
+        _db_url,
+        pool_size=20,
+        max_overflow=10,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

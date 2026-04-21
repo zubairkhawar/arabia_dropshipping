@@ -1,0 +1,6 @@
+# Development & testing (install with: pip install -r requirements-dev.txt)
+-r server/requirements.txt
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+pytest-cov>=4.1.0
+fakeredis>=2.20.0

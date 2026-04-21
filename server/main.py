@@ -4,8 +4,10 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
+from fastapi.responses import FileResponse
 from config import hydrate_openai_api_key_from_db, settings
 from database import (
     SessionLocal,
@@ -215,3 +217,37 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+
+@app.get("/api/health/memory")
+async def memory_health() -> Dict[str, Any]:
+    """
+    Redis / Valkey memory layer status for ops dashboards.
+    Does not expose secrets; safe to expose behind your normal API auth / network rules.
+    """
+    from services.memory_service import ConversationMemory, _get_redis
+
+    ok = ConversationMemory.health_check()
+    out: Dict[str, Any] = {"redis_ok": ok, "status": "ok" if ok else "degraded"}
+    r = _get_redis()
+    if r:
+        try:
+            mem_info = r.info("memory")
+            out["used_memory_human"] = mem_info.get("used_memory_human")
+            out["used_memory_peak_human"] = mem_info.get("used_memory_peak_human")
+            out["keyspace"] = r.info("keyspace") or {}
+        except Exception as exc:  # noqa: BLE001
+            out["error"] = str(exc)
+    return out
+
+
+@app.get("/admin/test-dashboard")
+async def test_dashboard():
+    """Static checklist + live memory health (same-origin fetch to /api/health/memory)."""
+    path = _TEMPLATES_DIR / "test_dashboard.html"
+    if not path.is_file():
+        return {"error": "test_dashboard.html not found", "path": str(path)}
+    return FileResponse(path)
