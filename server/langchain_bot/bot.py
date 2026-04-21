@@ -15,6 +15,7 @@ from models import Broadcast, KnowledgeSource, Message, TenantSchedule
 from langchain_bot.context_format import (
     build_customer_identity_summary,
     format_invoices_summary_for_llm,
+    format_order_discovery_for_llm,
     format_order_invoice_match_hints,
     format_orders_summary_for_llm,
 )
@@ -462,8 +463,13 @@ class ArabiaLangChainBot:
                 "is_store_customer": bool(c.get("id")),
                 "verification_method": "none",
                 "store_context_error": None,
+                "orders_last_30_days": [],
+                "orders_last_90_days": [],
+                "orders_last_365_days": [],
+                "has_orders": False,
             }
         identity_block = build_customer_identity_summary(fc, bot_flow)
+        discovery_block = format_order_discovery_for_llm(fc)
         ro = fc.get("recent_orders") or recent_orders or []
         orders_block = format_orders_summary_for_llm(ro)
         inv_raw = fc.get("invoices")
@@ -519,6 +525,7 @@ class ArabiaLangChainBot:
             recent_context_hint=hint_line,
             memory_context=memory_line,
             customer_context=identity_block,
+            order_discovery_context=discovery_block,
             orders_context=orders_block,
             invoices_context=invoices_block,
             schedule_context=schedule_context,

@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional, Dict, Any, Set, List, Tuple
 
 from services.human_handoff_intent import wants_human_agent
@@ -143,6 +143,104 @@ def _extract_tracking_id_from_message(message: str) -> Optional[str]:
     if m:
         return m.group(1)
     return None
+
+
+def _parse_flexible_date_string(s: str) -> Optional[date]:
+    """Best-effort parse for Arabia order/invoice date strings."""
+    raw = (s or "").strip()
+    if not raw:
+        return None
+    head = raw.split("T")[0].split()[0] if raw else ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", head):
+        try:
+            return datetime.strptime(head, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    for candidate in (raw, raw[:22].strip()):
+        for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(candidate, fmt).date()
+            except ValueError:
+                continue
+    for fmt in ("%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    try:
+        norm = raw.replace("Z", "+00:00").replace(" ", "T")
+        return datetime.fromisoformat(norm[:19]).date()
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _parse_order_activity_date(order: Dict[str, Any]) -> Optional[date]:
+    if not isinstance(order, dict):
+        return None
+    for k in (
+        "seller_invoice_row_date",
+        "invoice_row_date",
+        "createdon",
+        "created_at",
+        "order_date",
+        "placed_at",
+        "date",
+        "booking_date",
+    ):
+        v = order.get(k)
+        if v is None:
+            continue
+        parsed = _parse_flexible_date_string(str(v))
+        if parsed:
+            return parsed
+    return None
+
+
+def _sort_orders_by_activity_desc(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Newest first; orders without a parseable date sort last."""
+
+    def _key(o: Dict[str, Any]) -> Tuple[int, int]:
+        dt = _parse_order_activity_date(o)
+        if dt is None:
+            return (1, 0)
+        return (0, -dt.toordinal())
+
+    return sorted(
+        [o for o in orders if isinstance(o, dict)],
+        key=_key,
+    )
+
+
+def _partition_orders_by_recency(
+    orders: List[Dict[str, Any]],
+    *,
+    today: Optional[date] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Rolling UTC calendar windows: 30 / 90 / 365 days.
+    Rows with no parseable date appear only in the 365-day bucket.
+    """
+    day = today or datetime.utcnow().date()
+    d30 = day - timedelta(days=30)
+    d90 = day - timedelta(days=90)
+    d365 = day - timedelta(days=365)
+    sorted_rows = _sort_orders_by_activity_desc(orders)
+
+    def _in_window(o: Dict[str, Any], start: date) -> bool:
+        dt = _parse_order_activity_date(o)
+        if dt is None:
+            return False
+        return dt >= start
+
+    o30 = [o for o in sorted_rows if _in_window(o, d30)]
+    o90 = [o for o in sorted_rows if _in_window(o, d90)]
+    o365 = [
+        o
+        for o in sorted_rows
+        if _in_window(o, d365) or _parse_order_activity_date(o) is None
+    ]
+    return o30, o90, o365
 
 
 class AIOrchestrator:
@@ -444,7 +542,7 @@ class AIOrchestrator:
 
         # Only use Arabia APIs: orders by id, tracking, faq, invoice by seller_id
         if seller_id:
-            date_from, date_to = _store_context_date_window()
+            date_from, date_to = _store_context_date_window(365)
             try:
                 inv_payload = await self.store_client.get_invoice_by_seller_id(
                     seller_id,
@@ -621,6 +719,15 @@ class AIOrchestrator:
                     orders[i] = merge_tracking_payload_into_order(o, order_tracking)
                     break
 
+        orders_last_30: List[Dict[str, Any]] = []
+        orders_last_90: List[Dict[str, Any]] = []
+        orders_last_365: List[Dict[str, Any]] = []
+        if seller_id and store_linked and orders:
+            orders_last_30, orders_last_90, orders_last_365 = _partition_orders_by_recency(
+                orders
+            )
+        has_orders = bool(orders_last_365)
+
         return {
             "customer": customer or {},
             "recent_orders": orders,
@@ -633,6 +740,10 @@ class AIOrchestrator:
             "invoices": invoices,
             "order_tracking": order_tracking or {},
             "order_invoice": order_invoice or {},
+            "orders_last_30_days": orders_last_30,
+            "orders_last_90_days": orders_last_90,
+            "orders_last_365_days": orders_last_365,
+            "has_orders": has_orders,
         }
 
     async def should_escalate(self, message: str) -> bool:

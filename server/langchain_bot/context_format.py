@@ -248,6 +248,94 @@ def format_orders_summary_for_llm(orders: Optional[List[Dict[str, Any]]]) -> str
     return "\n\n".join(parts) if parts else "No orders are listed in the provided context for this turn."
 
 
+def format_order_discovery_one_liner(order: Dict[str, Any]) -> str:
+    """One line for order-discovery lists: id, date, status, optional tracking (no address/profit)."""
+    if not order:
+        return ""
+    num = order.get("order_number") or order.get("number") or order.get("id") or "?"
+    placed = _pick_str(
+        order,
+        "seller_invoice_row_date",
+        "invoice_row_date",
+        "createdon",
+        "created_at",
+        "order_date",
+        "placed_at",
+        "date",
+        "booking_date",
+    )
+    status_raw = _pick_str(order, "status", "delivery_status", "order_status")
+    if not status_raw and isinstance(order.get("tracking_result"), dict):
+        status_raw = _pick_str(order["tracking_result"], "status", "delivery_status")
+    status_disp = status_raw or "Unknown"
+    tr = _pick_str(order, "tracking_number", "tracking", "tracking_id", "awb_number")
+    head = f"Order #{num} placed on {placed}." if placed else f"Order #{num}."
+    bits = [head, f"Status: {status_disp}."]
+    if tr:
+        bits.append(f"Tracking: {tr}.")
+    return " ".join(bits)
+
+
+def format_order_discovery_for_llm(fetch_ctx: Dict[str, Any]) -> str:
+    """30/90/365-day buckets from ``fetch_customer_context`` for ORDER DISCOVERY RULES."""
+    if not isinstance(fetch_ctx, dict):
+        return "Order discovery: (invalid fetch context)."
+    o30 = fetch_ctx.get("orders_last_30_days")
+    o90 = fetch_ctx.get("orders_last_90_days")
+    o365 = fetch_ctx.get("orders_last_365_days")
+    if not isinstance(o30, list):
+        o30 = []
+    if not isinstance(o90, list):
+        o90 = []
+    if not isinstance(o365, list):
+        o365 = []
+    has_orders = bool(fetch_ctx.get("has_orders"))
+    linked = bool(fetch_ctx.get("is_store_customer"))
+
+    if not linked:
+        return (
+            "Order discovery: store customer not linked in context — buckets empty; "
+            "do not invent orders. Follow **Customer identity** rules."
+        )
+    ro = fetch_ctx.get("recent_orders")
+    ro_list = ro if isinstance(ro, list) else []
+    if not has_orders and not o30 and not o90 and not o365 and ro_list:
+        return (
+            "Order discovery: all time-window buckets are empty, but **recent_orders** still lists "
+            f"{len(ro_list)} row(s). Dates may be outside the rolling 365-day UTC window or not parsed — "
+            "do **not** use Step 4 “no orders” wording; take up to 5 newest rows from **Orders** using the "
+            "same one-line discovery format, then ask which order they want details for."
+        )
+    if not has_orders and not o30 and not o90 and not o365:
+        return (
+            "Order discovery: has_orders is false and all buckets are empty — use Step 4 (no orders) wording "
+            "only if **Orders** is also empty. If **Invoices** show order_ids, mention invoice activity without "
+            "contradicting empty buckets."
+        )
+
+    lines: List[str] = [
+        "Order discovery (backend bucketed; rolling UTC windows on parsed order/invoice dates):",
+        f"- has_orders: {has_orders}",
+        f"- orders_last_30_days: count={len(o30)} (newest first below, up to 12)",
+    ]
+    for o in o30[:12]:
+        if isinstance(o, dict):
+            lines.append(f"  {format_order_discovery_one_liner(o)}")
+    lines.append(f"- orders_last_90_days: count={len(o90)} (up to 12)")
+    for o in o90[:12]:
+        if isinstance(o, dict):
+            lines.append(f"  {format_order_discovery_one_liner(o)}")
+    lines.append(f"- orders_last_365_days: count={len(o365)} (up to 20)")
+    for o in o365[:20]:
+        if isinstance(o, dict):
+            lines.append(f"  {format_order_discovery_one_liner(o)}")
+    lines.append(
+        "For user-facing lists without an order number: follow ORDER DISCOVERY RULES — at most 5 orders, "
+        "newest first, exact line format from the rules; pick rows from the appropriate non-empty bucket."
+    )
+    return "\n".join(lines)
+
+
 def _pay_status_label(raw: str) -> str:
     s = (raw or "").strip().lower()
     if s in ("yes", "paid", "true", "1", "y"):
