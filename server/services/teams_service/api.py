@@ -527,6 +527,13 @@ async def remove_member(
         .first()
     )
 
+    removed_agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    removed_name = f"Agent {agent_id}"
+    if removed_agent:
+        u = db.query(User).filter(User.id == removed_agent.user_id).first()
+        if u:
+            removed_name = (u.full_name or u.email or "").strip() or removed_name
+
     db.delete(membership)
     rem_notif = Notification(
         tenant_id=tenant_id,
@@ -549,7 +556,10 @@ async def remove_member(
             team_id=team_id,
             event_type="member_removed",
             target_agent_id=agent_id,
-            payload={},
+            payload={
+                "removed_member_name": removed_name,
+                "removed_via": "membership",
+            },
             created_at=datetime.utcnow(),
         )
     )

@@ -18,7 +18,7 @@ import {
   writeInboxLastReadEntry,
 } from '@/lib/agent-session-storage';
 
-export type ConversationStatus = 'active' | 'resolved' | 'pending' | 'transferred';
+export type ConversationStatus = 'active' | 'resolved' | 'pending';
 
 export interface InboxConversation {
   id: number;
@@ -38,7 +38,6 @@ export interface InboxConversation {
   isNewCustomerApi?: boolean;
   /** True only when API says new customer and phone appears once across all inbox rows. */
   isNewLead?: boolean;
-  reopenedAt?: string;
   transferredToAgentName?: string;
   transferredFromAgentName?: string;
   transferredAt?: string;
@@ -74,14 +73,6 @@ interface InboxConversationsContextType {
   isLoading: boolean;
   markAgentReplied: (convId: number) => void;
   closeConversation: (convId: number) => void;
-  reopenConversation: (convId: number) => void;
-  transferConversation: (
-    convId: number,
-    toAgentId: string,
-    toAgentName: string,
-    /** Same copy as the inbox system message; sent to WhatsApp as `customer_message`. */
-    customerMessage?: string,
-  ) => void;
   sendConversationToAI: (convId: number) => void;
   /** Admin-only: permanent server delete; updates local state on success. */
   deleteConversation: (convId: number) => Promise<void>;
@@ -229,7 +220,6 @@ function apiMessageToInbox(
 
 function toConversationStatus(status: string): ConversationStatus {
   if (status === 'closed' || status === 'resolved') return 'resolved';
-  if (status === 'transferred') return 'transferred';
   if (status === 'pending') return 'pending';
   return 'active';
 }
@@ -286,19 +276,11 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
 
   const mapConversation = useCallback(
     (c: ConversationSummaryApi): InboxConversation => {
-      const aid = currentAgentId ?? readAuthAgentId();
       const handlerAgentId = c.agent_id != null ? String(c.agent_id) : undefined;
       const handlerName =
         handlerAgentId != null
           ? agentsRef.current.find((a) => a.id === handlerAgentId)?.name
           : (c.last_handler_agent_name ?? undefined);
-      // Show as "transferred" for the prior handler when they no longer own the thread.
-      // (Do not require transfer_to !== agent_id — after a successful handoff both match the new assignee.)
-      const transferredOut =
-        aid != null &&
-        c.transfer_from_agent_id != null &&
-        Number(c.transfer_from_agent_id) === Number(aid) &&
-        (c.agent_id == null || Number(c.agent_id) !== Number(aid));
       return {
         id: c.id,
         customerName: c.customer_name || `Customer #${c.customer_id}`,
@@ -309,17 +291,20 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         lastActivityIso: c.last_activity_at ?? null,
         unread: typeof c.unread_count === 'number' ? c.unread_count : 0,
         channel: c.channel,
-        status: transferredOut ? 'transferred' : toConversationStatus(c.status),
+        status: toConversationStatus(c.status),
         handlerType: handlerAgentId ? 'agent' : 'ai',
         handlerName,
         handlerAgentId,
         isNewCustomerApi: Boolean(c.is_new_customer),
         transferredToAgentName: c.transfer_to_agent_name ?? undefined,
         transferredFromAgentName: c.transfer_from_agent_name ?? undefined,
-        transferredAt: transferredOut ? formatConversationListTime(c.last_activity_at, timeZone) : undefined,
+        transferredAt:
+          c.transfer_to_agent_name || c.transfer_from_agent_name
+            ? formatConversationListTime(c.last_activity_at, timeZone)
+            : undefined,
       };
     },
-    [currentAgentId, timeZone],
+    [timeZone],
   );
 
   const fetchConversationRowsFromApi = useCallback(async (): Promise<ConversationSummaryApi[]> => {
@@ -329,7 +314,6 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     url.searchParams.set('tenant_id', String(TENANT_ID));
     if (isAgentPortal && aid) {
       url.searchParams.set('agent_id', String(Number(aid)));
-      url.searchParams.set('include_transferred_out_for_agent_id', String(Number(aid)));
     }
     const res = await fetch(url.toString());
     if (!res.ok) return [];
@@ -417,7 +401,6 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       const url = new URL(`${API_BASE}/api/messaging/conversations/${convId}/summary`);
       url.searchParams.set('tenant_id', String(TENANT_ID));
       url.searchParams.set('agent_id', String(Number(aid)));
-      url.searchParams.set('include_transferred_out_for_agent_id', String(Number(aid)));
       try {
         const res = await fetch(url.toString());
         if (res.status === 404) {
@@ -696,7 +679,6 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       const listUrl = new URL(`${API_BASE}/api/messaging/conversations`);
       listUrl.searchParams.set('tenant_id', String(TENANT_ID));
       listUrl.searchParams.set('agent_id', String(Number(aid)));
-      listUrl.searchParams.set('include_transferred_out_for_agent_id', String(Number(aid)));
 
       try {
         const [rowsRaw, detailData] = await Promise.all([
@@ -781,83 +763,11 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     );
     void fetch(`${API_BASE}/api/messaging/conversations/${convId}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authJsonHeaders(),
       body: JSON.stringify({ status: 'closed' }),
     });
   },
     [timeZone],
-  );
-
-  const reopenConversation = useCallback(
-    (convId: number) => {
-    const now = new Date();
-    const reopenedAt = now.toISOString();
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === convId
-          ? {
-              ...c,
-              status: 'active',
-              isNewLead: false,
-              isNewCustomerApi: false,
-              unread: 1,
-              reopenedAt,
-              lastMessage: 'Customer has messaged again.',
-              lastActivityAt: 'Just now',
-            }
-          : c,
-      ),
-    );
-    const systemMsg: InboxMessage = {
-      id: Date.now(),
-      content: 'Customer messaged again.',
-      sender: 'ai',
-      senderName: 'System',
-      timestamp: formatTime12hInZone(now, timeZone),
-      sentAt: now.toISOString(),
-    };
-    setMessagesByConvId((prev) => ({
-      ...prev,
-      [convId]: [...(prev[convId] ?? []), systemMsg],
-    }));
-  },
-    [timeZone],
-  );
-
-  const transferConversation = useCallback(
-    (convId: number, toAgentId: string, toAgentName: string, customerMessage?: string) => {
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === convId
-          ? {
-              ...c,
-              status: 'transferred',
-              handlerType: 'agent',
-              handlerAgentId: toAgentId,
-              handlerName: toAgentName,
-              transferredToAgentName: toAgentName,
-              transferredAt: 'Just now',
-              lastMessage: 'Conversation transferred.',
-              lastActivityAt: 'Just now',
-            }
-          : c,
-      ),
-    );
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const trimmed = customerMessage?.trim();
-    void fetch(`${API_BASE}/api/routing/transfer`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        conversation_id: convId,
-        target_agent_id: Number(toAgentId),
-        ...(trimmed ? { customer_message: trimmed } : {}),
-      }),
-    });
-  },
-    [],
   );
 
   const deleteConversation = useCallback(async (convId: number) => {
@@ -1054,8 +964,6 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         isLoading,
         markAgentReplied,
         closeConversation,
-        reopenConversation,
-        transferConversation,
         sendConversationToAI,
         deleteConversation,
         getMessages,

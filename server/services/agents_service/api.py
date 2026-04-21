@@ -31,6 +31,10 @@ from models import (
 )
 from services.auth_service.api import get_current_user, get_current_user_optional
 from services.auth_service.services import get_password_hash
+from services.agent_routing_service.api import (
+    live_customer_conversation_count,
+    live_customer_conversation_counts_for_tenant,
+)
 
 
 router = APIRouter()
@@ -86,6 +90,8 @@ class AgentOut(BaseModel):
     status: str
     team: Optional[str] = None
     max_concurrent_chats: int = 5
+    # Open (non-closed) customer threads currently assigned to this agent.
+    live_customer_chats: int = 0
     can_transfer_conversations: bool = True
     # Plaintext login password, kept so tenant admins can view/share credentials
     # from the admin panel across devices. Older agents created before this feature
@@ -164,6 +170,7 @@ async def list_agents(
         .all()
     )
     expose_passwords = _caller_is_tenant_admin(current_user, tenant_id)
+    count_map = live_customer_conversation_counts_for_tenant(db, tenant_id)
     agents: List[AgentOut] = []
     for agent, user in rows:
         agents.append(
@@ -177,6 +184,7 @@ async def list_agents(
                 status=agent.status,
                 team=agent.team,
                 max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+                live_customer_chats=int(count_map.get(agent.id, 0)),
                 can_transfer_conversations=bool(
                     getattr(agent, "can_transfer_conversations", True)
                 ),
@@ -306,6 +314,7 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
         status=agent.status,
         team=agent.team,
         max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+        live_customer_chats=live_customer_conversation_count(db, agent.id),
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),
@@ -373,6 +382,7 @@ async def update_agent(
         status=agent.status,
         team=agent.team,
         max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+        live_customer_chats=live_customer_conversation_count(db, agent.id),
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),
@@ -420,6 +430,7 @@ async def update_agent_password(
         status=agent.status,
         team=agent.team,
         max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+        live_customer_chats=live_customer_conversation_count(db, agent.id),
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),
@@ -440,6 +451,34 @@ async def delete_agent(agent_id: int, db: Session = Depends(get_db)):
 
     user = db.query(User).filter(User.id == agent.user_id).first()
     try:
+        display_name = f"Agent {agent.id}"
+        if user:
+            dn = (user.full_name or user.email or "").strip()
+            if dn:
+                display_name = dn
+
+        # Team channel history: record removal on each team before membership rows go away.
+        memberships = (
+            db.query(TeamMembership)
+            .filter(TeamMembership.agent_id == agent.id)
+            .all()
+        )
+        for m in memberships:
+            db.add(
+                TeamEvent(
+                    tenant_id=agent.tenant_id,
+                    team_id=m.team_id,
+                    event_type="member_removed",
+                    actor_agent_id=None,
+                    target_agent_id=agent.id,
+                    payload={
+                        "removed_member_name": display_name,
+                        "removed_via": "agent_deleted",
+                    },
+                    created_at=datetime.utcnow(),
+                )
+            )
+
         # Keep conversation history but unassign this deleted agent.
         db.query(Conversation).filter(Conversation.agent_id == agent.id).update(
             {Conversation.agent_id: None}, synchronize_session=False
@@ -580,6 +619,7 @@ async def get_me(current_user: User = Depends(get_current_user), db: Session = D
         status=agent.status,
         team=agent.team,
         max_concurrent_chats=int(agent.max_concurrent_chats or 5),
+        live_customer_chats=live_customer_conversation_count(db, agent.id),
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),

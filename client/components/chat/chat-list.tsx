@@ -14,7 +14,7 @@ import {
 } from '@/lib/tenant-time';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
 
-type ConversationStatus = 'active' | 'resolved' | 'pending' | 'transferred';
+type ConversationStatus = 'active' | 'resolved' | 'pending';
 
 interface Conversation {
   id: number;
@@ -33,10 +33,6 @@ interface Conversation {
   closedAt?: string;
   /** True when last message is from customer and agent has not replied yet. Only live conversations. */
   isNewLead?: boolean;
-  /** When set, conversation was closed and customer messaged again; now back in live. */
-  reopenedAt?: string;
-  transferredToAgentName?: string;
-  transferredAt?: string;
   lastActivityIso?: string | null;
 }
 
@@ -230,9 +226,7 @@ export function ChatList() {
     }
   }, [filteredConversations, conversations, selectedId, isAdminInbox, isAgentInbox, setSelectedId, inboxConv?.isLoading]);
 
-  const liveConversations = filteredConversations.filter((c) =>
-    isAgentInbox ? c.status === 'active' : c.status === 'active' || c.status === 'transferred',
-  );
+  const liveConversations = filteredConversations.filter((c) => c.status === 'active');
   const closedConversations = filteredConversations.filter((c) => c.status === 'resolved');
   const hasAnyInboxConversation =
     liveConversations.length > 0 || closedConversations.length > 0;
@@ -402,8 +396,6 @@ export function ChatList() {
                 {liveOpen &&
                   liveConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
-                    const isReopened = !!(conv as { reopenedAt?: string }).reopenedAt;
-                    const showReopened = conv.status === 'active' && isReopened;
                     return (
                       <button
                         key={conv.id}
@@ -449,15 +441,6 @@ export function ChatList() {
                             }`}
                           >
                             {conv.customerPhone}
-                          </p>
-                        )}
-                        {showReopened && (
-                          <p
-                            className={`text-[10px] font-semibold uppercase tracking-wide mb-0.5 ${
-                              isSelected ? 'text-white/90' : 'text-text-muted'
-                            }`}
-                          >
-                            Reopened
                           </p>
                         )}
                         <p

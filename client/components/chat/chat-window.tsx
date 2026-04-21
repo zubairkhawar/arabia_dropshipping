@@ -37,7 +37,6 @@ import {
   Square,
   Play,
   Pause,
-  UserPlus,
   Pencil,
   Search,
 } from 'lucide-react';
@@ -45,9 +44,7 @@ import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useInboxConversations } from '@/contexts/InboxConversationsContext';
 import type { InboxMessage } from '@/contexts/InboxConversationsContext';
 import type { TeamEvent } from '@/contexts/TeamsContext';
-import { useTeams } from '@/contexts/TeamsContext';
 import { useAgents } from '@/contexts/AgentsContext';
-import { useNotifications } from '@/contexts/NotificationsContext';
 import { useDmChats } from '@/contexts/DmChatsContext';
 import { useSoundAlerts } from '@/contexts/SoundAlertsContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
@@ -173,9 +170,6 @@ export interface ChatWindowProps {
   isInternalChat?: boolean;
   title?: string;
   subtitle?: string;
-  showTransferControls?: boolean;
-  /** When false, hides customer transfer UI even if showTransferControls is true (tenant policy). */
-  canTransferConversations?: boolean;
   teamId?: string;
   /** For team channel: e.g. "Team A". Shown next to "# Team Channel" in header. */
   teamName?: string;
@@ -278,8 +272,6 @@ export function ChatWindow({
   isInternalChat = false,
   title = 'Ahmed Ali',
   subtitle = 'Store: My Shopify Store',
-  showTransferControls = false,
-  canTransferConversations = true,
   teamId,
   teamName,
   teamMemberNames = [],
@@ -293,9 +285,7 @@ export function ChatWindow({
   const { requestPlay: playAlertSound } = useSoundAlerts();
   const { avatarUrl: agentAvatarUrl, fullName: agentFullName } = useAgentProfile();
   const inboxConv = useInboxConversations();
-  const { teams } = useTeams();
-  const { agents, getCurrentAgent } = useAgents();
-  const notifications = useNotifications();
+  const { getCurrentAgent } = useAgents();
   const {
     getMessagesBySlug,
     loadInitialDmThread,
@@ -397,25 +387,17 @@ export function ChatWindow({
     });
   }
 
-  const transferTargetOptions = (() => {
-    const currentName = agentFullName || getCurrentAgent()?.name || '';
-    const team = teams.find((t) => t.members.some((m) => m.name === currentName));
-    if (!team) return [];
-    const otherNames = team.members
-      .map((m) => m.name)
-      .filter((m) => m !== currentName);
-    return otherNames
-      .map((name) => {
-        const agent = agents.find((a) => a.name === name);
-        return agent ? { id: agent.id, name: agent.name } : null;
-      })
-      .filter((a): a is { id: string; name: string } => a != null);
-  })();
   const isTeamChannel = pathname?.startsWith('/agent/team') || pathname?.startsWith('/admin/teams');
   const isDmPage = pathname?.startsWith('/agent/dm');
   const dmSlug = isDmPage ? (pathname.replace('/agent/dm/', '').split('/')[0] || null) : null;
   const isInboxPage = pathname?.startsWith('/agent/inbox') || pathname?.startsWith('/admin/inbox');
   const isAdminInbox = pathname?.startsWith('/admin/inbox');
+  /** Default /admin/inbox = AI Bot monitoring; live/closed are separate routes with agent-facing actions. */
+  const isAdminAiBotInboxView =
+    isAdminInbox &&
+    !pathname?.startsWith('/admin/inbox/live') &&
+    !pathname?.startsWith('/admin/inbox/closed');
+  const showAdminSendBackAndCloseChat = !isAdminInbox || !isAdminAiBotInboxView;
   /** Admin broadcast composer: require a team id (API target). Do not depend on teamName — empty names would hide the input while readOnly is true. */
   const showBroadcastInput =
     broadcastMode &&
@@ -449,10 +431,8 @@ export function ChatWindow({
   const inboxNoConversationSelected = Boolean(isInboxPage && !isInternalChat && !hasSelectedConversation);
   const inboxConversationClosed =
     Boolean(isInboxPage && !isInternalChat && selectedConv?.status === 'resolved');
-  const inboxConversationTransferred =
-    Boolean(isInboxPage && !isInternalChat && selectedConv?.status === 'transferred');
   const inboxCustomerVoiceDisabled = Boolean(isInboxPage && !isInternalChat);
-  const readOnlyMode = readOnly || inboxConversationClosed || inboxConversationTransferred;
+  const readOnlyMode = readOnly || inboxConversationClosed;
   const headerTitle = isTeamChannel && teamName
     ? `# Team Channel • ${teamName}`
     : isInboxPage
@@ -654,13 +634,8 @@ export function ChatWindow({
   const [voiceProgress, setVoiceProgress] = useState<Record<number, number>>({});
   const [voiceCurrentSec, setVoiceCurrentSec] = useState<Record<number, number>>({});
   const [voiceTotalSec, setVoiceTotalSec] = useState<Record<number, number>>({});
-  const [showTransferMenu, setShowTransferMenu] = useState(false);
-  const [showTransferModal, setShowTransferModal] = useState(false);
   const [showDeleteChatModal, setShowDeleteChatModal] = useState(false);
   const [deleteChatPending, setDeleteChatPending] = useState(false);
-  const [transferTargetId, setTransferTargetId] = useState<string | null>(null);
-  const [transferTargetName, setTransferTargetName] = useState<string>('');
-  const [transferDescription, setTransferDescription] = useState('');
   const recordingChunksRef = useRef<Blob[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStartRef = useRef<number>(0);
@@ -1618,7 +1593,6 @@ export function ChatWindow({
 
   const closeMenus = () => {
     setShowMoreMenu(false);
-    setShowTransferMenu(false);
   };
 
   const toggleStar = (id: number) => {
@@ -2527,7 +2501,7 @@ export function ChatWindow({
 
   const sendMessage = async () => {
     if (inboxNoConversationSelected) return;
-    if (inboxConversationClosed || inboxConversationTransferred) return;
+    if (inboxConversationClosed) return;
     const text = inputValue.trim();
     const hasContent = text.length > 0 || pendingAttachment;
     if (!hasContent) return;
@@ -3248,71 +3222,59 @@ export function ChatWindow({
                 <>
                   <div className="fixed inset-0 z-10" onClick={closeMenus} aria-hidden />
                   <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-border rounded-lg shadow-xl z-20 py-1">
-                    <button
-                      type="button"
-                      disabled={inboxConversationClosed || inboxConversationTransferred}
-                      onClick={() => {
-                        if (inboxConversationClosed || inboxConversationTransferred) {
-                          closeMenus();
-                          return;
-                        }
-                        if (inboxConv?.selectedId != null) {
-                          inboxConv.sendConversationToAI(inboxConv.selectedId);
-                        }
-                        closeMenus();
-                      }}
-                      className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Bot className="w-4 h-4" />
-                      Send back to AI
-                    </button>
-                    {showTransferControls && canTransferConversations && hasSelectedConversation && !inboxConversationClosed && !inboxConversationTransferred && (
+                    {showAdminSendBackAndCloseChat && (
                       <button
                         type="button"
+                        disabled={inboxConversationClosed}
                         onClick={() => {
+                          if (inboxConversationClosed) {
+                            closeMenus();
+                            return;
+                          }
+                          if (inboxConv?.selectedId != null) {
+                            inboxConv.sendConversationToAI(inboxConv.selectedId);
+                          }
                           closeMenus();
-                          setTransferTargetId(null);
-                          setTransferTargetName('');
-                          setTransferDescription('');
-                          setShowTransferModal(true);
                         }}
-                        className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary"
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <UserPlus className="w-4 h-4" />
-                        Transfer
+                        <Bot className="w-4 h-4" />
+                        Send back to AI
                       </button>
                     )}
-                    <button
-                      type="button"
-                      disabled={inboxConversationClosed || inboxConversationTransferred}
-                      onClick={() => {
-                        if (inboxConversationClosed || inboxConversationTransferred) {
+                    {showAdminSendBackAndCloseChat && (
+                      <button
+                        type="button"
+                        disabled={inboxConversationClosed}
+                        onClick={() => {
+                          if (inboxConversationClosed) {
+                            closeMenus();
+                            return;
+                          }
+                          if (hasSelectedConversation && inboxConv?.selectedId != null) {
+                            const now = new Date();
+                            const systemMsg: Message = {
+                              id: Math.max(0, ...messages.map((m) => m.id)) + 1,
+                              content: `Conversation closed by ${agentFullName || 'Agent'}.`,
+                              sender: 'ai',
+                              senderName: 'System',
+                              timestamp: formatTime12hInZone(now, timeZone),
+                              sentAt: now.toISOString(),
+                            };
+                            inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
+                            inboxConv.closeConversation(inboxConv.selectedId);
+                          } else {
+                            addSystemNote(`Conversation closed by ${agentFullName || 'Agent'}.`);
+                          }
                           closeMenus();
-                          return;
-                        }
-                        if (hasSelectedConversation && inboxConv?.selectedId != null) {
-                          const now = new Date();
-                          const systemMsg: Message = {
-                            id: Math.max(0, ...messages.map((m) => m.id)) + 1,
-                            content: `Conversation closed by ${agentFullName || 'Agent'}.`,
-                            sender: 'ai',
-                            senderName: 'System',
-                            timestamp: formatTime12hInZone(now, timeZone),
-                            sentAt: now.toISOString(),
-                          };
-                          inboxConv.appendMessage(inboxConv.selectedId, systemMsg as InboxMessage);
-                          inboxConv.closeConversation(inboxConv.selectedId);
-                        } else {
-                          addSystemNote(`Conversation closed by ${agentFullName || 'Agent'}.`);
-                        }
-                        closeMenus();
-                      }}
-                      className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-status-error disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <AlertCircle className="w-4 h-4" />
-                      Close chat
-                    </button>
-                    {isAdminInbox && hasSelectedConversation && inboxConv?.selectedId != null && (
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-status-error disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <AlertCircle className="w-4 h-4" />
+                        Close chat
+                      </button>
+                    )}
+                  {isAdminInbox && hasSelectedConversation && inboxConv?.selectedId != null && (
                       <button
                         type="button"
                         onClick={() => {
@@ -3464,135 +3426,15 @@ export function ChatWindow({
         </>
       )}
 
-      {/* Transfer chat modal */}
-      {showTransferModal && (
-        <>
-          <div
-            className="fixed inset-0 z-40 bg-black/40"
-            onClick={() => setShowTransferModal(false)}
-            aria-hidden
-          />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
-            <div
-              className="bg-white rounded-xl border border-border shadow-xl w-full max-w-md pointer-events-auto"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-                <h2 className="text-lg font-semibold text-text-primary">Transfer chat</h2>
-                <button
-                  type="button"
-                  onClick={() => setShowTransferModal(false)}
-                  className="p-1.5 rounded-lg hover:bg-panel text-text-muted"
-                  aria-label="Close"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-text-primary mb-1.5">Transfer to</label>
-                  <select
-                    value={transferTargetId ?? ''}
-                    onChange={(e) => {
-                      const id = e.target.value || null;
-                      setTransferTargetId(id);
-                      const opt = transferTargetOptions.find((o) => o.id === id);
-                      setTransferTargetName(opt?.name ?? '');
-                    }}
-                    className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-text-primary bg-white"
-                  >
-                    <option value="">Select a team member</option>
-                    {transferTargetOptions.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.name}
-                      </option>
-                    ))}
-                  </select>
-                  {transferTargetOptions.length === 0 && (
-                    <p className="text-xs text-text-muted mt-1">No other team members found. Add members in Admin → Teams.</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-text-primary mb-1.5">Note (optional)</label>
-                  <textarea
-                    value={transferDescription}
-                    onChange={(e) => setTransferDescription(e.target.value)}
-                    placeholder="e.g. Customer asked for a callback, please follow up."
-                    rows={3}
-                    className="w-full px-4 py-2.5 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary text-text-primary placeholder-text-muted resize-none"
-                  />
-                </div>
-                <div className="flex justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowTransferModal(false)}
-                    className="px-4 py-2 rounded-lg border border-border text-text-primary hover:bg-panel"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!transferTargetId}
-                    onClick={() => {
-                      if (!transferTargetId || !transferTargetName || !inboxConv?.selectedId) return;
-                      const convId = inboxConv.selectedId;
-                      const conv = selectedConv;
-                      const customerName = conv?.customerName ?? 'Customer';
-                      const now = new Date();
-                      const noteText = transferDescription.trim()
-                        ? `Conversation transferred to ${transferTargetName} by ${agentFullName}. ${transferDescription}`
-                        : `Conversation transferred to ${transferTargetName} by ${agentFullName}.`;
-                      const systemMsg: Message = {
-                        id: Math.max(0, ...messages.map((m) => m.id)) + 1,
-                        content: noteText,
-                        sender: 'ai',
-                        senderName: 'System',
-                        timestamp: formatTime12hInZone(now, timeZone),
-                        sentAt: now.toISOString(),
-                      };
-                      inboxConv.appendMessage(convId, systemMsg as InboxMessage);
-                      setMessages((prev) => [...prev, systemMsg]);
-                      inboxConv.transferConversation(convId, transferTargetId, transferTargetName, noteText);
-                      notifications.addNotification({
-                        type: 'chat_transfer',
-                        message: `You were transferred a chat by ${agentFullName}`,
-                        description: transferDescription.trim() || undefined,
-                        fromAgentId: getCurrentAgent()?.id,
-                        fromAgentName: agentFullName,
-                        toAgentId: transferTargetId,
-                        toAgentName: transferTargetName,
-                        conversationId: convId,
-                        conversationCustomerName: customerName,
-                      });
-                      setShowTransferModal(false);
-                      setTransferTargetId(null);
-                      setTransferTargetName('');
-                      setTransferDescription('');
-                    }}
-                    className="px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Transfer
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
       {/* Messages Container */}
       <div
         ref={scrollContainerRef}
         className="chat-messages-scroll chat-wallpaper flex-1 overflow-y-auto p-6 space-y-4 relative"
       >
-        {(inboxConversationClosed || inboxConversationTransferred) && (
-          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-white/45 backdrop-blur-[1px]">
-            <div className="rounded-full border border-black/10 bg-white/90 px-4 py-2 text-sm font-medium text-text-secondary shadow-sm">
-              {inboxConversationTransferred
-                ? `Conversation transferred${
-                    selectedConv?.transferredToAgentName ? ` to ${selectedConv.transferredToAgentName}` : ''
-                  }.`
-                : 'Conversation closed. Reopen to send messages or transfer.'}
+        {inboxConversationClosed && (
+          <div className="sticky top-0 z-20 flex justify-center px-2 pt-1 pb-3 shrink-0 bg-gradient-to-b from-white via-white/95 to-transparent">
+            <div className="rounded-full border border-border bg-panel px-4 py-2 text-sm font-medium text-text-secondary shadow-sm max-w-[min(100%,28rem)] text-center">
+              Conversation closed. You cannot send messages here. If the customer messages again, only Arabia Dropbot can route this chat to an agent when appropriate.
             </div>
           </div>
         )}
@@ -3626,11 +3468,6 @@ export function ChatWindow({
             <span className="text-xs text-[#667781]">Loading older messages…</span>
           </div>
         )}
-        {!showChatThreadSkeleton && selectedConv?.reopenedAt && selectedConv.closedAt && (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            You closed this conversation on {selectedConv.closedAt}. The customer has messaged again.
-          </div>
-        )}
         {!showChatThreadSkeleton &&
           unifiedGroups.map((group) => (
           <div key={group.dateKey} className="space-y-4">
@@ -3645,7 +3482,9 @@ export function ChatWindow({
             {group.events.map((ev) => {
               const text =
                 ev.type === 'member_removed'
-                  ? `${ev.memberName} removed from the Team`
+                  ? ev.removedVia === 'agent_deleted'
+                    ? `${ev.memberName} was removed from the team (account deleted)`
+                    : `${ev.memberName} removed from the Team`
                   : ev.type === 'member_transferred' && ev.targetTeamName
                     ? `${ev.memberName} transferred to ${ev.targetTeamName}`
                     : ev.type === 'member_added'

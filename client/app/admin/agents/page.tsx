@@ -2,11 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
-import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Pencil, Check, X, Download, KeyRound, TrendingUp } from 'lucide-react';
+import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Pencil, Check, X, Download, KeyRound } from 'lucide-react';
 import {
   AgentAttendanceHeatmap,
   AgentDailyActivityTimeline,
-  AgentSessionBreakdownTable,
   useAgentAttendanceData,
 } from '@/components/agents/activity-bar';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
@@ -359,6 +358,9 @@ export default function AdminAgents() {
                           <p className="text-[11px] text-text-muted truncate">
                             {agent.email}
                           </p>
+                          <p className="text-[10px] text-text-muted truncate">
+                            Live chats {agent.liveCustomerChats}/{agent.maxConcurrentChats}
+                          </p>
                           <p className="text-[10px] text-text-muted truncate font-mono">
                             ID: {agent.id}
                           </p>
@@ -510,6 +512,20 @@ export default function AdminAgents() {
                   <p className="text-text-primary break-all">{selectedAgent.email}</p>
                 </div>
                 <div>
+                  <p className="text-xs text-text-muted mb-0.5">Live customer chats</p>
+                  <p className="text-text-primary">
+                    <span className="font-semibold tabular-nums">{selectedAgent.liveCustomerChats}</span>
+                    <span className="text-text-secondary">
+                      {' '}
+                      / {selectedAgent.maxConcurrentChats} max
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-text-muted mt-1">
+                    Open threads assigned to this agent (closed or resolved do not count). Max is set under Admin →
+                    Settings → Agent management.
+                  </p>
+                </div>
+                <div>
                   <div className="flex items-center justify-between mb-0.5">
                     <p className="text-xs text-text-muted">Password</p>
                     <button
@@ -627,50 +643,39 @@ export default function AdminAgents() {
               </div>
             </div>
 
-            {/* Row 2: Attendance + Performance (session breakdown) */}
+            {/* Row 2: Attendance (heatmap + daily activity + session table) */}
             {selectedAgent && (
-              <>
-                <div className="lg:col-span-3 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
-                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                    <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                      Attendance
-                    </p>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
-                      <span>Hours worked:</span>
-                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0]" /> None</span>
-                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-200" /> &lt;2h</span>
-                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-300" /> 2–4h</span>
-                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-500" /> 4–6h</span>
-                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-700" /> 6h+</span>
-                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0] opacity-70" /> Off day</span>
-                    </div>
-                  </div>
-                  <div className="flex-1 min-h-0 min-w-0 flex flex-col space-y-4">
-                    <AgentAttendanceHeatmap
-                      workingDays={schedule.workingDays}
-                      dayData={visibleAttendanceDayData}
-                      timeZone={timeZone}
-                      selectedDayIndex={attendanceSelectedDayIndex}
-                      onSelectedDayIndexChange={setAttendanceSelectedDayIndex}
-                    />
-                    {attendanceSelectedDay && (
-                      <AgentDailyActivityTimeline
-                        selectedDay={attendanceSelectedDay}
-                        timeZone={timeZone}
-                      />
-                    )}
-                  </div>
-                </div>
-                <div className="lg:col-span-1 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
-                  <p className="text-xs font-semibold text-text-muted uppercase tracking-wider flex items-center gap-2">
-                    <TrendingUp className="w-4 h-4 shrink-0" />
-                    Performance
+              <div className="lg:col-span-4 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                  <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                    Attendance
                   </p>
-                  <div className="flex-1 min-h-0 min-w-0">
-                    <AgentSessionBreakdownTable selectedDay={attendanceSelectedDay} />
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
+                    <span>Hours worked:</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0]" /> None</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-200" /> &lt;2h</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-300" /> 2–4h</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-500" /> 4–6h</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-700" /> 6h+</span>
+                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0] opacity-70" /> Off day</span>
                   </div>
                 </div>
-              </>
+                <div className="flex-1 min-h-0 min-w-0 flex flex-col space-y-4">
+                  <AgentAttendanceHeatmap
+                    workingDays={schedule.workingDays}
+                    dayData={visibleAttendanceDayData}
+                    timeZone={timeZone}
+                    selectedDayIndex={attendanceSelectedDayIndex}
+                    onSelectedDayIndexChange={setAttendanceSelectedDayIndex}
+                  />
+                  {attendanceSelectedDay && (
+                    <AgentDailyActivityTimeline
+                      selectedDay={attendanceSelectedDay}
+                      timeZone={timeZone}
+                    />
+                  )}
+                </div>
+              </div>
             )}
           </div>
         ) : (

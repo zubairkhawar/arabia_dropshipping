@@ -1279,9 +1279,12 @@ async def update_conversation_status(
     conversation_id: int,
     payload: ConversationStatusUpdate,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """
     Update conversation status (active/closed/escalated).
+    When the assigned agent closes the chat on WhatsApp, sends the customer a WhatsApp line
+    that Arabia Dropbot will continue (requires Bearer token so we know it was the assignee).
     """
     conversation: Conversation | None = (
         db.query(Conversation).filter(Conversation.id == conversation_id).first()
@@ -1290,6 +1293,28 @@ async def update_conversation_status(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
         )
+    old_status = (conversation.status or "").lower()
+    new_status = (payload.status or "").lower()
+    is_closing = new_status in ("closed", "resolved") and old_status not in (
+        "closed",
+        "resolved",
+    )
+    assigned_agent_id_before = conversation.agent_id
+
+    is_assigned_agent_closer = False
+    if current_user is not None and assigned_agent_id_before is not None:
+        if (current_user.role or "").lower() == "agent":
+            ag = (
+                db.query(Agent)
+                .filter(
+                    Agent.user_id == current_user.id,
+                    Agent.tenant_id == conversation.tenant_id,
+                )
+                .first()
+            )
+            if ag is not None and int(ag.id) == int(assigned_agent_id_before):
+                is_assigned_agent_closer = True
+
     conversation.status = payload.status
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)
@@ -1314,6 +1339,61 @@ async def update_conversation_status(
                 "status patch: inbox refresh broadcast failed (conversation_id=%s)",
                 conversation.id,
             )
+
+    if (
+        is_closing
+        and is_assigned_agent_closer
+        and assigned_agent_id_before is not None
+        and (conversation.channel or "").lower() == "whatsapp"
+    ):
+        customer = db.query(Customer).filter(Customer.id == conversation.customer_id).first()
+        phone = customer.phone if customer else None
+        wa = MetaWhatsAppClient()
+        body_text = (
+            "The agent has closed this chat. Arabia Dropbot will continue helping you from here."
+        )
+        if phone and wa.is_configured():
+            try:
+                wa_resp = await wa.send_text_message(to_phone=str(phone), text=body_text)
+                out_row = Message(
+                    conversation_id=conversation.id,
+                    content=body_text,
+                    sender_type="ai",
+                    sender_id=None,
+                    created_at=datetime.utcnow(),
+                )
+                msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
+                if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                    out_wa_id = str(msgs[0].get("id") or "").strip()
+                    if out_wa_id:
+                        out_row.message_metadata = {"wa_message_id": out_wa_id}
+                out_row.wa_delivered_at = datetime.utcnow()
+                db.add(out_row)
+                conversation.updated_at = datetime.utcnow()
+                db.add(conversation)
+                db.commit()
+                db.refresh(out_row)
+                db.refresh(conversation)
+                if conversation.agent_id is not None:
+                    try:
+                        await push_inbox_message(
+                            db,
+                            conversation.tenant_id,
+                            conversation.agent_id,
+                            conversation.id,
+                            _message_dict_for_ws(db, out_row),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "status patch: push close-notify message failed (conversation_id=%s)",
+                            conversation.id,
+                        )
+            except Exception:
+                logger.exception(
+                    "WhatsApp agent-close notify failed (conversation_id=%s)",
+                    conversation.id,
+                )
+
     return _build_conversation_summary(conversation)
 
 
@@ -1340,8 +1420,10 @@ async def send_conversation_to_ai(
             .filter(Agent.user_id == current_user.id, Agent.tenant_id == conversation.tenant_id)
             .first()
         )
-        if ag and isinstance(ag.name, str) and ag.name.strip():
-            transfer_by_name = ag.name.strip()
+        if ag is not None:
+            an = lookup_agent_display_name(db, ag.id)
+            if an:
+                transfer_by_name = an
 
     handoff_note = f"{transfer_by_name} transferred this chat to Arabia Dropbot."
     dropbot_greeting = "How may I help further?"
@@ -1370,9 +1452,14 @@ async def send_conversation_to_ai(
         released_from_agent_id = conversation.agent_id
         prev_agent = db.query(Agent).filter(Agent.id == conversation.agent_id).first()
         meta = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
+        prev_label = (
+            lookup_agent_display_name(db, prev_agent.id)
+            if prev_agent
+            else None
+        ) or transfer_by_name
         meta["last_handler"] = {
             "agent_id": conversation.agent_id,
-            "agent_name": (prev_agent.name if prev_agent else transfer_by_name).strip(),
+            "agent_name": prev_label,
             "at": datetime.utcnow().isoformat(),
         }
         # Flag so downstream routing (_get_previous_agent_for_customer) and
@@ -1610,7 +1697,7 @@ async def set_inbox_message_reaction(
     m.message_metadata = _upsert_message_reaction(
         m.message_metadata,
         user_id=str(agent.id),
-        user_name=(agent.name or "Agent").strip(),
+        user_name=(lookup_agent_display_name(db, agent.id) or "Agent"),
         emoji=emoji,
     )
     db.add(m)

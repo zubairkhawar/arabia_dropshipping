@@ -184,27 +184,10 @@ function useAttendanceHeatmapModel(workingDays: number[], timeZone: string) {
   return useMemo(() => {
     const { firstSunday, columns: cols } = getAttendanceWindow();
     const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const monthLabels: { col: number; label: string }[] = [];
-    let lastMonthKey = '';
-    for (let col = 0; col < cols; col++) {
-      const date = getDateForIndex(col * DAYS_PER_WEEK, firstSunday);
-      const monthKey = new Intl.DateTimeFormat('en-US', {
-        timeZone,
-        month: 'numeric',
-        year: 'numeric',
-      }).format(date);
-      if (monthKey !== lastMonthKey) {
-        monthLabels.push({
-          col,
-          label: date.toLocaleDateString('en-US', { timeZone, month: 'short' }),
-        });
-        lastMonthKey = monthKey;
-      }
-    }
     const workingSet = new Set(workingDays);
     const isOffDay = (index: number) =>
       !workingSet.has(weekdayInTimeZone(getDateForIndex(index, firstSunday), timeZone));
-    return { dayLabels, monthLabels, isOffDay, columns: cols };
+    return { dayLabels, isOffDay, columns: cols };
   }, [workingDays, timeZone]);
 }
 
@@ -222,7 +205,7 @@ export function AgentAttendanceHeatmap({
   selectedDayIndex: number | null;
   onSelectedDayIndexChange: (index: number | null) => void;
 }) {
-  const { dayLabels, monthLabels, isOffDay, columns } = useAttendanceHeatmapModel(workingDays, timeZone);
+  const { dayLabels, isOffDay, columns } = useAttendanceHeatmapModel(workingDays, timeZone);
 
   const tooltipForDay = useCallback(
     (d: DayAttendance, index: number) => {
@@ -239,25 +222,11 @@ export function AgentAttendanceHeatmap({
   return (
     <div className="flex flex-1 min-h-0 min-w-0 gap-1">
       <div className="flex flex-col justify-around text-[10px] text-text-muted pr-2 shrink-0">
-        <span className="h-4 flex items-center opacity-0" aria-hidden>&nbsp;</span>
         {dayLabels.map((label) => (
           <span key={label} className="h-4 flex items-center">{label}</span>
         ))}
       </div>
       <div className="flex flex-col gap-0.5 flex-1 min-w-0 min-h-[100px]">
-        <div className="flex gap-0.5 w-full">
-          {Array.from({ length: columns }, (_, col) => {
-            const label = monthLabels.find((m) => m.col === col);
-            return (
-              <div
-                key={col}
-                className={`${CELL_BASE} flex-1 min-w-0 flex items-center justify-center text-[9px] text-text-muted font-medium min-h-[14px]`}
-              >
-                {label?.label ?? ''}
-              </div>
-            );
-          })}
-        </div>
         <div className="flex gap-0.5 flex-1 min-w-0 w-full min-h-0">
           {Array.from({ length: columns }, (_, col) => (
             <div key={col} className="flex flex-col gap-0.5 flex-1 min-w-0">
@@ -287,7 +256,55 @@ export function AgentAttendanceHeatmap({
   );
 }
 
-/** 24h timeline for the selected attendance day (pairs with AgentAttendanceHeatmap). */
+/** Login / logout / duration for the selected day (under Daily Activity timeline). */
+export function AgentSessionBreakdownTable({ selectedDay }: { selectedDay: DayAttendance | null }) {
+  if (!selectedDay) {
+    return (
+      <p className="text-xs text-text-muted leading-relaxed">
+        Select a day on the heatmap to see login, logout, and session duration.
+      </p>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto min-w-0">
+      <table className="w-full text-xs border border-border rounded-lg overflow-hidden">
+        <thead>
+          <tr className="bg-panel border-b border-border">
+            <th className="text-left py-2 px-3 font-medium text-text-muted">Login</th>
+            <th className="text-left py-2 px-3 font-medium text-text-muted">Logout</th>
+            <th className="text-left py-2 px-3 font-medium text-text-muted">Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          {selectedDay.sessions.length === 0 ? (
+            <tr>
+              <td colSpan={3} className="py-3 px-3 text-text-muted">
+                No sessions this day
+              </td>
+            </tr>
+          ) : (
+            selectedDay.sessions.map((s, i) => (
+              <tr key={i} className="border-b border-border last:border-0">
+                <td className="py-2 px-3 text-text-primary">
+                  {formatTimeFromMinutes(s.startMinutes)}
+                </td>
+                <td className="py-2 px-3 text-text-primary">
+                  {formatTimeFromMinutes(s.endMinutes)}
+                </td>
+                <td className="py-2 px-3 text-text-primary">
+                  {formatDurationMinutes(s.durationMinutes)}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** 24h timeline + session table for the selected attendance day (below heatmap). */
 export function AgentDailyActivityTimeline({
   selectedDay,
   timeZone,
@@ -339,54 +356,7 @@ export function AgentDailyActivityTimeline({
           <span className="text-[10px] text-text-muted w-8">24h</span>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** Login / logout / duration for the selected day — shown beside the heatmap (e.g. Performance card). */
-export function AgentSessionBreakdownTable({ selectedDay }: { selectedDay: DayAttendance | null }) {
-  if (!selectedDay) {
-    return (
-      <p className="text-xs text-text-muted leading-relaxed">
-        Select a day on the heatmap to see login, logout, and session duration.
-      </p>
-    );
-  }
-
-  return (
-    <div className="overflow-x-auto min-w-0">
-      <table className="w-full text-xs border border-border rounded-lg overflow-hidden">
-        <thead>
-          <tr className="bg-panel border-b border-border">
-            <th className="text-left py-2 px-2 font-medium text-text-muted">Login</th>
-            <th className="text-left py-2 px-2 font-medium text-text-muted">Logout</th>
-            <th className="text-left py-2 px-2 font-medium text-text-muted">Duration</th>
-          </tr>
-        </thead>
-        <tbody>
-          {selectedDay.sessions.length === 0 ? (
-            <tr>
-              <td colSpan={3} className="py-3 px-2 text-text-muted">
-                No sessions this day
-              </td>
-            </tr>
-          ) : (
-            selectedDay.sessions.map((s, i) => (
-              <tr key={i} className="border-b border-border last:border-0">
-                <td className="py-2 px-2 text-text-primary">
-                  {formatTimeFromMinutes(s.startMinutes)}
-                </td>
-                <td className="py-2 px-2 text-text-primary">
-                  {formatTimeFromMinutes(s.endMinutes)}
-                </td>
-                <td className="py-2 px-2 text-text-primary">
-                  {formatDurationMinutes(s.durationMinutes)}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+      <AgentSessionBreakdownTable selectedDay={selectedDay} />
     </div>
   );
 }

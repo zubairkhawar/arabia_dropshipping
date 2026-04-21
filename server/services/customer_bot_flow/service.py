@@ -1649,7 +1649,7 @@ async def _classify_entry_menu_intent_llm(user_message: str) -> str:
         return "other"
     system = (
         "You classify one user message at the Arabia Dropshipping bot ENTRY step "
-        "(the bot just asked: new customer or existing customer?).\n"
+        "(the bot just showed a welcome menu with topics and options **1** new / **2** existing).\n"
         "Choose exactly ONE label:\n"
         "- new — user indicates they are NEW (first time, sign up, register, typos like neww).\n"
         "- existing — user indicates EXISTING (already have account, login, old customer, "

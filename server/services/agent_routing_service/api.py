@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 from enum import Enum
 import random
 from datetime import datetime, timedelta
@@ -14,6 +14,7 @@ from database import get_db
 from models import Agent, Conversation, Customer, Store, StoreAgentMapping, AgentAttendanceSession, Tenant
 from services.auth_service.api import get_current_user
 from services.auth_service.models import User as AuthUser
+from services.customer_bot_flow import lookup_agent_display_name
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 
 
@@ -298,16 +299,42 @@ def _get_previous_agent_for_customer(
     return db.query(Agent).filter(Agent.id == last_conv.agent_id).first()
 
 
-def _active_assigned_conversations(db: Session, agent_id: int) -> int:
+def live_customer_conversation_count(db: Session, agent_id: int) -> int:
+    """
+    Conversations assigned to this agent that still count toward capacity:
+    not closed or resolved (case-insensitive). Escalated and other open states count.
+    """
+    status_open = func.coalesce(func.lower(Conversation.status), "active").notin_(
+        ["closed", "resolved"]
+    )
     n = (
         db.query(func.count(Conversation.id))
-        .filter(
-            Conversation.agent_id == agent_id,
-            Conversation.status == "active",
-        )
+        .filter(Conversation.agent_id == agent_id, status_open)
         .scalar()
     )
     return int(n or 0)
+
+
+def live_customer_conversation_counts_for_tenant(db: Session, tenant_id: int) -> Dict[int, int]:
+    """Per-agent live counts for admin dashboards (same rules as routing capacity)."""
+    status_open = func.coalesce(func.lower(Conversation.status), "active").notin_(
+        ["closed", "resolved"]
+    )
+    rows = (
+        db.query(Conversation.agent_id, func.count(Conversation.id))
+        .filter(
+            Conversation.tenant_id == tenant_id,
+            Conversation.agent_id.isnot(None),
+            status_open,
+        )
+        .group_by(Conversation.agent_id)
+        .all()
+    )
+    return {int(aid): int(c) for aid, c in rows}
+
+
+def _active_assigned_conversations(db: Session, agent_id: int) -> int:
+    return live_customer_conversation_count(db, agent_id)
 
 
 def _agent_capacity_limit(agent: Agent) -> int:
@@ -460,7 +487,7 @@ async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_
     1. Old customer → previous agent if exists (when under capacity).
     2. Store mapped to an agent → mapped agent (when under capacity).
     3. Otherwise → random online agent in routed team (if provided) or any team.
-    Each agent accepts at most max_concurrent_chats active conversations (1–100, tenant default).
+    Each agent accepts at most max_concurrent_chats open conversations (not closed/resolved; 1–100, tenant default).
     """
     result = perform_conversation_assignment(db, payload)
     if result is None:
@@ -525,7 +552,7 @@ async def transfer_conversation(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Transfer is disabled for your account",
             )
-        caller_agent_name = (caller_agent.name or "Agent").strip()
+        caller_agent_name = lookup_agent_display_name(db, caller_agent.id) or "Agent"
     else:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to transfer")
 
@@ -564,7 +591,7 @@ async def transfer_conversation(
     prev_agent_id = conversation.agent_id
     prev_agent = db.query(Agent).filter(Agent.id == prev_agent_id).first() if prev_agent_id else None
     if role == "admin" and prev_agent is not None:
-        caller_agent_name = (prev_agent.name or "Agent").strip()
+        caller_agent_name = lookup_agent_display_name(db, prev_agent.id) or "Agent"
 
     conversation.agent_id = agent.id
     meta = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
@@ -572,7 +599,7 @@ async def transfer_conversation(
         "from_agent_id": prev_agent_id,
         "from_agent_name": caller_agent_name,
         "to_agent_id": agent.id,
-        "to_agent_name": (agent.name or f"Agent {agent.id}").strip(),
+        "to_agent_name": lookup_agent_display_name(db, agent.id) or f"Agent {agent.id}",
         "at": datetime.utcnow().isoformat(),
     }
     conversation.conversation_metadata = meta
@@ -618,7 +645,7 @@ async def transfer_conversation(
         phone = customer.phone if customer else None
         wa = MetaWhatsAppClient()
         if phone and wa.is_configured():
-            to_name = (agent.name or f"Agent {agent.id}").strip()
+            to_name = lookup_agent_display_name(db, agent.id) or f"Agent {agent.id}"
             if payload.customer_message and payload.customer_message.strip():
                 transfer_note = payload.customer_message.strip()
             else:

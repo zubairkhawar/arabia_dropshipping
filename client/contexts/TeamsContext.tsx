@@ -10,6 +10,8 @@ export interface TeamEvent {
   teamId: string;
   type: TeamEventType;
   memberName: string;
+  /** Set when an agent account was deleted (name kept from payload). */
+  removedVia?: 'agent_deleted' | 'membership';
   targetTeamName?: string;
   sentAt: string;
 }
@@ -51,7 +53,12 @@ interface TeamEventApiModel {
   event_type: TeamEventType;
   actor_agent_id: number | null;
   target_agent_id: number | null;
-  payload: { from_team_id?: number; to_team_id?: number };
+  payload: {
+    from_team_id?: number;
+    to_team_id?: number;
+    removed_member_name?: string;
+    removed_via?: string;
+  };
   created_at: string;
 }
 
@@ -152,8 +159,9 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
         if (!response.ok) continue;
         const eventRows = (await response.json()) as TeamEventApiModel[];
         for (const row of eventRows) {
-          const fromTeamId = row.payload?.from_team_id ? String(row.payload.from_team_id) : undefined;
-          const toTeamId = row.payload?.to_team_id ? String(row.payload.to_team_id) : undefined;
+          const payload = row.payload || {};
+          const fromTeamId = payload.from_team_id ? String(payload.from_team_id) : undefined;
+          const toTeamId = payload.to_team_id ? String(payload.to_team_id) : undefined;
           const targetTeamName = row.event_type === 'member_transferred'
             ? (toTeamId
               ? teamsById.get(toTeamId)?.name
@@ -161,13 +169,27 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
             : fromTeamId
               ? teamsById.get(fromTeamId)?.name
               : undefined;
+          const nameFromPayload =
+            typeof payload.removed_member_name === 'string' && payload.removed_member_name.trim()
+              ? payload.removed_member_name.trim()
+              : undefined;
+          const removedVia =
+            payload.removed_via === 'agent_deleted'
+              ? ('agent_deleted' as const)
+              : payload.removed_via === 'membership'
+                ? ('membership' as const)
+                : undefined;
+          const memberName =
+            nameFromPayload ??
+            (row.target_agent_id != null
+              ? agentMap.get(String(row.target_agent_id))?.name || `Agent ${row.target_agent_id}`
+              : 'Agent');
           events.push({
             id: String(row.id),
             teamId: team.id,
             type: row.event_type,
-            memberName: row.target_agent_id
-              ? agentMap.get(String(row.target_agent_id))?.name || `Agent ${row.target_agent_id}`
-              : 'Agent',
+            memberName,
+            removedVia,
             targetTeamName,
             sentAt: row.created_at,
           });
@@ -185,6 +207,20 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refreshTeams();
+  }, [refreshTeams]);
+
+  useEffect(() => {
+    const onTeamsRefresh = () => {
+      void refreshTeams();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('teams-refresh', onTeamsRefresh);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('teams-refresh', onTeamsRefresh);
+      }
+    };
   }, [refreshTeams]);
 
   const getTeam = useCallback(

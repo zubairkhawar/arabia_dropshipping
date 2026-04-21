@@ -576,7 +576,9 @@ export default function AdminSettings() {
               Agent management
             </h3>
             <p className="text-xs text-text-secondary mb-4 max-w-2xl">
-              Cap how many active customer conversations each agent can hold at once.
+              Each agent can only be assigned up to this many open customer threads at once (closed or resolved
+              chats do not count). New bot handoffs and transfers are blocked when an agent is at the limit. The
+              value applies to every agent; click Save Changes below to persist it.
             </p>
             <div className="space-y-4 max-w-2xl">
               <div>
@@ -593,6 +595,9 @@ export default function AdminSettings() {
                   onChange={(e) => setMaxConcurrentDraft(parseInt(e.target.value, 10) || 1)}
                   className="w-32 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                 />
+                <p className="text-[11px] text-text-muted mt-1.5">
+                  Default is 5. Saved together with agent schedule when you use Save Changes.
+                </p>
               </div>
             </div>
           </div>

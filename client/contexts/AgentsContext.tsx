@@ -17,7 +17,8 @@ export interface AgentRecord {
   avatarUrl: string | null;
   createdAt: string;
   maxConcurrentChats: number;
-  canTransferConversations: boolean;
+  /** Open (non-closed) customer threads assigned to this agent right now. */
+  liveCustomerChats: number;
 }
 
 interface AgentsContextType {
@@ -54,7 +55,7 @@ interface AgentApiModel {
   status: string;
   team: string | null;
   max_concurrent_chats?: number;
-  can_transfer_conversations?: boolean;
+  live_customer_chats?: number;
   plaintext_password?: string | null;
   created_at: string;
 }
@@ -104,7 +105,7 @@ function mapApiToRecord(a: AgentApiModel, storedPasswords: Record<string, string
     avatarUrl: a.avatar_url ?? null,
     createdAt: a.created_at,
     maxConcurrentChats: typeof a.max_concurrent_chats === 'number' ? a.max_concurrent_chats : 5,
-    canTransferConversations: a.can_transfer_conversations !== false,
+    liveCustomerChats: typeof a.live_customer_chats === 'number' ? a.live_customer_chats : 0,
   };
 }
 
@@ -283,7 +284,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           avatarUrl: created.avatar_url ?? null,
           createdAt: created.created_at,
           maxConcurrentChats: typeof created.max_concurrent_chats === 'number' ? created.max_concurrent_chats : 5,
-          canTransferConversations: created.can_transfer_conversations !== false,
+          liveCustomerChats: typeof created.live_customer_chats === 'number' ? created.live_customer_chats : 0,
         };
         const storedPasswords = loadStoredPasswords();
         storedPasswords[String(created.id)] = password;
@@ -364,10 +365,8 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
                   avatarUrl: row.avatar_url ?? null,
                   maxConcurrentChats:
                     typeof row.max_concurrent_chats === 'number' ? row.max_concurrent_chats : a.maxConcurrentChats,
-                  canTransferConversations:
-                    row.can_transfer_conversations !== undefined
-                      ? row.can_transfer_conversations !== false
-                      : a.canTransferConversations,
+                  liveCustomerChats:
+                    typeof row.live_customer_chats === 'number' ? row.live_customer_chats : a.liveCustomerChats,
                 }
               : a,
           ),
@@ -414,6 +413,9 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         // Re-sync from server so any other cleanup (conversations reassigned, etc.)
         // surfaces consistently across the app.
         void refreshAgents();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('teams-refresh'));
+        }
         return true;
       } catch {
         void refreshAgents();
