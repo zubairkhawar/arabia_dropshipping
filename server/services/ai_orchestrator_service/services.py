@@ -4,7 +4,11 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Set, List, Tuple
 
 from services.human_handoff_intent import wants_human_agent
-from services.store_integration_service.client import StoreIntegrationClient
+from services.store_integration_service.client import (
+    StoreIntegrationClient,
+    merchant_seller_scope_from_row,
+    synthetic_order_stub_from_invoices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,17 @@ def _order_ids_from_invoices(invoices: List[Dict[str, Any]], max_ids: int = 40) 
             if len(out) >= max_ids:
                 return out
     return out
+
+
+def _resolve_merchant_seller_id(
+    flow: Optional[Dict[str, Any]],
+    customer: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    f = flow if isinstance(flow, dict) else {}
+    raw = f.get("seller_id")
+    if raw is not None and str(raw).strip():
+        return str(raw).strip()
+    return merchant_seller_scope_from_row(customer if isinstance(customer, dict) else None)
 
 
 def _customer_record_is_linked(customer: Optional[Dict[str, Any]]) -> bool:
@@ -390,11 +405,7 @@ class AIOrchestrator:
             customer = vc
             verification_method = "email_code"
 
-        seller_raw = flow.get("seller_id")
-        if seller_raw is not None:
-            seller_id = str(seller_raw)
-        elif isinstance(customer, dict) and customer.get("seller_id") is not None:
-            seller_id = str(customer.get("seller_id"))
+        seller_id = _resolve_merchant_seller_id(flow, customer)
 
         # Only use Arabia APIs: orders by id, tracking, faq, invoice by seller_id
         if seller_id:
@@ -468,8 +479,9 @@ class AIOrchestrator:
                 customer = await self.store_client.get_customer_by_phone(phone)
                 if customer and customer.get("id"):
                     verification_method = "phone"
-                    if customer.get("seller_id") is not None:
-                        seller_id = str(customer.get("seller_id"))
+                    sid_phone = merchant_seller_scope_from_row(customer)
+                    if sid_phone:
+                        seller_id = sid_phone
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Store API customer by phone failed")
                 store_context_error = (store_context_error or "") + f" customer_fetch:{exc!s}"[:220]
@@ -479,11 +491,15 @@ class AIOrchestrator:
             try:
                 detail = await self.store_client.get_order_by_id(order_id, seller_id=seller_id)
                 if not detail:
-                    detail = await self.store_client.get_order_by_number(order_id)
+                    detail = await self.store_client.get_order_by_number(
+                        order_id, seller_id=seller_id
+                    )
                 if not detail and seller_id:
                     detail = await self.store_client.resolve_order_by_reference(
                         order_id, seller_id
                     )
+                if not detail and invoices:
+                    detail = synthetic_order_stub_from_invoices(invoices, order_id)
                 if detail:
                     orders = [detail] + [
                         o for o in orders if str(o.get("id", o)) != str(detail.get("id", detail))

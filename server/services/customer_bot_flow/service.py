@@ -26,7 +26,12 @@ from services.ai_orchestrator_service.services import (
     _extract_order_id_from_message,
 )
 from services.phone_lookup_variants import normalize_mobile_for_flow
-from services.store_integration_service.client import StoreIntegrationClient
+from services.store_integration_service.client import (
+    StoreIntegrationClient,
+    merchant_seller_scope_from_row,
+    synthetic_order_stub_from_invoices,
+    _orders_list_date_window,
+)
 from services.trending_products_service.bot_query import (
     get_trending_product_by_id,
     list_active_non_trending_for_country,
@@ -1882,12 +1887,13 @@ def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
             "date",
             "booking_date",
             "order_placed_date",
+            "invoice_row_date",
         ),
         "status": _pick(raw, "status"),
         "delivery_status": _pick(raw, "delivery_status", "fulfillment_status", "shipping_status"),
         "expected_delivery": _pick(raw, "expected_delivery", "estimated_delivery", "delivery_date", "expected_delivery_date"),
         "tracking_id": _pick(raw, "tracking_id", "tracking_number", "awb_number", "awb"),
-        "payment_status": _pick(raw, "payment_status"),
+        "payment_status": _pick(raw, "payment_status", "invoice_pay_status"),
         "invoice_id": _pick(raw, "invoice_id", "invoice_number", "invoice_ref"),
         "invoice_amount": _pick(raw, "invoice_amount"),
         "return_status": _pick(raw, "return_status"),
@@ -1897,9 +1903,21 @@ def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
         "return_reason": _pick(raw, "return_reason"),
         "cancellation_type": _pick(raw, "cancellation_type"),
         "cancellation_reason": _pick(raw, "cancellation_reason"),
-        "total_amount": _pick(raw, "total_amount", "amount"),
+        "total_amount": _pick(
+            raw, "total_amount", "amount", "invoice_net_total", "invoice_payable"
+        ),
         "currency": _pick(raw, "currency"),
     }
+
+
+def _flow_merchant_seller_id(flow: Dict[str, Any]) -> Optional[str]:
+    raw = flow.get("seller_id")
+    if raw is not None and str(raw).strip():
+        return str(raw).strip()
+    vc = flow.get("verified_customer")
+    if isinstance(vc, dict):
+        return merchant_seller_scope_from_row(vc)
+    return None
 
 
 async def _lookup_order(
@@ -1942,7 +1960,7 @@ async def _lookup_order(
     try:
         detail = await store_client.get_order_by_id(ref, seller_id=sid)
         if not detail:
-            detail = await store_client.get_order_by_number(ref)
+            detail = await store_client.get_order_by_number(ref, seller_id=sid)
     except Exception:  # noqa: BLE001
         logger.exception("order lookup: /orders/%s failed", ref)
         return None, "api_error"
@@ -1952,6 +1970,23 @@ async def _lookup_order(
             detail = await store_client.resolve_order_by_reference(ref, sid)
         except Exception:  # noqa: BLE001
             logger.exception("order lookup: resolve_order_by_reference failed for %s", ref)
+
+    if not detail and sid:
+        try:
+            df, dt = _orders_list_date_window()
+            invp = await store_client.get_invoice_by_seller_id(
+                sid, date_from=df, date_to=dt, all_invoices=True
+            )
+            inv_rows: List[Dict[str, Any]] = []
+            if isinstance(invp.get("invoices"), list):
+                inv_rows = [x for x in invp["invoices"] if isinstance(x, dict)]
+            elif isinstance(invp.get("invoice"), dict):
+                inv_rows = [invp["invoice"]]
+            stub = synthetic_order_stub_from_invoices(inv_rows, ref)
+            if stub:
+                detail = stub
+        except Exception:  # noqa: BLE001
+            logger.exception("order lookup: invoice stub path failed for %s", ref)
 
     if not detail:
         return None, "not_found"
@@ -4176,7 +4211,7 @@ async def process_customer_bot_message(
         if maybe_ref:
             order, src = await _lookup_order(
                 db, tenant_id, maybe_ref, store_client,
-                seller_id=flow.get("seller_id"),
+                seller_id=_flow_merchant_seller_id(flow),
             )
             if order:
                 f = {**flow, "step": "conversational", "lang": flow_lang, "pending_order_ref": None}
@@ -4293,13 +4328,14 @@ async def process_customer_bot_message(
         oref_raw = flow.get("pending_order_ref")
         oref = (str(oref_raw).strip() if oref_raw else "") or ""
 
+        merchant_sid = merchant_seller_scope_from_row(customer)
         base_f: Dict[str, Any] = {
             **flow,
             "verified": True,
             "step": "conversational",
             "customer_kind": "existing",
             "verified_customer": customer,
-            "seller_id": customer.get("seller_id"),
+            "seller_id": merchant_sid,
             "customer_email": pending_email,
             "verified_at": verified_at,
             "pending_mobile": mobile,
@@ -4308,8 +4344,8 @@ async def process_customer_bot_message(
             "pending_order_ref": None,
             "lang": flow_lang,
         }
-        if mem_id and customer.get("seller_id") is not None:
-            ConversationMemory.store_verification(mem_id, str(customer.get("seller_id")))
+        if mem_id and merchant_sid:
+            ConversationMemory.store_verification(mem_id, merchant_sid)
 
         intro_line = _t(flow_lang, MSGS["verification_success"])
         parts: list[str] = [intro_line]
@@ -4345,7 +4381,7 @@ async def process_customer_bot_message(
         ref = raw if _is_likely_order_id_only(raw) else (_extract_order_id_from_message(raw, phone) or raw)
         order, src = await _lookup_order(
             db, tenant_id, ref, store_client,
-            seller_id=flow.get("seller_id"),
+            seller_id=_flow_merchant_seller_id(flow),
         )
         if order:
             f = {**flow, "step": "conversational", "lang": flow_lang}
@@ -4414,7 +4450,7 @@ async def process_customer_bot_message(
                 if pre_ref:
                     order, src = await _lookup_order(
                         db, tenant_id, pre_ref, store_client,
-                        seller_id=flow.get("seller_id"),
+                        seller_id=_flow_merchant_seller_id(flow),
                     )
                     if order:
                         f_ok = {

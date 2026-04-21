@@ -12,6 +12,50 @@ from services.verification_service import send_verification_code_local, verify_c
 logger = logging.getLogger(__name__)
 
 
+def synthetic_order_stub_from_invoices(
+    invoices: List[Dict[str, Any]],
+    order_ref: str,
+) -> Optional[Dict[str, Any]]:
+    """Minimal order-shaped dict when the order id appears on an invoice but GET /orders/{id} fails."""
+    oid = (order_ref or "").strip().lstrip("#")
+    if not oid:
+        return None
+    for inv in invoices or []:
+        if not isinstance(inv, dict):
+            continue
+        raw = inv.get("order_ids")
+        if not isinstance(raw, list):
+            continue
+        if not any(str(x).strip().lstrip("#") == oid for x in raw):
+            continue
+        return {
+            "id": oid,
+            "order_id": oid,
+            "invoice_row_date": inv.get("date"),
+            "invoice_payable": inv.get("payable"),
+            "invoice_net_total": inv.get("net_total"),
+            "invoice_pay_status": inv.get("pay_status"),
+            "context_note": (
+                "Order id is listed on this seller invoice; full order payload was not returned by the store API."
+            ),
+        }
+    return None
+
+
+def merchant_seller_scope_from_row(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """
+    Arabia ``GET /customers`` often returns ``id`` as the seller scope for
+    ``/orders/*`` and ``/customers/invoice`` — not a separate ``seller_id`` field.
+    """
+    if not isinstance(row, dict) or not row:
+        return None
+    for key in ("seller_id", "sellerId", "id", "_id", "customer_id"):
+        v = row.get(key)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return None
+
+
 def _orders_list_date_window(days: int = 120) -> Tuple[str, str]:
     """UTC date_from / date_to for /orders/all when the API requires a window."""
     end = datetime.utcnow().date()
@@ -194,11 +238,13 @@ class StoreIntegrationClient:
         """
         return []
 
-    async def get_order_by_number(self, order_number: str) -> Optional[Dict[str, Any]]:
+    async def get_order_by_number(
+        self, order_number: str, seller_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Arabia API exposes GET /orders/{order_id}; order_number delegates to same route.
         """
-        return await self.get_order_by_id(order_number)
+        return await self.get_order_by_id(order_number, seller_id=seller_id)
 
     async def get_order_by_id(self, order_id: str, seller_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
@@ -220,9 +266,11 @@ class StoreIntegrationClient:
                     return None
                 resp.raise_for_status()
                 payload = resp.json()
+                if isinstance(payload, dict) and payload.get("success") is False:
+                    return None
                 if isinstance(payload, dict) and "data" in payload:
                     return payload.get("data")
-                return payload
+                return payload if isinstance(payload, dict) else None
         except httpx.HTTPError:
             return None
 
