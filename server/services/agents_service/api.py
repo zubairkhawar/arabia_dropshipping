@@ -463,6 +463,9 @@ async def delete_agent(agent_id: int, db: Session = Depends(get_db)):
             .filter(TeamMembership.agent_id == agent.id)
             .all()
         )
+        # Do not set target_agent_id to this agent — the row is not flushed yet, so the
+        # later bulk UPDATE would miss it, and DELETE agent could CASCADE-remove the event.
+        # Name for the soft timeline lives only in payload.
         for m in memberships:
             db.add(
                 TeamEvent(
@@ -470,7 +473,7 @@ async def delete_agent(agent_id: int, db: Session = Depends(get_db)):
                     team_id=m.team_id,
                     event_type="member_removed",
                     actor_agent_id=None,
-                    target_agent_id=agent.id,
+                    target_agent_id=None,
                     payload={
                         "removed_member_name": display_name,
                         "removed_via": "agent_deleted",

@@ -27,6 +27,10 @@ from models import (
 from config import settings
 from services.ai_orchestrator_service.services import AIOrchestrator
 from langchain_bot import ArabiaLangChainBot
+from langchain_bot.conversation_hints import (
+    format_recent_context_hint_for_prompt,
+    patch_conversation_metadata_with_last_topic,
+)
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 from services.customer_bot_flow import (
     append_handoff_agent_line,
@@ -2171,6 +2175,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         )
         recent_orders = customer_context.get("recent_orders") or []
         customer_ctx = customer_context.get("customer") or {}
+        _meta = (
+            conversation.conversation_metadata
+            if isinstance(conversation.conversation_metadata, dict)
+            else {}
+        )
+        _recent_hint = format_recent_context_hint_for_prompt(_meta)
         reply_text = await bot.generate_reply(
             tenant_id=tenant_id,
             user_message=text,
@@ -2182,13 +2192,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             bot_flow=flow_state,
             conversation_id=conversation.id,
             exclude_history_message_id=customer_msg.id,
+            recent_context_hint=_recent_hint,
+        )
+        conversation.conversation_metadata = patch_conversation_metadata_with_last_topic(
+            conversation.conversation_metadata,
+            text,
+            customer_context,
+            flow_state,
         )
     elif flow.use_ai:
+        flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
         if flow.skip_store_api:
             customer_ctx = {}
             recent_orders = []
         else:
-            flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
             customer_context = await orchestrator.fetch_customer_context(
                 phone=from_phone,
                 message_text=text,
@@ -2196,6 +2213,22 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             )
             recent_orders = customer_context.get("recent_orders") or []
             customer_ctx = customer_context.get("customer") or {}
+        _meta2 = (
+            conversation.conversation_metadata
+            if isinstance(conversation.conversation_metadata, dict)
+            else {}
+        )
+        _recent_hint2 = format_recent_context_hint_for_prompt(_meta2)
+        _fc = customer_context if not flow.skip_store_api else None
+        _bf = (
+            flow_state
+            if not flow.skip_store_api
+            else (
+                flow.merge_metadata.get("bot_flow")
+                if isinstance(flow.merge_metadata, dict)
+                else None
+            )
+        )
         reply_text = await bot.generate_reply(
             tenant_id=tenant_id,
             user_message=flow.ai_user_message,
@@ -2203,12 +2236,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             language=detected_language,
             customer_context=customer_ctx,
             recent_orders=recent_orders,
-            fetch_context=customer_context if not flow.skip_store_api else None,
-            bot_flow=flow_state if not flow.skip_store_api else (
-                flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
-            ),
+            fetch_context=_fc,
+            bot_flow=_bf,
             conversation_id=conversation.id,
             exclude_history_message_id=customer_msg.id,
+            recent_context_hint=_recent_hint2,
+        )
+        conversation.conversation_metadata = patch_conversation_metadata_with_last_topic(
+            conversation.conversation_metadata,
+            flow.ai_user_message,
+            _fc,
+            _bf,
         )
         if flow.skip_store_api and bot.last_reply_used_kb:
             reply_text = format_kb_reply(bf_lang or detected_language, reply_text)

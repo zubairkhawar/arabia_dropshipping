@@ -14,6 +14,7 @@ from config import get_openai_api_key, settings
 from models import Broadcast, KnowledgeSource, Message, TenantSchedule
 from langchain_bot.context_format import (
     build_customer_identity_summary,
+    format_invoices_summary_for_llm,
     format_orders_summary_for_llm,
 )
 from langchain_bot.prompts import (
@@ -438,6 +439,7 @@ class ArabiaLangChainBot:
         bot_flow: Optional[Dict[str, Any]] = None,
         conversation_id: Optional[int] = None,
         exclude_history_message_id: Optional[int] = None,
+        recent_context_hint: Optional[str] = None,
     ) -> str:
         key = get_openai_api_key()
         if not key:
@@ -461,6 +463,10 @@ class ArabiaLangChainBot:
             }
         identity_block = build_customer_identity_summary(fc, bot_flow)
         orders_block = format_orders_summary_for_llm(fc.get("recent_orders") or recent_orders or [])
+        inv_raw = fc.get("invoices")
+        invoices_block = format_invoices_summary_for_llm(
+            inv_raw if isinstance(inv_raw, list) else []
+        )
         history_block = self._conversation_history_block(
             conversation_id,
             exclude_message_id=exclude_history_message_id,
@@ -492,12 +498,18 @@ class ArabiaLangChainBot:
                     knowledge_context = f"{knowledge_context}\n\n{web_context}".strip()
 
         # Fresh template each turn so LLM_FOLLOWUP_SUGGESTIONS env changes apply without restart.
+        hint_line = normalize_context_text(
+            recent_context_hint,
+            "None",
+        )
         messages = build_prompt().format_messages(
             current_time=now_utc_iso(),
             channel=normalize_context_text(channel, "unknown"),
             language=normalize_context_text(language, "english"),
+            recent_context_hint=hint_line,
             customer_context=identity_block,
             orders_context=orders_block,
+            invoices_context=invoices_block,
             schedule_context=schedule_context,
             broadcast_context=broadcast_context,
             knowledge_context=knowledge_context,

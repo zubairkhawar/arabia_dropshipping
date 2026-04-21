@@ -10,6 +10,10 @@ from services.auth_service.models import User
 from services.ai_orchestrator_service.services import AIOrchestrator
 from database import get_db
 from langchain_bot import ArabiaLangChainBot
+from langchain_bot.conversation_hints import (
+    format_recent_context_hint_for_prompt,
+    patch_conversation_metadata_with_last_topic,
+)
 from models import Conversation, Message, Tenant, TenantSchedule
 from services.customer_bot_flow import (
     append_handoff_agent_line,
@@ -139,6 +143,12 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
         )
         recent_orders = customer_context.get("recent_orders") or []
         customer = customer_context.get("customer") or {}
+        _hint_meta = (
+            conversation.conversation_metadata
+            if conversation and isinstance(conversation.conversation_metadata, dict)
+            else {}
+        )
+        _rh = format_recent_context_hint_for_prompt(_hint_meta)
         reply_text = await bot.generate_reply(
             tenant_id=message.tenant_id,
             user_message=message.message,
@@ -149,7 +159,15 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             fetch_context=customer_context,
             bot_flow=flow_state,
             conversation_id=conversation.id if conversation else None,
+            recent_context_hint=_rh,
         )
+        if conversation:
+            conversation.conversation_metadata = patch_conversation_metadata_with_last_topic(
+                conversation.conversation_metadata,
+                message.message,
+                customer_context,
+                flow_state,
+            )
         if message.conversation_id is not None and conversation:
             db.add(
                 Message(
@@ -183,11 +201,11 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
         }
 
     if flow.use_ai:
+        flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
         if flow.skip_store_api:
             customer: dict = {}
             recent_orders: list = []
         else:
-            flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
             customer_context = await orchestrator.fetch_customer_context(
                 phone=message.phone,
                 message_text=message.message,
@@ -195,6 +213,13 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             )
             recent_orders = customer_context.get("recent_orders") or []
             customer = customer_context.get("customer") or {}
+        _hint_meta2 = (
+            conversation.conversation_metadata
+            if conversation and isinstance(conversation.conversation_metadata, dict)
+            else {}
+        )
+        _rh2 = format_recent_context_hint_for_prompt(_hint_meta2)
+        _fc_ai = customer_context if not flow.skip_store_api else None
         reply_text = await bot.generate_reply(
             tenant_id=message.tenant_id,
             user_message=flow.ai_user_message,
@@ -202,12 +227,18 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             language=detected_language,
             customer_context=customer,
             recent_orders=recent_orders,
-            fetch_context=customer_context if not flow.skip_store_api else None,
-            bot_flow=flow_state if not flow.skip_store_api else (
-                flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
-            ),
+            fetch_context=_fc_ai,
+            bot_flow=flow_state,
             conversation_id=conversation.id if conversation else None,
+            recent_context_hint=_rh2,
         )
+        if conversation:
+            conversation.conversation_metadata = patch_conversation_metadata_with_last_topic(
+                conversation.conversation_metadata,
+                flow.ai_user_message,
+                _fc_ai,
+                flow_state,
+            )
         if (
             flow.skip_store_api
             and bot.last_reply_used_kb

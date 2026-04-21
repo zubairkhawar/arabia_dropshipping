@@ -346,6 +346,8 @@ class AIOrchestrator:
         tracking_detail: Optional[Dict[str, Any]] = None
         invoices: list = []
         seller_id: Optional[str] = None
+        order_tracking: Optional[Dict[str, Any]] = None
+        order_invoice: Optional[Dict[str, Any]] = None
 
         flow = bot_flow if isinstance(bot_flow, dict) else {}
         vc = flow.get("verified_customer")
@@ -415,6 +417,27 @@ class AIOrchestrator:
                     orders = [detail] + [
                         o for o in orders if str(o.get("id", o)) != str(detail.get("id", detail))
                     ]
+                    try:
+                        order_tracking = await self.store_client.get_order_tracking(
+                            order_id, seller_id=seller_id
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("Store API order tracking failed")
+                        store_context_error = (
+                            (store_context_error or "") + f" order_trk:{exc!s}"
+                        )[:220]
+                    try:
+                        inv_raw = await self.store_client.get_order_invoice_mapping(order_id)
+                        if isinstance(inv_raw, dict):
+                            oinv = inv_raw.get("invoice")
+                            order_invoice = (
+                                oinv if isinstance(oinv, dict) else inv_raw
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("Store API order invoice mapping failed")
+                        store_context_error = (
+                            (store_context_error or "") + f" order_inv:{exc!s}"
+                        )[:220]
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Store API order by id failed")
                 store_context_error = (store_context_error or "") + f" order_fetch:{exc!s}"[:220]
@@ -459,6 +482,8 @@ class AIOrchestrator:
             "tracking_detail": tracking_detail or {},
             "faq_entries": faq_entries,
             "invoices": invoices,
+            "order_tracking": order_tracking or {},
+            "order_invoice": order_invoice or {},
         }
 
     async def should_escalate(self, message: str) -> bool:

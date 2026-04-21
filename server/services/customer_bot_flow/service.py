@@ -4136,33 +4136,27 @@ async def process_customer_bot_message(
     if step == "conversational":
         kind = flow.get("customer_kind")
 
-        # Order / tracking intent must win over trending + sourcing + LLM for
-        # verified shoppers — otherwise "give me order details" after a product
-        # browse can loop on empty catalog suggestions, and the model invents
-        # "no orders linked" from stale context.
+        # Verified customers: route order/tracking/invoice queries through the
+        # LLM with full store-API context instead of deterministic handlers.
+        # The ai_forward(skip_api=False) path triggers fetch_customer_context()
+        # which fetches orders, tracking, invoices, and FAQs — the LLM then
+        # formulates a natural-language answer.
         if flow.get("verified") and (
-            _looks_like_order_status_question(text) or _is_likely_order_id_only(text)
+            _looks_like_order_status_question(text)
+            or _is_likely_order_id_only(text)
+            or _looks_like_tracking_by_id(text)
+            or _looks_like_invoice_by_id(text)
+            or _looks_like_invoice_for_order(text)
+            or _looks_like_invoices_in_period(text)
+            or _looks_like_latest_invoice(text)
+            or _looks_like_all_invoices(text)
+            or _looks_like_orders_in_period(text)
         ):
-            ref_o = ""
-            if _is_likely_order_id_only(text):
-                ref_o = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
-            else:
-                ref_o = (_extract_order_id_from_message(text, phone) or "").strip()
-            if ref_o:
-                order_o, src_o = await _lookup_order(
-                    db, tenant_id, ref_o, store_client,
-                    seller_id=flow.get("seller_id"),
-                )
-                if order_o:
-                    f_o = {**flow, "step": "conversational", "lang": flow_lang}
-                    return save(f_o, _format_order_sentence(flow_lang, order_o))
-                if src_o == "api_error":
-                    f_o = {**flow, "step": "conversational", "lang": flow_lang}
-                    return save(f_o, _t(flow_lang, MSGS["order_lookup_error"]))
-                f_o = {**flow, "step": "conversational", "lang": flow_lang}
-                return save(f_o, _t(flow_lang, MSGS["order_not_found"]))
-            nf_o = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
-            return save(nf_o, _t(flow_lang, MSGS["ask_order"]))
+            return ai_forward(
+                "[Customer question] " + text,
+                {**flow, "step": "conversational"},
+                skip_api=False,
+            )
 
         if _wants_non_trending_products(text):
             llm_res = await _try_trending_llm(entry_intent="non_trending")
@@ -4299,221 +4293,11 @@ async def process_customer_bot_message(
             return ai_forward(text, nf, skip_api=True)
 
         # --- Existing customer (verified) path ---
+        # Route ALL verified-customer queries through the LLM with full
+        # store-API context.  fetch_customer_context() in the orchestrator
+        # already fetches orders, tracking, invoices, and FAQs using the
+        # seller_id — the LLM formulates a natural-language answer.
         if flow.get("verified"):
-            # Tracking-by-number: explicit tracking ref like "track PT25252071".
-            if _looks_like_tracking_by_id(text):
-                tid = _extract_tracking_id_from_message(text)
-                if tid:
-                    try:
-                        tr = await store_client.get_tracking_status(
-                            tid, seller_id=flow.get("seller_id")
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.exception("tracking lookup failed for %s", tid)
-                        tr = None
-                    if tr:
-                        return save(
-                            {**flow, "step": "conversational", "lang": flow_lang},
-                            _format_tracking_sentence(flow_lang, tr),
-                        )
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _t(flow_lang, MSGS["tracking_lookup_error"]),
-                    )
-
-            # Invoice by explicit invoice number: "invoice #55", "invoice 55".
-            if _looks_like_invoice_by_id(text):
-                iid = _extract_invoice_id(text)
-                if iid:
-                    try:
-                        payload = await store_client.get_invoice_by_seller_id(
-                            str(flow.get("seller_id") or ""),
-                            invoice_id=iid,
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.exception("invoice-by-id lookup failed for %s", iid)
-                        payload = {}
-                    inv = _extract_invoice(payload or {})
-                    if inv:
-                        return save(
-                            {**flow, "step": "conversational", "lang": flow_lang},
-                            _format_invoice_sentence(flow_lang, inv),
-                        )
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _t(flow_lang, MSGS["invoice_not_found"]),
-                    )
-
-            # Invoice for a specific order: "which invoice is order 157955 in?"
-            if _looks_like_invoice_for_order(text):
-                ref = (_extract_order_id_from_message(text, phone) or "").strip()
-                if not ref and _is_likely_order_id_only(text):
-                    ref = re.sub(r"[^\d\-#]", "", (text or "").strip())
-                if ref:
-                    try:
-                        payload = await store_client.get_order_invoice_mapping(ref)
-                    except Exception:  # noqa: BLE001
-                        logger.exception("order-invoice mapping lookup failed for %s", ref)
-                        payload = None
-                    inv = _extract_invoice(payload or {})
-                    if inv:
-                        return save(
-                            {**flow, "step": "conversational", "lang": flow_lang},
-                            _format_invoice_sentence(flow_lang, inv, for_order=ref),
-                        )
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _t(flow_lang, MSGS["invoice_not_found"]),
-                    )
-                # No order id yet → ask for one.
-                nf = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
-                return save(nf, _t(flow_lang, MSGS["ask_order"]))
-
-            # Invoices in a period: "my invoices in March", "invoices last month".
-            if _looks_like_invoices_in_period(text):
-                sid = str(flow.get("seller_id") or "").strip()
-                window = _parse_date_range(text) or {}
-                if not sid:
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _t(flow_lang, MSGS["invoice_lookup_error"]),
-                    )
-                try:
-                    payload = await store_client.get_invoice_by_seller_id(
-                        sid,
-                        all_invoices=True,
-                        date_from=window.get("date_from"),
-                        date_to=window.get("date_to"),
-                    )
-                except TypeError:
-                    # Older client signature – fall back without date args.
-                    try:
-                        payload = await store_client.get_invoice_by_seller_id(
-                            sid, all_invoices=True
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.exception("invoices-in-period lookup failed for %s", sid)
-                        payload = {}
-                except Exception:  # noqa: BLE001
-                    logger.exception("invoices-in-period lookup failed for %s", sid)
-                    payload = {}
-                label = window.get("label") or ""
-                return save(
-                    {**flow, "step": "conversational", "lang": flow_lang},
-                    _format_invoices_in_period(flow_lang, payload or {}, label),
-                )
-
-            # Latest / current invoice.
-            if _looks_like_latest_invoice(text):
-                sid = str(flow.get("seller_id") or "").strip()
-                if not sid:
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _t(flow_lang, MSGS["invoice_lookup_error"]),
-                    )
-                try:
-                    payload = await store_client.get_invoice_by_seller_id(sid)
-                except Exception:  # noqa: BLE001
-                    logger.exception("latest invoice lookup failed for seller_id=%s", sid)
-                    payload = {}
-                inv = _extract_invoice(payload or {})
-                if inv:
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _format_invoice_sentence(flow_lang, inv),
-                    )
-                return save(
-                    {**flow, "step": "conversational", "lang": flow_lang},
-                    _t(flow_lang, MSGS["invoice_not_found"]),
-                )
-
-            # All invoices summary.
-            if _looks_like_all_invoices(text):
-                sid = str(flow.get("seller_id") or "").strip()
-                if not sid:
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _t(flow_lang, MSGS["invoice_lookup_error"]),
-                    )
-                try:
-                    payload = await store_client.get_invoice_by_seller_id(
-                        sid, all_invoices=True
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("all-invoices lookup failed for seller_id=%s", sid)
-                    payload = {}
-                if payload:
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _format_all_invoices_sentence(flow_lang, payload),
-                    )
-                return save(
-                    {**flow, "step": "conversational", "lang": flow_lang},
-                    _t(flow_lang, MSGS["invoice_not_found"]),
-                )
-
-            # Orders within a period: "my orders last month", "orders in April 2026".
-            if _looks_like_orders_in_period(text):
-                sid = str(flow.get("seller_id") or "").strip()
-                if not sid:
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _t(flow_lang, MSGS["orders_period_lookup_error"]),
-                    )
-                window = _parse_date_range(text) or {}
-                if not window:
-                    # Default "my orders" with no period → current month.
-                    today = datetime.utcnow().date()
-                    df, dt = _month_bounds(today.year, today.month)
-                    window = {
-                        "label": f"{_MONTH_LABEL_EN[today.month]} {today.year}",
-                        "date_from": df.isoformat(),
-                        "date_to": dt.isoformat(),
-                        "month": f"{today.year:04d}-{today.month:02d}",
-                    }
-                try:
-                    orders = await store_client.get_orders_all(
-                        sid,
-                        month=window.get("month"),
-                        date_from=window.get("date_from"),
-                        date_to=window.get("date_to"),
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("orders-in-period lookup failed for %s", sid)
-                    return save(
-                        {**flow, "step": "conversational", "lang": flow_lang},
-                        _t(flow_lang, MSGS["orders_period_lookup_error"]),
-                    )
-                return save(
-                    {**flow, "step": "conversational", "lang": flow_lang},
-                    _format_orders_in_period(
-                        flow_lang,
-                        orders or [],
-                        window.get("label") or "",
-                    ),
-                )
-
-            if _looks_like_order_status_question(text) or _is_likely_order_id_only(text):
-                ref = ""
-                if _is_likely_order_id_only(text):
-                    ref = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
-                else:
-                    ref = (_extract_order_id_from_message(text, phone) or "").strip()
-                if ref:
-                    order, src = await _lookup_order(
-                        db, tenant_id, ref, store_client,
-                        seller_id=flow.get("seller_id"),
-                    )
-                    if order:
-                        f = {**flow, "step": "conversational", "lang": flow_lang}
-                        return save(f, _format_order_sentence(flow_lang, order))
-                    if src == "api_error":
-                        f = {**flow, "step": "conversational", "lang": flow_lang}
-                        return save(f, _t(flow_lang, MSGS["order_lookup_error"]))
-                    f = {**flow, "step": "conversational", "lang": flow_lang}
-                    return save(f, _t(flow_lang, MSGS["order_not_found"]))
-                nf = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
-                return save(nf, _t(flow_lang, MSGS["ask_order"]))
             return ai_forward(
                 "[Customer question] " + text,
                 {**flow, "step": "conversational"},

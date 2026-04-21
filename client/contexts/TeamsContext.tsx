@@ -159,7 +159,15 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
         if (!response.ok) continue;
         const eventRows = (await response.json()) as TeamEventApiModel[];
         for (const row of eventRows) {
-          const payload = row.payload || {};
+          let rawPayload = row.payload ?? {};
+          if (typeof rawPayload === 'string') {
+            try {
+              rawPayload = JSON.parse(rawPayload) as TeamEventApiModel['payload'];
+            } catch {
+              rawPayload = {};
+            }
+          }
+          const payload = rawPayload && typeof rawPayload === 'object' ? rawPayload : {};
           const fromTeamId = payload.from_team_id ? String(payload.from_team_id) : undefined;
           const toTeamId = payload.to_team_id ? String(payload.to_team_id) : undefined;
           const targetTeamName = row.event_type === 'member_transferred'

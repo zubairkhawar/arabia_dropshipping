@@ -411,8 +411,9 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           return false;
         }
         // Re-sync from server so any other cleanup (conversations reassigned, etc.)
-        // surfaces consistently across the app.
-        void refreshAgents();
+        // surfaces consistently across the app. Refresh teams after so team timeline events
+        // (e.g. member_removed) are visible in Admin → Teams chat.
+        await refreshAgents();
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('teams-refresh'));
         }
