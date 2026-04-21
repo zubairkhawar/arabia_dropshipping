@@ -83,6 +83,8 @@ interface InboxConversationsContextType {
     customerMessage?: string,
   ) => void;
   sendConversationToAI: (convId: number) => void;
+  /** Admin-only: permanent server delete; updates local state on success. */
+  deleteConversation: (convId: number) => Promise<void>;
   getMessages: (convId: number) => InboxMessage[];
   setMessages: (convId: number, messages: InboxMessage[]) => void;
   appendMessage: (convId: number, message: InboxMessage) => void;
@@ -598,6 +600,30 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         });
         return;
       }
+      if (msg.type === 'conversation_deleted' && typeof convId === 'number') {
+        const cid = convId;
+        setConversations((prev) => {
+          const next = applyPhoneDuplicateNewLeadRule(prev.filter((c) => c.id !== cid));
+          queueMicrotask(() => {
+            setSelectedId((sel) => {
+              if (sel !== cid) return sel;
+              return pickInboxSelection(next, readLastInboxConversationId(), null);
+            });
+          });
+          return next;
+        });
+        setMessagesByConvId((prev) => {
+          const n = { ...prev };
+          delete n[cid];
+          return n;
+        });
+        setInboxMetaByConvId((prev) => {
+          const n = { ...prev };
+          delete n[cid];
+          return n;
+        });
+        return;
+      }
       if (msg.type === 'inbox_conversation_refresh') {
         if (typeof convId === 'number') {
           queueMicrotask(() => {
@@ -834,6 +860,36 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     [],
   );
 
+  const deleteConversation = useCallback(async (convId: number) => {
+    const url = new URL(`${API_BASE}/api/messaging/conversations/${convId}`);
+    url.searchParams.set('tenant_id', String(TENANT_ID));
+    const res = await fetch(url.toString(), { method: 'DELETE', headers: authJsonHeaders() });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(t || 'Failed to delete conversation');
+    }
+    setConversations((prev) => {
+      const next = applyPhoneDuplicateNewLeadRule(prev.filter((c) => c.id !== convId));
+      queueMicrotask(() => {
+        setSelectedId((sel) => {
+          if (sel !== convId) return sel;
+          return pickInboxSelection(next, readLastInboxConversationId(), null);
+        });
+      });
+      return next;
+    });
+    setMessagesByConvId((prev) => {
+      const n = { ...prev };
+      delete n[convId];
+      return n;
+    });
+    setInboxMetaByConvId((prev) => {
+      const n = { ...prev };
+      delete n[convId];
+      return n;
+    });
+  }, []);
+
   const sendConversationToAI = useCallback((convId: number) => {
     const now = new Date();
     const closedAt = `${formatTime12hInZone(now, timeZone)}, ${now.toLocaleDateString('en-US', {
@@ -1001,6 +1057,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         reopenConversation,
         transferConversation,
         sendConversationToAI,
+        deleteConversation,
         getMessages,
         setMessages,
         appendMessage,

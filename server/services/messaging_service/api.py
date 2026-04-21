@@ -14,10 +14,12 @@ from database import get_db
 from models import (
     Agent,
     Conversation,
+    ConversationAgentReadState,
     Customer,
     InboxMessageReceipt,
     Message,
     MessageUserDeletion,
+    Notification,
     Store,
     TenantSchedule,
     User,
@@ -228,6 +230,18 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
         if isinstance(transfer_meta.get("to_agent_name"), str)
         else None,
     )
+
+
+def _r2_keys_from_message_metadata(meta: Any) -> List[str]:
+    """Collect R2 object keys stored on inbox message metadata (media)."""
+    keys: List[str] = []
+    if not isinstance(meta, dict):
+        return keys
+    for k in ("object_key", "thumbnail_object_key"):
+        raw = meta.get(k)
+        if isinstance(raw, str) and raw.strip():
+            keys.append(raw.strip())
+    return keys
 
 
 def _fit_snippet(text: Optional[str], max_len: int = 140) -> Optional[str]:
@@ -1429,6 +1443,85 @@ async def send_conversation_to_ai(
     _ = conversation.customer
     _ = conversation.messages
     return _build_conversation_summary(conversation)
+
+
+@router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_conversation_permanently(
+    conversation_id: int,
+    tenant_id: int = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Permanently remove a customer inbox thread (admin only): DB rows, receipts, notifications,
+    read state, and R2 media keys referenced on messages.
+    """
+    role = (current_user.role or "").lower()
+    if role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    if int(current_user.tenant_id) != int(tenant_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant mismatch")
+
+    conv = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id, Conversation.tenant_id == tenant_id)
+        .first()
+    )
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    msgs = db.query(Message).filter(Message.conversation_id == conversation_id).all()
+    msg_ids = [m.id for m in msgs]
+    for m in msgs:
+        for key in _r2_keys_from_message_metadata(m.message_metadata):
+            delete_object(key)
+
+    if msg_ids:
+        db.query(InboxMessageReceipt).filter(InboxMessageReceipt.message_id.in_(msg_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(MessageUserDeletion).filter(MessageUserDeletion.message_id.in_(msg_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(Message).filter(Message.reply_to_message_id.in_(msg_ids)).update(
+            {Message.reply_to_message_id: None},
+            synchronize_session=False,
+        )
+        db.query(Message).filter(Message.conversation_id == conversation_id).delete(
+            synchronize_session=False
+        )
+
+    db.query(Notification).filter(Notification.conversation_id == conversation_id).delete(
+        synchronize_session=False
+    )
+    db.query(ConversationAgentReadState).filter(
+        ConversationAgentReadState.tenant_id == tenant_id,
+        ConversationAgentReadState.conversation_id == conversation_id,
+    ).delete(synchronize_session=False)
+
+    db.query(Conversation).filter(Conversation.id == conversation_id).delete(synchronize_session=False)
+    db.commit()
+
+    agent_rows = db.query(Agent.id).filter(Agent.tenant_id == tenant_id).all()
+    for (aid,) in agent_rows:
+        try:
+            await push_inbox_sync_event(
+                db,
+                tenant_id,
+                aid,
+                {
+                    "type": "conversation_deleted",
+                    "conversation_id": conversation_id,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "conversation_deleted broadcast failed (conversation_id=%s agent_id=%s)",
+                conversation_id,
+                aid,
+            )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/messages/{message_id}", response_model=MessageOut)

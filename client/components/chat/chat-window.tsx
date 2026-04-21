@@ -415,6 +415,7 @@ export function ChatWindow({
   const isDmPage = pathname?.startsWith('/agent/dm');
   const dmSlug = isDmPage ? (pathname.replace('/agent/dm/', '').split('/')[0] || null) : null;
   const isInboxPage = pathname?.startsWith('/agent/inbox') || pathname?.startsWith('/admin/inbox');
+  const isAdminInbox = pathname?.startsWith('/admin/inbox');
   /** Admin broadcast composer: require a team id (API target). Do not depend on teamName — empty names would hide the input while readOnly is true. */
   const showBroadcastInput =
     broadcastMode &&
@@ -655,6 +656,8 @@ export function ChatWindow({
   const [voiceTotalSec, setVoiceTotalSec] = useState<Record<number, number>>({});
   const [showTransferMenu, setShowTransferMenu] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showDeleteChatModal, setShowDeleteChatModal] = useState(false);
+  const [deleteChatPending, setDeleteChatPending] = useState(false);
   const [transferTargetId, setTransferTargetId] = useState<string | null>(null);
   const [transferTargetName, setTransferTargetName] = useState<string>('');
   const [transferDescription, setTransferDescription] = useState('');
@@ -3309,6 +3312,19 @@ export function ChatWindow({
                       <AlertCircle className="w-4 h-4" />
                       Close chat
                     </button>
+                    {isAdminInbox && hasSelectedConversation && inboxConv?.selectedId != null && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeMenus();
+                          setShowDeleteChatModal(true);
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-status-error"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Delete chat
+                      </button>
+                    )}
                   </div>
                 </>
               )}
@@ -3376,6 +3392,76 @@ export function ChatWindow({
             </div>
           )}
         </div>
+      )}
+
+      {/* Permanently delete conversation (admin monitoring) */}
+      {showDeleteChatModal && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/40"
+            onClick={() => !deleteChatPending && setShowDeleteChatModal(false)}
+            aria-hidden
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div
+              className="bg-white rounded-xl border border-border shadow-xl w-full max-w-md pointer-events-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+                <h2 className="text-lg font-semibold text-text-primary">Delete this chat?</h2>
+                <button
+                  type="button"
+                  disabled={deleteChatPending}
+                  onClick={() => setShowDeleteChatModal(false)}
+                  className="p-1.5 rounded-lg hover:bg-panel text-text-muted disabled:opacity-50"
+                  aria-label="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-text-secondary">
+                  This permanently removes the conversation from AI Bot, Live, and Closed lists, deletes all messages and
+                  media from storage, and cannot be undone.
+                </p>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={deleteChatPending}
+                    onClick={() => setShowDeleteChatModal(false)}
+                    className="px-4 py-2 rounded-lg border border-border text-text-primary hover:bg-panel disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deleteChatPending || inboxConv?.selectedId == null}
+                    onClick={() => {
+                      const cid = inboxConv?.selectedId;
+                      if (cid == null || !inboxConv?.deleteConversation) return;
+                      setDeleteChatPending(true);
+                      void (async () => {
+                        try {
+                          await inboxConv.deleteConversation(cid);
+                          setMessages([]);
+                          setShowDeleteChatModal(false);
+                        } catch (e) {
+                          console.error('delete conversation failed', e);
+                          alert(e instanceof Error ? e.message : 'Failed to delete conversation');
+                        } finally {
+                          setDeleteChatPending(false);
+                        }
+                      })();
+                    }}
+                    className="px-4 py-2 rounded-lg bg-status-error text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {deleteChatPending ? 'Deleting…' : 'Delete permanently'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Transfer chat modal */}
