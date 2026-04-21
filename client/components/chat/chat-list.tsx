@@ -247,7 +247,9 @@ export function ChatList() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto">
+      <div
+        className={`flex-1 overflow-y-auto${isAdminInbox ? ' admin-no-scrollbar' : ''}`}
+      >
           <div className="p-2 space-y-3">
             {activeSearch && (
               <div className="space-y-2">
