@@ -13,6 +13,7 @@ import {
   ArchiveRestore,
 } from 'lucide-react';
 import { formatDistanceToNow, intervalToDuration } from 'date-fns';
+import { parseBackendUtcDate } from '@/lib/tenant-time';
 
 export interface AdminBroadcast {
   id: string;
@@ -471,7 +472,7 @@ export function BroadcastsPanel({
 
   const formatDt = (s: string) => {
     if (!s) return '—';
-    const d = new Date(s);
+    const d = parseBackendUtcDate(s) ?? new Date(s);
     if (Number.isNaN(d.getTime())) return '—';
     return d.toLocaleString('en-US', {
       timeZone,

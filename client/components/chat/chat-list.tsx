@@ -134,8 +134,9 @@ export function ChatList() {
   const filteredConversations = useMemo(() => {
     let list = conversations;
 
-    // Only apply view filters on admin pages — agent inbox shows all conversations
-    // and sub-filters them into live/closed/transferred sections below.
+    // Admin: one bucket per conversation (backend is source of truth).
+    // AI Bot = active + bot-owned (agent_id null). Live = active + assigned agent.
+    // Closed = resolved/closed. Reopen after close is handled server-side (same thread → active + bot).
     if (!isAgentInbox) {
       if (view === 'bot') {
         list = list.filter((c) => c.handlerType === 'ai' && c.status === 'active');

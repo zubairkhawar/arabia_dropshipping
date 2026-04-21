@@ -567,6 +567,32 @@ def _get_or_create_active_whatsapp_conversation(
     if conversation:
         return conversation
 
+    # Reuse the latest closed thread for this phone so admin/agent inboxes stay
+    # one row per customer (no duplicate active+closed rows after reopen).
+    closed = (
+        db.query(Conversation)
+        .filter(
+            Conversation.tenant_id == tenant_id,
+            Conversation.store_id == store_id,
+            Conversation.customer_id == customer_id,
+            Conversation.channel == "whatsapp",
+            Conversation.status.in_(["closed", "resolved"]),
+        )
+        .order_by(desc(Conversation.updated_at))
+        .first()
+    )
+    if closed:
+        closed.status = "active"
+        closed.agent_id = None
+        meta = closed.conversation_metadata if isinstance(closed.conversation_metadata, dict) else {}
+        meta["reopened_after_close_at"] = datetime.utcnow().isoformat()
+        closed.conversation_metadata = meta
+        closed.updated_at = datetime.utcnow()
+        db.add(closed)
+        db.commit()
+        db.refresh(closed)
+        return closed
+
     conversation = Conversation(
         tenant_id=tenant_id,
         store_id=store_id,
@@ -1341,7 +1367,9 @@ async def send_conversation_to_ai(
         conversation.conversation_metadata = meta
 
     conversation.agent_id = None
-    conversation.status = "closed"
+    # Back on the bot: must be active so admin "AI Bot" bucket shows this thread
+    # (not "Closed"). Closed is only after an agent resolves the chat.
+    conversation.status = "active"
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)
     db.commit()
