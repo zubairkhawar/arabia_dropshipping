@@ -39,6 +39,8 @@ from services.human_handoff_intent import (
     wants_human_agent,
 )
 from services.customer_bot_flow.templates import BOT_FLOW_TEMPLATES
+from services.intent_detector import IntentDetector
+from services.memory_service import ConversationMemory, normalize_memory_scope_id
 from services.customer_bot_flow.trending_llm_runner import (
     TrendingLLMResult,
     memory_to_flow_patch,
@@ -53,6 +55,61 @@ except ImportError:  # pragma: no cover — older langchain pin
 from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
+
+
+def _memory_apply_entities(mem_id: Optional[str], text: str) -> None:
+    if not mem_id or not (text or "").strip():
+        return
+    oid = IntentDetector.extract_order_id(text)
+    if oid:
+        ConversationMemory.store_extracted_entity(mem_id, "order_id", oid, 0.95, "regex")
+    ctry = IntentDetector.extract_country(text)
+    if ctry:
+        ConversationMemory.store_extracted_entity(mem_id, "country", ctry, 0.9, "keyword")
+    pid = IntentDetector.extract_product_id(text)
+    if pid:
+        ConversationMemory.store_extracted_entity(mem_id, "product_id", pid, 0.85, "regex")
+    _topic, _intent = IntentDetector.detect_topic_and_intent(text)
+    if _intent and _intent != "general_question":
+        ConversationMemory.store_last_intent(mem_id, _intent)
+
+
+def _memory_store_pending_entry_menu(mem_id: Optional[str], text: str) -> None:
+    """Remember topic keywords before new/existing clarifying reply."""
+    if not mem_id:
+        return
+    t = (text or "").strip()
+    tl = t.lower()
+    if tl in {"1", "2", "n", "e", "y", "yes", "no", "haan", "nahi", "ji"}:
+        return
+    if len(t) < 2:
+        return
+    topic, intent_type = IntentDetector.detect_topic_and_intent(t)
+    if intent_type in ("general_question", "escalation"):
+        return
+    if intent_type == "verification" and "existing" not in tl and "verify" not in tl:
+        return
+    ConversationMemory.store_pending_intent(
+        mem_id,
+        topic or "general",
+        intent_type,
+        t,
+        confidence=0.8,
+    )
+
+
+def _memory_pending_ai_prefix(mem_id: Optional[str]) -> str:
+    if not mem_id:
+        return ""
+    p = ConversationMemory.get_pending_intent(mem_id)
+    if not p:
+        return ""
+    return (
+        "[Customer memory: They asked about "
+        f"{p.get('topic')} ({p.get('intent_type')}) earlier. "
+        f"Original message: {p.get('original_question', '')}. "
+        "Answer that topic first, helpfully and accurately.]\n\n"
+    )
 
 BOT_FLOW_KEY = "bot_flow"
 
@@ -2970,6 +3027,10 @@ async def process_customer_bot_message(
                 lang = sticky
     step = flow.get("step") or "conversational"
     flow_lang = lang
+    mem_id = normalize_memory_scope_id(phone, conversation)
+    _um_early = (user_message or "").strip()
+    if mem_id and _um_early:
+        _memory_apply_entities(mem_id, _um_early)
 
     store_client = StoreIntegrationClient()
     escalate_for_ai_turn = await orchestrator.should_escalate(user_message)
@@ -3360,6 +3421,8 @@ async def process_customer_bot_message(
     text = (user_message or "").strip()
 
     if is_slash_reset_command(text):
+        if mem_id:
+            ConversationMemory.clear_all(mem_id)
         nf = _reset_bot_flow(flow_lang)
         return save(nf, _t(flow_lang, MSGS["greeting"]), skip_api=False)
 
@@ -3394,6 +3457,8 @@ async def process_customer_bot_message(
 
     # Clear stale WhatsApp/web bot state (e.g. old "verified" session) — before handoff
     if wants_bot_flow_reset(text):
+        if mem_id:
+            ConversationMemory.clear_all(mem_id)
         nf = _reset_bot_flow(flow_lang)
         return save(nf, _t(flow_lang, MSGS["greeting"]), skip_api=False)
 
@@ -3430,6 +3495,8 @@ async def process_customer_bot_message(
 
     # --- New / Existing customer selection ---
     if step == "awaiting_customer_type":
+        if mem_id:
+            _memory_store_pending_entry_menu(mem_id, text)
         choice = _parse_choice(
             text,
             {
@@ -3455,6 +3522,13 @@ async def process_customer_bot_message(
                 "intro_shown": True,
                 "lang": flow_lang,
             }
+            pref = _memory_pending_ai_prefix(mem_id) if mem_id else ""
+            if pref:
+                if mem_id:
+                    ConversationMemory.clear_pending_intent(
+                        mem_id, promote_from_queue=True
+                    )
+                return ai_forward(pref + text, nf, skip_api=True)
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
         if choice == "existing":
             nf = {
@@ -3567,6 +3641,13 @@ async def process_customer_bot_message(
                 "intro_shown": True,
                 "lang": flow_lang,
             }
+            pref = _memory_pending_ai_prefix(mem_id) if mem_id else ""
+            if pref:
+                if mem_id:
+                    ConversationMemory.clear_pending_intent(
+                        mem_id, promote_from_queue=True
+                    )
+                return ai_forward(pref + text, nf, skip_api=True)
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
         if entry_intent == "existing":
             nf = {
@@ -3579,6 +3660,8 @@ async def process_customer_bot_message(
             return save(nf, _t(flow_lang, MSGS["ask_email"]))
         # Short menu-ish input but classifier could not decide — ask again (avoid empty LLM reply / fallback).
         if entry_intent == "other" and len(text.strip()) <= 48 and not _looks_like_free_text_question(text):
+            if mem_id and ConversationMemory.get_pending_intent(mem_id):
+                return save(flow, _t(flow_lang, MSGS["customer_type_menu_reminder"]))
             return save(flow, _t(flow_lang, MSGS["customer_type_unclear"]))
 
         # Free-text that isn't a choice → treat as new customer and answer directly
@@ -4072,6 +4155,8 @@ async def process_customer_bot_message(
             "pending_order_ref": None,
             "lang": flow_lang,
         }
+        if mem_id and customer.get("seller_id") is not None:
+            ConversationMemory.store_verification(mem_id, str(customer.get("seller_id")))
 
         intro_line = _t(flow_lang, MSGS["verification_success"])
         parts: list[str] = [intro_line]

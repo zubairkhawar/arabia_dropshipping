@@ -7,6 +7,17 @@ class Settings(BaseSettings):
     # Database
     database_url: str
     redis_url: str = "redis://localhost:6379/0"
+    # Short-term conversation memory (Valkey/Redis). Keys expire automatically.
+    redis_ttl_days: int = 3
+    memory_max_context_messages: int = 5
+    memory_max_intent_queue: int = 3
+    memory_min_entity_confidence: float = 0.7
+    # When False, ConversationMemory no-ops (useful for local dev without Redis).
+    conversation_memory_enabled: bool = True
+    # Background log of Redis INFO/keyspace for ops (0 = disable periodic task).
+    memory_stats_log_enabled: bool = True
+    memory_stats_log_interval_seconds: int = 86400
+    memory_stats_initial_delay_seconds: int = 120
     
     # AWS
     aws_region: str = "us-east-1"

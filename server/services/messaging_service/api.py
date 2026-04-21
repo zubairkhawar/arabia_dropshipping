@@ -43,6 +43,13 @@ from services.customer_bot_flow.session_reset import release_agent_and_clear_bot
 from services.tenant_schedule_text import format_tenant_schedule_line_for_handoff
 from services.human_handoff_intent import is_slash_reset_command
 from services.agent_routing_service.api import assign_from_bot_flow
+from services.intent_detector import IntentDetector
+from services.memory_service import (
+    ConversationMemory,
+    format_memory_block_for_prompt,
+    normalize_memory_scope_id,
+    record_conversation_turn,
+)
 from services.agent_portal_service.unread_compute import _inbox_unread_for_conversation
 from services.agent_portal_service.broadcast import (
     notify_bot_handoff_assigned,
@@ -2166,6 +2173,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         detected_language = bf_lang
     customer_msg.language = detected_language
 
+    mem_id = normalize_memory_scope_id(from_phone, conversation)
+    memory_block = (
+        format_memory_block_for_prompt(ConversationMemory.get_all_context(mem_id))
+        if mem_id
+        else None
+    )
+
     if not flow.handled:
         flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
         customer_context = await orchestrator.fetch_customer_context(
@@ -2193,6 +2207,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             conversation_id=conversation.id,
             exclude_history_message_id=customer_msg.id,
             recent_context_hint=_recent_hint,
+            memory_context=memory_block,
         )
         conversation.conversation_metadata = patch_conversation_metadata_with_last_topic(
             conversation.conversation_metadata,
@@ -2241,6 +2256,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             conversation_id=conversation.id,
             exclude_history_message_id=customer_msg.id,
             recent_context_hint=_recent_hint2,
+            memory_context=memory_block,
         )
         conversation.conversation_metadata = patch_conversation_metadata_with_last_topic(
             conversation.conversation_metadata,
@@ -2309,6 +2325,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
 
     if not (reply_text or "").strip():
         reply_text = resolve_bot_template(bf_lang or detected_language, "fallback")
+
+    if mem_id and (reply_text or "").strip():
+        _, _ui = IntentDetector.detect_topic_and_intent(text)
+        record_conversation_turn(mem_id, text, reply_text, user_intent=_ui)
 
     # customer_msg was early-committed above for dedup; update final language
     customer_msg.language = detected_language

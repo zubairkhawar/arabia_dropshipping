@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Optional
 
 from config import hydrate_openai_api_key_from_db, settings
 from database import (
@@ -47,6 +50,28 @@ from services.trending_products_service.api import (
     router as trending_products_admin_router,
     trending_page_router,
 )
+
+logger = logging.getLogger(__name__)
+
+
+async def _memory_stats_background_loop() -> None:
+    """Periodic Redis INFO logging for ops (non-blocking; failures are logged only)."""
+    if not bool(getattr(settings, "memory_stats_log_enabled", True)):
+        return
+    interval = int(getattr(settings, "memory_stats_log_interval_seconds", 86400) or 0)
+    if interval <= 0:
+        return
+    delay = int(getattr(settings, "memory_stats_initial_delay_seconds", 120) or 0)
+    if delay > 0:
+        await asyncio.sleep(delay)
+    from services.memory_cleanup import log_memory_stats
+
+    while True:
+        try:
+            log_memory_stats()
+        except Exception:
+            logger.exception("memory_stats background task failed")
+        await asyncio.sleep(interval)
 
 
 def ensure_admin_user() -> None:
@@ -101,6 +126,7 @@ def ensure_admin_user() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    memory_stats_task: Optional[asyncio.Task] = None
     Base.metadata.create_all(bind=engine)
     ensure_broadcast_delivery_columns()
     ensure_team_channel_admin_sender_columns()
@@ -119,8 +145,20 @@ async def lifespan(app: FastAPI):
     ensure_pgvector_extension()
     ensure_admin_user()
     hydrate_openai_api_key_from_db()
+    if bool(getattr(settings, "conversation_memory_enabled", True)) and bool(
+        getattr(settings, "memory_stats_log_enabled", True)
+    ):
+        intv = int(getattr(settings, "memory_stats_log_interval_seconds", 86400) or 0)
+        if intv > 0:
+            memory_stats_task = asyncio.create_task(_memory_stats_background_loop())
     yield
     # Shutdown
+    if memory_stats_task is not None:
+        memory_stats_task.cancel()
+        try:
+            await memory_stats_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(

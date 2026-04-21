@@ -440,6 +440,7 @@ class ArabiaLangChainBot:
         conversation_id: Optional[int] = None,
         exclude_history_message_id: Optional[int] = None,
         recent_context_hint: Optional[str] = None,
+        memory_context: Optional[str] = None,
     ) -> str:
         key = get_openai_api_key()
         if not key:
@@ -502,11 +503,16 @@ class ArabiaLangChainBot:
             recent_context_hint,
             "None",
         )
+        memory_line = normalize_context_text(
+            memory_context,
+            "None (no Redis memory for this scope).",
+        )
         messages = build_prompt().format_messages(
             current_time=now_utc_iso(),
             channel=normalize_context_text(channel, "unknown"),
             language=normalize_context_text(language, "english"),
             recent_context_hint=hint_line,
+            memory_context=memory_line,
             customer_context=identity_block,
             orders_context=orders_block,
             invoices_context=invoices_block,

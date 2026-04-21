@@ -28,6 +28,13 @@ from services.tenant_schedule_text import format_tenant_schedule_line_for_handof
 from services.human_handoff_intent import is_slash_reset_command
 from services.agent_portal_service.broadcast import notify_bot_handoff_assigned
 from services.agent_routing_service.api import assign_from_bot_flow
+from services.intent_detector import IntentDetector
+from services.memory_service import (
+    ConversationMemory,
+    format_memory_block_for_prompt,
+    normalize_memory_scope_id,
+    record_conversation_turn,
+)
 
 router = APIRouter()
 
@@ -134,6 +141,13 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
     if isinstance(bf_lang, str) and bf_lang.strip():
         detected_language = bf_lang
 
+    mem_id = normalize_memory_scope_id(message.phone, conversation)
+    memory_block = (
+        format_memory_block_for_prompt(ConversationMemory.get_all_context(mem_id))
+        if mem_id
+        else None
+    )
+
     if not flow.handled:
         flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
         customer_context = await orchestrator.fetch_customer_context(
@@ -160,6 +174,7 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             bot_flow=flow_state,
             conversation_id=conversation.id if conversation else None,
             recent_context_hint=_rh,
+            memory_context=memory_block,
         )
         if conversation:
             conversation.conversation_metadata = patch_conversation_metadata_with_last_topic(
@@ -192,6 +207,9 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             conversation.updated_at = datetime.utcnow()
             db.add(conversation)
             db.commit()
+        if mem_id and (reply_text or "").strip():
+            _, _ui = IntentDetector.detect_topic_and_intent(message.message)
+            record_conversation_turn(mem_id, message.message, reply_text, user_intent=_ui)
         escalate = await orchestrator.should_escalate(message.message)
         return {
             "reply_text": reply_text,
@@ -231,6 +249,7 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             bot_flow=flow_state,
             conversation_id=conversation.id if conversation else None,
             recent_context_hint=_rh2,
+            memory_context=memory_block,
         )
         if conversation:
             conversation.conversation_metadata = patch_conversation_metadata_with_last_topic(
@@ -341,6 +360,10 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
         conversation.updated_at = datetime.utcnow()
         db.add(conversation)
         db.commit()
+
+    if mem_id and (reply_text or "").strip():
+        _, _ui = IntentDetector.detect_topic_and_intent(message.message)
+        record_conversation_turn(mem_id, message.message, reply_text, user_intent=_ui)
 
     escalate = flow.escalate or await orchestrator.should_escalate(message.message)
     return {
