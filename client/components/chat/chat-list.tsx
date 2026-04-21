@@ -7,7 +7,11 @@ import { useInboxConversations } from '@/contexts/InboxConversationsContext';
 import { ChevronDown } from 'lucide-react';
 import { useAgentSearch } from '@/contexts/AgentSearchContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
-import { formatConversationListTime, parseBackendUtcDate } from '@/lib/tenant-time';
+import {
+  formatConversationListTime,
+  normalizePhoneDedupeKey,
+  parseBackendUtcDate,
+} from '@/lib/tenant-time';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
 
 type ConversationStatus = 'active' | 'resolved' | 'pending' | 'transferred';
@@ -33,6 +37,7 @@ interface Conversation {
   reopenedAt?: string;
   transferredToAgentName?: string;
   transferredAt?: string;
+  lastActivityIso?: string | null;
 }
 
 const defaultConversations: Conversation[] = [
@@ -93,6 +98,54 @@ type InboxSearchResult = {
   unread_count: number;
 };
 
+type DedupeRow = {
+  id: number;
+  customerPhone?: string;
+  customerId: string;
+  status: ConversationStatus;
+  lastActivityIso?: string | null;
+};
+
+function activityTimeMs(row: DedupeRow): number {
+  return parseBackendUtcDate(row.lastActivityIso ?? undefined)?.getTime() ?? 0;
+}
+
+/**
+ * Legacy data can have two rows per WhatsApp number (old closed + new active).
+ * Admin UI must show one thread per customer at a time.
+ */
+function dedupeAdminInboxByCustomerPhone<T extends DedupeRow>(rows: T[]): T[] {
+  const byKey = new Map<string, T[]>();
+  for (const c of rows) {
+    const key = normalizePhoneDedupeKey(c.customerPhone) ?? `cid:${c.customerId}`;
+    const arr = byKey.get(key) ?? [];
+    arr.push(c);
+    byKey.set(key, arr);
+  }
+  const out: T[] = [];
+  for (const [, group] of byKey) {
+    if (group.length === 1) {
+      out.push(group[0]);
+      continue;
+    }
+    const actives = group.filter((c) => c.status === 'active');
+    if (actives.length > 0) {
+      actives.sort((a, b) => activityTimeMs(b) - activityTimeMs(a) || b.id - a.id);
+      out.push(actives[0]);
+      continue;
+    }
+    const resolved = group.filter((c) => c.status === 'resolved');
+    if (resolved.length > 0) {
+      resolved.sort((a, b) => activityTimeMs(b) - activityTimeMs(a) || b.id - a.id);
+      out.push(resolved[0]);
+      continue;
+    }
+    const rest = [...group].sort((a, b) => activityTimeMs(b) - activityTimeMs(a) || b.id - a.id);
+    out.push(rest[0]);
+  }
+  return out;
+}
+
 export function ChatList() {
   const { timeZone } = useTenantTimezone();
 
@@ -131,12 +184,19 @@ export function ChatList() {
   const isAdminClosedPage = pathname?.startsWith('/admin/inbox/closed');
   const isAdminBotPage = Boolean(isAdminInbox && !isAdminLivePage && !isAdminClosedPage);
 
+  const sourceConversations = useMemo(() => {
+    if (isAgentInbox) return conversations;
+    if (isAdminInbox) return dedupeAdminInboxByCustomerPhone(conversations);
+    return conversations;
+  }, [conversations, isAgentInbox, isAdminInbox]);
+
   const filteredConversations = useMemo(() => {
-    let list = conversations;
+    let list = sourceConversations;
 
     // Admin: one bucket per conversation (backend is source of truth).
     // AI Bot = active + bot-owned (agent_id null). Live = active + assigned agent.
     // Closed = resolved/closed. Reopen after close is handled server-side (same thread → active + bot).
+    // sourceConversations is deduped by phone so legacy duplicate rows do not appear in two buckets.
     if (!isAgentInbox) {
       if (view === 'bot') {
         list = list.filter((c) => c.handlerType === 'ai' && c.status === 'active');
@@ -148,7 +208,7 @@ export function ChatList() {
     }
 
     return [...list].sort((a, b) => b.id - a.id);
-  }, [conversations, view, isAgentInbox]);
+  }, [sourceConversations, view, isAgentInbox]);
 
   // Clear selection when the selected conversation is not in the current view.
   // For agents: the conversation may no longer be assigned (e.g. after customer "reset").
@@ -180,7 +240,7 @@ export function ChatList() {
   const localFallbackResults = useMemo(() => {
     const q = activeSearch.toLowerCase();
     if (!q) return [] as InboxSearchResult[];
-    return conversations
+    return sourceConversations
       .filter((c) => {
         return (
           c.customerName.toLowerCase().includes(q) ||
@@ -197,7 +257,7 @@ export function ChatList() {
         match_snippet: c.lastMessage || `Conversation ${c.customerId}`,
         unread_count: c.unread,
       }));
-  }, [activeSearch, conversations]);
+  }, [activeSearch, sourceConversations]);
   const displayedSearchResults =
     searchResults.length > 0 ? searchResults : !searchLoading ? localFallbackResults : [];
 
@@ -343,7 +403,6 @@ export function ChatList() {
                   liveConversations.map((conv) => {
                     const isSelected = selectedId === conv.id;
                     const isReopened = !!(conv as { reopenedAt?: string }).reopenedAt;
-                    const showNewLead = conv.status === 'active' && conv.isNewLead && !isReopened;
                     const showReopened = conv.status === 'active' && isReopened;
                     return (
                       <button
@@ -390,15 +449,6 @@ export function ChatList() {
                             }`}
                           >
                             {conv.customerPhone}
-                          </p>
-                        )}
-                        {showNewLead && (
-                          <p
-                            className={`text-[10px] font-semibold uppercase tracking-wide mb-0.5 ${
-                              isSelected ? 'text-white/90' : 'text-primary'
-                            }`}
-                          >
-                            New Lead
                           </p>
                         )}
                         {showReopened && (
@@ -511,8 +561,6 @@ export function ChatList() {
                 </p>
                 {filteredConversations.map((conv) => {
                   const isSelected = selectedId === conv.id;
-                  // "New" = customer not yet verified, "Old" = verification successful.
-                  const isNewConv = conv.isNewLead;
                   return (
                     <button
                       key={conv.id}
@@ -523,19 +571,8 @@ export function ChatList() {
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2 mb-1">
-                        <span className={`text-sm font-medium truncate flex-1 min-w-0 flex items-center gap-1.5 ${isSelected ? 'text-white' : 'text-text-primary'}`}>
+                        <span className={`text-sm font-medium truncate flex-1 min-w-0 ${isSelected ? 'text-white' : 'text-text-primary'}`}>
                           {conv.customerName}
-                          <span
-                            className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
-                              isSelected
-                                ? 'bg-white/20 text-white'
-                                : isNewConv
-                                  ? 'bg-green-100 text-green-700'
-                                  : 'bg-gray-100 text-gray-500'
-                            }`}
-                          >
-                            {isNewConv ? 'New' : 'Old'}
-                          </span>
                         </span>
                         <span className={`text-xs flex-shrink-0 ${isSelected ? 'text-white/80' : 'text-text-muted'}`}>
                           {conv.lastActivityAt}

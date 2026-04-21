@@ -41,6 +41,19 @@ export function formatKnowledgeSourceUpdatedInZone(
   });
 }
 
+/** Align PK formats (0321… vs 92321…) for dedupe / “same customer” checks. */
+export function normalizePhoneDedupeKey(phone: string | undefined): string | null {
+  if (!phone || typeof phone !== 'string') return null;
+  let d = phone.replace(/\D/g, '');
+  if (!d) return null;
+  if (d.length >= 10 && d.startsWith('92')) {
+    d = d.slice(-10);
+  } else if (d.length === 11 && d.startsWith('0')) {
+    d = d.slice(1);
+  }
+  return d;
+}
+
 export function normalizeIanaTimeZone(tz: string | null | undefined): string {
   const raw = (tz ?? DEFAULT_TENANT_TIMEZONE).trim() || DEFAULT_TENANT_TIMEZONE;
   try {

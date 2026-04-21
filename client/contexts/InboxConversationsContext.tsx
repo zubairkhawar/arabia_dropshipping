@@ -8,6 +8,7 @@ import { useAgentPortalRealtime } from '@/contexts/AgentPortalRealtimeContext';
 import {
   formatConversationListTime,
   formatTime12hInZone,
+  normalizePhoneDedupeKey,
   parseBackendUtcDate,
 } from '@/lib/tenant-time';
 import {
@@ -33,6 +34,9 @@ export interface InboxConversation {
   handlerName?: string;
   handlerAgentId?: string;
   closedAt?: string;
+  /** From API `is_new_customer` (bot verification). */
+  isNewCustomerApi?: boolean;
+  /** True only when API says new customer and phone appears once across all inbox rows. */
   isNewLead?: boolean;
   reopenedAt?: string;
   transferredToAgentName?: string;
@@ -241,6 +245,26 @@ function pickInboxSelection(
   return mapped[0]?.id ?? null;
 }
 
+/**
+ * If the same phone appears in more than one conversation row (AI / Live / Closed),
+ * none of them count as a "new" lead. Otherwise is_new_customer from the API applies.
+ */
+function applyPhoneDuplicateNewLeadRule(rows: InboxConversation[]): InboxConversation[] {
+  const phoneCounts = new Map<string, number>();
+  for (const c of rows) {
+    const k = normalizePhoneDedupeKey(c.customerPhone) ?? `cid:${c.customerId}`;
+    phoneCounts.set(k, (phoneCounts.get(k) ?? 0) + 1);
+  }
+  return rows.map((c) => {
+    const k = normalizePhoneDedupeKey(c.customerPhone) ?? `cid:${c.customerId}`;
+    const duplicatePhone = (phoneCounts.get(k) ?? 0) > 1;
+    return {
+      ...c,
+      isNewLead: !duplicatePhone && Boolean(c.isNewCustomerApi),
+    };
+  });
+}
+
 export function InboxConversationsProvider({ children }: { children: ReactNode }) {
   const { agents, currentAgentId } = useAgents();
   /** Latest roster for name lookup without re-creating mapConversation when agents[] identity changes (that was retriggering the full list fetch effect). */
@@ -287,7 +311,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         handlerType: handlerAgentId ? 'agent' : 'ai',
         handlerName,
         handlerAgentId,
-        isNewLead: Boolean(c.is_new_customer),
+        isNewCustomerApi: Boolean(c.is_new_customer),
         transferredToAgentName: c.transfer_to_agent_name ?? undefined,
         transferredFromAgentName: c.transfer_from_agent_name ?? undefined,
         transferredAt: transferredOut ? formatConversationListTime(c.last_activity_at, timeZone) : undefined,
@@ -347,7 +371,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     setIsLoading(true);
     try {
       const rows = await fetchConversationRowsFromApi();
-      const mapped = rows.map(mapConversation);
+      const mapped = applyPhoneDuplicateNewLeadRule(rows.map(mapConversation));
       setConversations(mapped);
       setSelectedId((prev) => pickInboxSelection(mapped, readLastInboxConversationId(), prev));
     } finally {
@@ -379,7 +403,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           const mapped = mapConversation(row);
           setConversations((prev) => {
             const filtered = prev.filter((c) => c.id !== mapped.id);
-            return sortInboxByActivity([...filtered, mapped]);
+            return applyPhoneDuplicateNewLeadRule(sortInboxByActivity([...filtered, mapped]));
           });
         } catch {
           void refreshConversations();
@@ -412,7 +436,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         const mapped = mapConversation(row);
         setConversations((prev) => {
           const filtered = prev.filter((c) => c.id !== mapped.id);
-          return sortInboxByActivity([...filtered, mapped]);
+          return applyPhoneDuplicateNewLeadRule(sortInboxByActivity([...filtered, mapped]));
         });
       } catch {
         // ignore
@@ -625,7 +649,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         try {
           const rows = await fetchConversationRowsFromApi();
           if (cancelled) return;
-          const mapped = rows.map(mapConversation);
+          const mapped = applyPhoneDuplicateNewLeadRule(rows.map(mapConversation));
           setConversations(mapped);
           setSelectedId((prev) => pickInboxSelection(mapped, readLastInboxConversationId(), prev));
         } finally {
@@ -661,7 +685,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         if (cancelled) return;
 
         const rows = (Array.isArray(rowsRaw) ? rowsRaw : []) as ConversationSummaryApi[];
-        const mapped = rows.map(mapConversation);
+        const mapped = applyPhoneDuplicateNewLeadRule(rows.map(mapConversation));
         setConversations(mapped);
 
         if (detailData && typeof detailData === 'object' && 'messages' in detailData) {
@@ -711,7 +735,9 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
 
   const markAgentReplied = useCallback((convId: number) => {
     setConversations((prev) =>
-      prev.map((c) => (c.id === convId ? { ...c, isNewLead: false, unread: 0 } : c)),
+      prev.map((c) =>
+        c.id === convId ? { ...c, isNewLead: false, isNewCustomerApi: false, unread: 0 } : c,
+      ),
     );
   }, []);
 
@@ -747,6 +773,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
               ...c,
               status: 'active',
               isNewLead: false,
+              isNewCustomerApi: false,
               unread: 1,
               reopenedAt,
               lastMessage: 'Customer has messaged again.',
