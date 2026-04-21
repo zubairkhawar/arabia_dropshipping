@@ -33,13 +33,91 @@ def _pick_str(d: Dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _order_row_id_for_hints(order: Dict[str, Any]) -> str:
+    for k in ("id", "order_id", "order_number", "number"):
+        v = order.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip().lstrip("#")
+    return ""
+
+
+def _currency_suffix(order: Dict[str, Any], default: str = "AED") -> str:
+    c = _pick_str(order, "currency", "currency_code", "curr")
+    return c if c else default
+
+
+def _money(order: Dict[str, Any], *amount_keys: str) -> str:
+    raw = _pick_str(order, *amount_keys)
+    if not raw:
+        return ""
+    u = raw.upper()
+    if any(x in u for x in ("AED", "SAR", "PKR", "USD", "EUR", "GBP")):
+        return raw
+    return f"{raw} {_currency_suffix(order)}"
+
+
+def _has_currency_token(s: str) -> bool:
+    u = (s or "").upper()
+    return any(x in u for x in ("AED", "SAR", "PKR", "USD", "EUR", "GBP"))
+
+
+def _invoice_row_with_customer_hints(
+    inv: Dict[str, Any],
+    customer: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Copy invoice row; fill currency/country from customer when API omits them on invoices."""
+    if not isinstance(inv, dict):
+        return inv
+    if not customer or not isinstance(customer, dict):
+        return inv
+    out = dict(inv)
+    if not _pick_str(out, "currency", "currency_code", "curr"):
+        c = _pick_str(customer, "currency", "currency_code", "curr")
+        if c:
+            out["currency"] = c
+    if not _pick_str(out, "country", "country_code", "country_iso"):
+        cc = _pick_str(customer, "country", "country_code", "country_iso")
+        if cc:
+            out["country"] = cc
+    return out
+
+
+def _invoice_currency(inv: Dict[str, Any], default: str = "AED") -> str:
+    c = _pick_str(inv, "currency", "currency_code", "curr")
+    if c:
+        return c
+    cc = _pick_str(inv, "country", "country_code", "country_iso")
+    ccu = cc.upper()
+    if ccu in ("AE", "UAE", "UNITED ARAB EMIRATES"):
+        return "AED"
+    if ccu in ("SA", "SAU", "SAUDI", "KSA", "SAUDI ARABIA"):
+        return "SAR"
+    if ccu in ("PK", "PAK", "PAKISTAN"):
+        return "PKR"
+    return default
+
+
+def _amount_with_currency(amount: str, inv: Dict[str, Any]) -> str:
+    if not amount:
+        return ""
+    if _has_currency_token(amount):
+        return amount
+    return f"{amount} {_invoice_currency(inv)}"
+
+
 def format_order_for_llm(order: Dict[str, Any]) -> str:
     """Turn one order dict into short natural-language lines for the LLM context."""
     if not order:
         return ""
     order_num = order.get("order_number") or order.get("number") or order.get("id")
-    status = (order.get("status") or "unknown").strip().lower()
-    status_text = _STATUS_PHRASES.get(status, f"status is {order.get('status') or 'unknown'}")
+    status_raw = _pick_str(order, "status", "delivery_status", "order_status")
+    if not status_raw and isinstance(order.get("tracking_result"), dict):
+        status_raw = _pick_str(order["tracking_result"], "status", "delivery_status")
+    status_key = (status_raw or "unknown").strip().lower()
+    status_text = _STATUS_PHRASES.get(
+        status_key,
+        f"status is {status_raw or 'unknown'}",
+    )
     lines: List[str] = []
     api_id = order.get("id")
     if api_id is not None and str(api_id).strip():
@@ -49,10 +127,21 @@ def format_order_for_llm(order: Dict[str, Any]) -> str:
     if order_qty:
         lines.append(f"Total quantity (order): {order_qty}")
 
-    # Order date (Arabia API uses 'createdon')
-    od = _pick_str(order, "createdon", "created_at", "order_date", "date")
-    if od:
-        lines.append(f"Order date: {od}")
+    # Prefer seller invoice period date when present (aligns listed orders with invoice cycles).
+    od_inv = _pick_str(order, "seller_invoice_row_date", "invoice_row_date")
+    od_api = _pick_str(
+        order,
+        "createdon",
+        "created_at",
+        "order_date",
+        "placed_at",
+        "date",
+        "booking_date",
+    )
+    if od_inv:
+        lines.append(f"Order date (invoice period for this id): {od_inv}")
+    elif od_api:
+        lines.append(f"Order date: {od_api}")
 
     # Items (Arabia API returns items as a list of dicts with title, price, etc.)
     items = order.get("items")
@@ -71,7 +160,11 @@ def format_order_for_llm(order: Dict[str, Any]) -> str:
             if qty:
                 part += f" x{qty}"
             if price:
-                part += f" @ {price} AED"
+                pu = str(price).strip().upper()
+                if not any(x in pu for x in ("AED", "SAR", "PKR", "USD")):
+                    part += f" @ {price} {_currency_suffix(order)}"
+                else:
+                    part += f" @ {price}"
             item_lines.append(part)
         if item_lines:
             lines.append("Items: " + "; ".join(item_lines))
@@ -79,20 +172,12 @@ def format_order_for_llm(order: Dict[str, Any]) -> str:
     # Shipping charges
     sc = _pick_str(order, "shipping_charges", "shipping_cost", "shipping")
     if sc:
-        lines.append(f"Shipping charges: {sc} AED")
+        lines.append(f"Shipping charges: {_money(order, 'shipping_charges', 'shipping_cost', 'shipping') or sc}")
 
     # Profit
     profit = _pick_str(order, "profit", "seller_profit")
     if profit:
-        lines.append(f"Profit: {profit} AED")
-
-    # Customer address / delivery info
-    addr = _pick_str(order, "address", "delivery_address", "shipping_address")
-    if addr:
-        lines.append(f"Address: {addr}")
-    mob = _pick_str(order, "mobile", "customer_phone")
-    if mob:
-        lines.append(f"Customer mobile: {mob}")
+        lines.append(f"Profit: {_money(order, 'profit', 'seller_profit') or profit}")
 
     tn = _pick_str(order, "tracking_number", "tracking", "tracking_id", "awb_number")
     if tn:
@@ -111,7 +196,11 @@ def format_order_for_llm(order: Dict[str, Any]) -> str:
         lines.append(f"Invoice: {inv}")
     pen = _pick_str(order, "penalties", "penalty")
     if pen:
-        lines.append(f"Penalties: {pen} AED")
+        lines.append(f"Penalties: {_money(order, 'penalties', 'penalty') or pen}")
+
+    tot = _pick_str(order, "total_amount", "total", "amount", "net_total")
+    if tot:
+        lines.append(f"Total: {_money(order, 'total_amount', 'total', 'amount', 'net_total') or tot}")
 
     # Tracking result (Arabia API embeds this in order details)
     tr = order.get("tracking_result")
@@ -122,14 +211,13 @@ def format_order_for_llm(order: Dict[str, Any]) -> str:
 
     # Return details
     ret = _pick_str(order, "return_status")
-    if ret or status in ("returned",):
+    if ret or status_key in ("returned",):
         rd = _pick_str(order, "return_date")
         if rd:
             lines.append(f"Return date: {rd}")
         rc = _pick_str(order, "return_charges")
         if rc:
-            cur = _pick_str(order, "currency")
-            lines.append(f"Return charges: {rc} {cur}".strip())
+            lines.append(f"Return charges: {_money(order, 'return_charges') or rc}")
         ri = _pick_str(order, "return_charge_invoice")
         if ri:
             lines.append(f"Return charges invoice: {ri}")
@@ -138,7 +226,7 @@ def format_order_for_llm(order: Dict[str, Any]) -> str:
             lines.append(f"Return reason: {rr}")
 
     # Cancellation details
-    if status in ("cancelled", "canceled"):
+    if status_key in ("cancelled", "canceled"):
         ct = _pick_str(order, "cancellation_type")
         if ct:
             lines.append(f"Cancellation type: {ct}")
@@ -187,48 +275,155 @@ def format_single_invoice_for_llm(inv: Dict[str, Any]) -> str:
         parts.append(f"date {inv_date}")
     if inv_items:
         parts.append(f"items {inv_items}")
+    cur = _invoice_currency(inv)
     inv_net = _pick_str(inv, "net_total", "net")
     if inv_net:
-        parts.append(f"net_total {inv_net} AED")
+        parts.append(f"net_total {_amount_with_currency(inv_net, inv)}")
     inv_profit = _pick_str(inv, "profit")
     if inv_profit:
-        parts.append(f"profit {inv_profit} AED")
+        parts.append(f"profit {_amount_with_currency(inv_profit, inv)}")
     if inv_payable:
-        parts.append(f"payable {inv_payable} AED")
+        parts.append(f"payable {_amount_with_currency(inv_payable, inv)}")
     if raw_ps:
         parts.append(f"payment {_pay_status_label(raw_ps)} (raw: {raw_ps})")
     if penalties:
-        parts.append(f"penalties {penalties} AED")
+        parts.append(f"penalties {_amount_with_currency(penalties, inv)}")
     if isinstance(order_ids, list) and order_ids:
-        ids = ", ".join(str(x) for x in order_ids[:20])
-        more = f" (+{len(order_ids) - 20} more)" if len(order_ids) > 20 else ""
-        parts.append(f"order_ids [{ids}{more}]")
+        n = len(order_ids)
+        sample = [str(x) for x in order_ids[:5]]
+        if n > len(sample):
+            parts.append(
+                f"Contains {n} orders; sample ids: {', '.join(sample)}. "
+                f"(Do not list all ids; offer details by invoice date or support.)"
+            )
+        else:
+            parts.append(f"order_ids: {', '.join(sample)}")
     return " | ".join(parts) if parts else str(inv)[:200]
+
+
+def format_invoice_llm_compact(inv: Dict[str, Any], *, sample_n: int = 5) -> str:
+    """One invoice row, WhatsApp-friendly (short id sample, no huge id dumps)."""
+    if not inv:
+        return ""
+    inv_date = _pick_str(inv, "date", "invoice_date", "created_at")
+    inv_items = _pick_str(inv, "no_of_items", "item_count", "items_count")
+    inv_payable = _pick_str(inv, "payable", "net_payable", "amount")
+    raw_ps = _pick_str(inv, "pay_status", "payment_status", "status")
+    inv_net = _pick_str(inv, "net_total", "net")
+    inv_profit = _pick_str(inv, "profit")
+    penalties = _pick_str(inv, "penalties", "penalty")
+    order_ids = inv.get("order_ids") if isinstance(inv.get("order_ids"), list) else []
+    bits: List[str] = []
+    if inv_date:
+        bits.append(inv_date)
+    if inv_items:
+        bits.append(f"{inv_items} items")
+    if inv_payable:
+        bits.append(f"payable {_amount_with_currency(inv_payable, inv)}")
+    if inv_net and inv_net != inv_payable:
+        bits.append(f"net {_amount_with_currency(inv_net, inv)}")
+    if inv_profit:
+        bits.append(f"profit {_amount_with_currency(inv_profit, inv)}")
+    if penalties:
+        bits.append(f"penalties {_amount_with_currency(penalties, inv)}")
+    if raw_ps:
+        bits.append(_pay_status_label(raw_ps))
+    head = " | ".join(bits) if bits else ""
+    n = len(order_ids)
+    if n and sample_n >= 0:
+        sample = [str(x) for x in order_ids[:sample_n]]
+        if n > len(sample):
+            tail = (
+                f"Contains {n} orders. Latest: {', '.join(sample)}. "
+                f"(Do not paste all ids; offer full list via email/support or ask which invoice date to expand.)"
+            )
+        else:
+            tail = f"Orders: {', '.join(sample)}"
+        return f"{head} — {tail}" if head else tail
+    return head
+
+
+def format_order_invoice_match_hints(
+    orders: Optional[List[Dict[str, Any]]],
+    invoices: Optional[List[Dict[str, Any]]],
+) -> str:
+    """Explicit mapping: each listed order → invoice period (Roman Urdu / follow-up invoice questions)."""
+    if not orders:
+        return ""
+    date_by_oid: Dict[str, str] = {}
+    listed_oids: List[str] = []
+    for o in orders:
+        if not isinstance(o, dict):
+            continue
+        oid = _order_row_id_for_hints(o)
+        if not oid:
+            continue
+        listed_oids.append(oid)
+        d = _pick_str(o, "seller_invoice_row_date", "invoice_row_date")
+        if d:
+            date_by_oid[oid] = d
+    if not listed_oids:
+        return ""
+    inv_list = invoices if isinstance(invoices, list) else []
+    missing = [oid for oid in listed_oids if oid not in date_by_oid]
+    if missing and inv_list:
+        for inv in inv_list:
+            if not isinstance(inv, dict):
+                continue
+            inv_date = _pick_str(inv, "date", "invoice_date")
+            raw = inv.get("order_ids")
+            if not isinstance(raw, list) or not inv_date:
+                continue
+            for x in raw:
+                ox = str(x).strip().lstrip("#")
+                if ox in missing and ox not in date_by_oid:
+                    date_by_oid[ox] = inv_date
+    lines: List[str] = [
+        "Order ↔ invoice (each order above → which invoice period it appears on):",
+    ]
+    n = 0
+    for oid in listed_oids:
+        d = date_by_oid.get(oid)
+        if not d:
+            continue
+        lines.append(f"- Order #{oid} is in the {d} invoice.")
+        n += 1
+    if n == 0:
+        return ""
+    lines.append(
+        "For amounts and pay status per invoice date, use the **Invoices** summary; do not paste long order-id lists."
+    )
+    return "\n".join(lines)
 
 
 def format_invoices_summary_for_llm(
     invoices: Optional[List[Dict[str, Any]]],
     *,
     max_rows: int = 12,
+    sample_ids: int = 5,
+    customer: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """All invoice rows for the seller — used as a dedicated LLM context block."""
+    """Compact invoice list for LLM / WhatsApp-length replies."""
     if not invoices:
         return "No invoice rows in context for this turn."
-    lines: List[str] = []
+    lines: List[str] = [
+        f"Invoices ({len(invoices)} periods). Summarize briefly; offer line-by-line detail when user names a date.",
+    ]
     for inv in invoices[:max_rows]:
         if not isinstance(inv, dict):
             continue
-        row = format_single_invoice_for_llm(inv)
+        row = format_invoice_llm_compact(
+            _invoice_row_with_customer_hints(inv, customer),
+            sample_n=sample_ids,
+        )
         if row:
-            lines.append(f"- {row}")
-    if not lines:
-        return "No invoice rows in context for this turn."
-    head = (
-        f"Invoice list ({len(invoices)} row(s); showing up to {max_rows}). "
-        "Use order_ids to answer 'which invoice contains order #X?'; "
-        "filter pay_status raw 'No' or Unpaid for unpaid-only questions."
+            lines.append(f"• {row}")
+    if len(invoices) > max_rows:
+        lines.append(f"(+{len(invoices) - max_rows} more invoice periods not expanded — offer support for full export.)")
+    lines.append(
+        "For 'which invoice contains order #X?', use the sample order ids on each line or the Order ↔ invoice block."
     )
-    return head + "\n" + "\n".join(lines)
+    return "\n".join(lines)
 
 
 def format_tracking_payload_for_llm(
@@ -354,7 +549,9 @@ def build_customer_identity_summary(
 
     oi = fetch_ctx.get("order_invoice")
     if isinstance(oi, dict) and oi:
-        iline = format_single_invoice_for_llm(oi)
+        iline = format_single_invoice_for_llm(
+            _invoice_row_with_customer_hints(oi, cust),
+        )
         if iline:
             lines.append(f"Order-scoped invoice (GET /orders/{{id}}/invoice): {iline}")
 

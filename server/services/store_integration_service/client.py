@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Set
 
 import httpx
 
@@ -54,6 +54,69 @@ def merchant_seller_scope_from_row(row: Optional[Dict[str, Any]]) -> Optional[st
         if v is not None and str(v).strip():
             return str(v).strip()
     return None
+
+
+def order_row_primary_id(row: Optional[Dict[str, Any]]) -> str:
+    """Stable numeric/string id for GET /orders/{id}/tracking."""
+    if not isinstance(row, dict):
+        return ""
+    for k in ("id", "order_id", "order_number", "number"):
+        v = row.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip().lstrip("#")
+    return ""
+
+
+def merge_tracking_payload_into_order(
+    order: Dict[str, Any],
+    tr: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Overlay GET /orders/{id}/tracking fields onto an order row."""
+    if not isinstance(order, dict):
+        return order
+    if not tr or not isinstance(tr, dict):
+        return order
+    out = dict(order)
+    prefer = (
+        "status",
+        "delivery_status",
+        "tracking_id",
+        "tracking_number",
+        "awb",
+        "awb_number",
+        "carrier",
+        "estimated_delivery",
+        "delivery_date",
+        "expected_delivery",
+        "shipped_ref",
+    )
+    for k, v in tr.items():
+        if v is None or v == "":
+            continue
+        if k in prefer:
+            out[k] = v
+        elif k == "tracking_result" and isinstance(v, dict):
+            out["tracking_result"] = v
+        else:
+            out.setdefault(k, v)
+    nested = tr.get("tracking_result")
+    if isinstance(nested, dict) and nested:
+        out.setdefault("tracking_result", nested)
+        if not str(out.get("status") or "").strip() and not str(
+            out.get("delivery_status") or ""
+        ).strip():
+            for nk in ("status", "delivery_status", "order_status"):
+                nv = nested.get(nk)
+                if nv is not None and str(nv).strip():
+                    out["status"] = str(nv).strip()
+                    break
+        if not str(out.get("tracking_number") or out.get("tracking_id") or "").strip():
+            for tk in ("tracking_number", "tracking_id", "awb", "awb_number"):
+                tv = nested.get(tk)
+                if tv is not None and str(tv).strip():
+                    out.setdefault(tk, str(tv).strip())
+                    break
+    return out
 
 
 def _orders_list_date_window(days: int = 120) -> Tuple[str, str]:
@@ -299,6 +362,8 @@ class StoreIntegrationClient:
                     return None
                 resp.raise_for_status()
                 payload = resp.json()
+                if isinstance(payload, dict) and payload.get("success") is False:
+                    return None
                 if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
                     return payload.get("data")
                 return payload if isinstance(payload, dict) else None
@@ -560,6 +625,55 @@ class StoreIntegrationClient:
 
         results = await asyncio.gather(*[_one(o) for o in unique])
         return [r for r in results if isinstance(r, dict)]
+
+    async def enrich_orders_with_tracking(
+        self,
+        seller_id: str,
+        orders: List[Dict[str, Any]],
+        *,
+        max_orders: int = 15,
+        max_concurrent: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Call GET /orders/{id}/tracking for each distinct order and merge status / AWB into the row.
+        """
+        if not self.base_url or not orders:
+            return orders
+        sid = (seller_id or "").strip()
+        if not sid:
+            return orders
+        indexed: List[Tuple[int, str]] = []
+        seen: Set[str] = set()
+        for i, o in enumerate(orders):
+            if not isinstance(o, dict):
+                continue
+            oid = order_row_primary_id(o)
+            if not oid or oid in seen:
+                continue
+            seen.add(oid)
+            indexed.append((i, oid))
+            if len(indexed) >= int(max_orders):
+                break
+        if not indexed:
+            return orders
+
+        sem = asyncio.Semaphore(max(1, int(max_concurrent)))
+
+        async def _tr(oid: str) -> Optional[Dict[str, Any]]:
+            async with sem:
+                try:
+                    return await self.get_order_tracking(oid, seller_id=sid)
+                except Exception:  # noqa: BLE001
+                    logger.exception("enrich_orders_with_tracking failed for order_id=%s", oid)
+                    return None
+
+        track_payloads = await asyncio.gather(*[_tr(oid) for _, oid in indexed])
+        out = list(orders)
+        for (idx, _), tr in zip(indexed, track_payloads):
+            if idx >= len(out) or not isinstance(out[idx], dict):
+                continue
+            out[idx] = merge_tracking_payload_into_order(out[idx], tr)
+        return out
 
     async def get_invoices(self, seller_id: str) -> List[Dict[str, Any]]:
         """

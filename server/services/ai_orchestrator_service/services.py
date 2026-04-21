@@ -7,6 +7,8 @@ from services.human_handoff_intent import wants_human_agent
 from services.store_integration_service.client import (
     StoreIntegrationClient,
     merchant_seller_scope_from_row,
+    merge_tracking_payload_into_order,
+    order_row_primary_id,
     synthetic_order_stub_from_invoices,
 )
 
@@ -56,6 +58,39 @@ def _resolve_merchant_seller_id(
     if raw is not None and str(raw).strip():
         return str(raw).strip()
     return merchant_seller_scope_from_row(customer if isinstance(customer, dict) else None)
+
+
+def _attach_invoice_dates_to_orders(
+    orders: List[Dict[str, Any]],
+    invoices: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Map each order id to the invoice row ``date`` string when that id appears in order_ids."""
+    date_by_oid: Dict[str, str] = {}
+    for inv in invoices or []:
+        if not isinstance(inv, dict):
+            continue
+        d = str(inv.get("date") or "").strip()
+        oids = inv.get("order_ids")
+        if not d or not isinstance(oids, list):
+            continue
+        for x in oids:
+            oid = str(x).strip().lstrip("#")
+            if oid:
+                date_by_oid[oid] = d
+    out: List[Dict[str, Any]] = []
+    for o in orders:
+        if not isinstance(o, dict):
+            out.append(o)
+            continue
+        oid = order_row_primary_id(o)
+        inv_d = date_by_oid.get(oid)
+        if inv_d:
+            no = dict(o)
+            no["seller_invoice_row_date"] = inv_d
+            out.append(no)
+        else:
+            out.append(o)
+    return out
 
 
 def _customer_record_is_linked(customer: Optional[Dict[str, Any]]) -> bool:
@@ -558,6 +593,33 @@ class AIOrchestrator:
             # Script verified email+mobile and we have a non-empty store customer
             # payload + seller scope, but no canonical id field the API uses.
             store_linked = True
+
+        if seller_id and orders and invoices:
+            orders = _attach_invoice_dates_to_orders(orders, invoices)
+        if seller_id and orders:
+            try:
+                orders = await self.store_client.enrich_orders_with_tracking(
+                    seller_id,
+                    orders,
+                    max_orders=15,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("enrich_orders_with_tracking failed")
+                store_context_error = (store_context_error or "") + f" tr_enrich:{exc!s}"[:120]
+
+        if (
+            order_id
+            and isinstance(order_tracking, dict)
+            and order_tracking
+            and orders
+        ):
+            oid_key = str(order_id).strip().lstrip("#")
+            for i, o in enumerate(orders):
+                if not isinstance(o, dict):
+                    continue
+                if order_row_primary_id(o) == oid_key:
+                    orders[i] = merge_tracking_payload_into_order(o, order_tracking)
+                    break
 
         return {
             "customer": customer or {},

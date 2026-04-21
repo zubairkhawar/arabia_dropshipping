@@ -15,6 +15,7 @@ from models import Broadcast, KnowledgeSource, Message, TenantSchedule
 from langchain_bot.context_format import (
     build_customer_identity_summary,
     format_invoices_summary_for_llm,
+    format_order_invoice_match_hints,
     format_orders_summary_for_llm,
 )
 from langchain_bot.prompts import (
@@ -463,11 +464,15 @@ class ArabiaLangChainBot:
                 "store_context_error": None,
             }
         identity_block = build_customer_identity_summary(fc, bot_flow)
-        orders_block = format_orders_summary_for_llm(fc.get("recent_orders") or recent_orders or [])
+        ro = fc.get("recent_orders") or recent_orders or []
+        orders_block = format_orders_summary_for_llm(ro)
         inv_raw = fc.get("invoices")
-        invoices_block = format_invoices_summary_for_llm(
-            inv_raw if isinstance(inv_raw, list) else []
-        )
+        inv_list = inv_raw if isinstance(inv_raw, list) else []
+        inv_hints = format_order_invoice_match_hints(ro, inv_list)
+        if inv_hints:
+            orders_block = f"{orders_block}\n\n{inv_hints}".strip()
+        cust = fc.get("customer") if isinstance(fc.get("customer"), dict) else None
+        invoices_block = format_invoices_summary_for_llm(inv_list, customer=cust)
         history_block = self._conversation_history_block(
             conversation_id,
             exclude_message_id=exclude_history_message_id,
