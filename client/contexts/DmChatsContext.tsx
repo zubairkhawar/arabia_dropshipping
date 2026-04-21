@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
 import { readAuthAgentId, readLastDmPrefs, writeLastDmPrefs } from '@/lib/agent-session-storage';
+import { parseBackendUtcDate } from '@/lib/tenant-time';
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
@@ -243,7 +244,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
       const changed = mapped.filter((c) => {
         const prevTs = prevSeen[c.slug];
         if (!prevTs) return false;
-        return new Date(c.lastMessageAt).getTime() > new Date(prevTs).getTime();
+        return (parseBackendUtcDate(c.lastMessageAt) ?? new Date(c.lastMessageAt)).getTime() > (parseBackendUtcDate(prevTs) ?? new Date(prevTs)).getTime();
       });
       for (const c of mapped) nextSeen[c.slug] = c.lastMessageAt;
       lastSeenConversationTsRef.current = nextSeen;
@@ -352,7 +353,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
             peerAvatarUrl,
           },
           ...rest,
-        ].sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
+        ].sort((a, b) => (parseBackendUtcDate(b.lastMessageAt) ?? new Date(b.lastMessageAt)).getTime() - (parseBackendUtcDate(a.lastMessageAt) ?? new Date(a.lastMessageAt)).getTime());
         return updated;
       });
       lastSeenConversationTsRef.current = {
@@ -521,7 +522,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         setConversations((prev) =>
           prev
             .map((c) => (c.slug === slug ? { ...c, lastMessageAt: row.created_at } : c))
-            .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()),
+            .sort((a, b) => (parseBackendUtcDate(b.lastMessageAt) ?? new Date(b.lastMessageAt)).getTime() - (parseBackendUtcDate(a.lastMessageAt) ?? new Date(a.lastMessageAt)).getTime()),
         );
         lastSeenConversationTsRef.current = {
           ...lastSeenConversationTsRef.current,
@@ -611,7 +612,7 @@ export function DmChatsProvider({ children }: { children: ReactNode }) {
         setConversations((prev) =>
           prev
             .map((c) => (c.slug === slug ? { ...c, lastMessageAt: row.created_at } : c))
-            .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()),
+            .sort((a, b) => (parseBackendUtcDate(b.lastMessageAt) ?? new Date(b.lastMessageAt)).getTime() - (parseBackendUtcDate(a.lastMessageAt) ?? new Date(a.lastMessageAt)).getTime()),
         );
         lastSeenConversationTsRef.current = {
           ...lastSeenConversationTsRef.current,

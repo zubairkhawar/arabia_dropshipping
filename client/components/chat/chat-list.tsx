@@ -7,7 +7,7 @@ import { useInboxConversations } from '@/contexts/InboxConversationsContext';
 import { ChevronDown } from 'lucide-react';
 import { useAgentSearch } from '@/contexts/AgentSearchContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
-import { formatConversationListTime } from '@/lib/tenant-time';
+import { formatConversationListTime, parseBackendUtcDate } from '@/lib/tenant-time';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
 
 type ConversationStatus = 'active' | 'resolved' | 'pending' | 'transferred';
@@ -98,9 +98,9 @@ export function ChatList() {
 
   const formatSearchTime = (iso?: string | null): string => {
     if (!iso) return '—';
-    const d = new Date(iso);
+    const d = parseBackendUtcDate(iso) ?? new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
-    const diff = (Date.now() - d.getTime()) / 1000;
+    const diff = Math.max(0, (Date.now() - d.getTime()) / 1000);
     if (diff < 60) return 'Just now';
     if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
     return formatConversationListTime(iso, timeZone);

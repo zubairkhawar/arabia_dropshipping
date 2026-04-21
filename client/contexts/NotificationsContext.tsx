@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
 import { readAuthAgentId } from '@/lib/agent-session-storage';
+import { parseBackendUtcDate } from '@/lib/tenant-time';
 import { useAgentPortalRealtime } from '@/contexts/AgentPortalRealtimeContext';
 
 const API_BASE =
@@ -212,7 +213,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const getNotificationsForCurrentAgent = useCallback(() => {
     return notifications
       .filter((n) => n.toAgentId == null || n.toAgentId === currentAgentId)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      .sort((a, b) => (parseBackendUtcDate(b.createdAt) ?? new Date(b.createdAt)).getTime() - (parseBackendUtcDate(a.createdAt) ?? new Date(a.createdAt)).getTime());
   }, [notifications, currentAgentId]);
 
   const unreadCount = getNotificationsForCurrentAgent().filter((n) => !n.read).length;

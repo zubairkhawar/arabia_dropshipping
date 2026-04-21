@@ -20,7 +20,7 @@ import {
 import Link from 'next/link';
 import { NotificationDescriptionLine } from '@/components/layout/agent-header';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
-import { formatConversationListTime } from '@/lib/tenant-time';
+import { formatConversationListTime, parseBackendUtcDate } from '@/lib/tenant-time';
 
 function NotificationIcon({ type }: { type: AgentNotification['type'] }) {
   switch (type) {
@@ -58,8 +58,9 @@ export default function AgentNotificationsPage() {
   const list = getNotificationsForCurrentAgent();
 
   const formatTime = (iso: string) => {
-    const d = new Date(iso);
-    const diff = (Date.now() - d.getTime()) / 1000;
+    const d = parseBackendUtcDate(iso) ?? new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    const diff = Math.max(0, (Date.now() - d.getTime()) / 1000);
     if (diff < 60) return 'Just now';
     if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
     return formatConversationListTime(iso, timeZone);

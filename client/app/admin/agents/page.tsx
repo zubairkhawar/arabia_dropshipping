@@ -2,8 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
-import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Pencil, Check, X, Download, KeyRound } from 'lucide-react';
-import { AgentActivityBar, useAgentAttendanceData } from '@/components/agents/activity-bar';
+import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Pencil, Check, X, Download, KeyRound, TrendingUp } from 'lucide-react';
+import {
+  AgentAttendanceHeatmap,
+  AgentDailyActivityTimeline,
+  AgentSessionBreakdownTable,
+  useAgentAttendanceData,
+} from '@/components/agents/activity-bar';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { useToast } from '@/contexts/ToastContext';
@@ -46,6 +51,7 @@ export default function AdminAgents() {
   const [agentReportYear, setAgentReportYear] = useState(() => new Date().getFullYear());
   const [agentReportDownloading, setAgentReportDownloading] = useState(false);
   const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<{ id: string; label: string } | null>(null);
+  const [attendanceSelectedDayIndex, setAttendanceSelectedDayIndex] = useState<number | null>(null);
 
   useEffect(() => {
     if (!selectedId && agents.length > 0) {
@@ -57,6 +63,10 @@ export default function AdminAgents() {
 
   useEffect(() => {
     setEditingName(false);
+  }, [selectedId]);
+
+  useEffect(() => {
+    setAttendanceSelectedDayIndex(null);
   }, [selectedId]);
 
   const selectedAgent = useMemo(
@@ -84,6 +94,19 @@ export default function AdminAgents() {
       d.date < cutoff ? { ...d, hoursWorked: 0, sessions: [] } : d
     );
   }, [attendanceDayData, selectedAgent]);
+
+  const attendanceSelectedDay = useMemo(() => {
+    if (attendanceSelectedDayIndex == null) return null;
+    const d = visibleAttendanceDayData[attendanceSelectedDayIndex];
+    return d ?? null;
+  }, [attendanceSelectedDayIndex, visibleAttendanceDayData]);
+
+  useEffect(() => {
+    if (attendanceSelectedDayIndex == null) return;
+    if (attendanceSelectedDayIndex >= visibleAttendanceDayData.length) {
+      setAttendanceSelectedDayIndex(null);
+    }
+  }, [attendanceSelectedDayIndex, visibleAttendanceDayData.length]);
 
   const toTitle = (value: string) => {
     const v = value.trim().toLowerCase();
@@ -604,32 +627,50 @@ export default function AdminAgents() {
               </div>
             </div>
 
-            {/* Row 2: Attendance */}
+            {/* Row 2: Attendance + Performance (session breakdown) */}
             {selectedAgent && (
-              <div className="lg:col-span-4 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
-                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                  <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                    Attendance
-                  </p>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
-                    <span>Hours worked:</span>
-                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0]" /> None</span>
-                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-200" /> &lt;2h</span>
-                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-300" /> 2–4h</span>
-                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-500" /> 4–6h</span>
-                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-700" /> 6h+</span>
-                    <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0] opacity-70" /> Off day</span>
+              <>
+                <div className="lg:col-span-3 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                    <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                      Attendance
+                    </p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
+                      <span>Hours worked:</span>
+                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0]" /> None</span>
+                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-200" /> &lt;2h</span>
+                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-300" /> 2–4h</span>
+                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-500" /> 4–6h</span>
+                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-red-700" /> 6h+</span>
+                      <span className="flex items-center gap-1"><span className="rounded-sm w-3 h-3 bg-[#ebedf0] opacity-70" /> Off day</span>
+                    </div>
+                  </div>
+                  <div className="flex-1 min-h-0 min-w-0 flex flex-col space-y-4">
+                    <AgentAttendanceHeatmap
+                      workingDays={schedule.workingDays}
+                      dayData={visibleAttendanceDayData}
+                      timeZone={timeZone}
+                      selectedDayIndex={attendanceSelectedDayIndex}
+                      onSelectedDayIndexChange={setAttendanceSelectedDayIndex}
+                    />
+                    {attendanceSelectedDay && (
+                      <AgentDailyActivityTimeline
+                        selectedDay={attendanceSelectedDay}
+                        timeZone={timeZone}
+                      />
+                    )}
                   </div>
                 </div>
-                <div className="flex-1 min-h-0 min-w-0 flex flex-col">
-                  <AgentActivityBar
-                    agentId={selectedAgent.id}
-                    workingDays={schedule.workingDays}
-                    dayData={visibleAttendanceDayData}
-                    timeZone={timeZone}
-                  />
+                <div className="lg:col-span-1 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
+                  <p className="text-xs font-semibold text-text-muted uppercase tracking-wider flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 shrink-0" />
+                    Performance
+                  </p>
+                  <div className="flex-1 min-h-0 min-w-0">
+                    <AgentSessionBreakdownTable selectedDay={attendanceSelectedDay} />
+                  </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         ) : (

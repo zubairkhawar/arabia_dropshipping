@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
+import { parseBackendUtcDate } from '@/lib/tenant-time';
 
 export type TeamEventType = 'member_added' | 'member_removed' | 'member_transferred';
 
@@ -200,7 +201,7 @@ export function TeamsProvider({ children }: { children: ReactNode }) {
     (teamId: string) =>
       data.events
         .filter((e) => e.teamId === teamId)
-        .sort((a, b) => new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime()),
+        .sort((a, b) => (parseBackendUtcDate(a.sentAt) ?? new Date(a.sentAt)).getTime() - (parseBackendUtcDate(b.sentAt) ?? new Date(b.sentAt)).getTime()),
     [data.events],
   );
 

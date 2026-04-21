@@ -180,22 +180,9 @@ function heatmapColor(hoursWorked: number, isOffDay: boolean): string {
   return 'bg-red-700 hover:bg-red-800';
 }
 
-/** workingDays: 0=Sun, 1=Mon, ... 6=Sat. */
-export function AgentActivityBar({
-  agentId,
-  workingDays = [1, 2, 3, 4, 5, 6],
-  dayData,
-  timeZone = DEFAULT_TENANT_TIMEZONE,
-}: {
-  agentId: string;
-  workingDays?: number[];
-  dayData: DayAttendance[];
-  timeZone?: string;
-}) {
-  const [selectedDayIndex, setSelectedDayIndex] = useState<number | null>(null);
-
-  const { dayLabels, monthLabels, isOffDay, columns } = useMemo(() => {
-    const { firstSunday, totalDays, columns: cols } = getAttendanceWindow();
+function useAttendanceHeatmapModel(workingDays: number[], timeZone: string) {
+  return useMemo(() => {
+    const { firstSunday, columns: cols } = getAttendanceWindow();
     const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const monthLabels: { col: number; label: string }[] = [];
     let lastMonthKey = '';
@@ -219,8 +206,23 @@ export function AgentActivityBar({
       !workingSet.has(weekdayInTimeZone(getDateForIndex(index, firstSunday), timeZone));
     return { dayLabels, monthLabels, isOffDay, columns: cols };
   }, [workingDays, timeZone]);
+}
 
-  const selectedDay = selectedDayIndex != null ? dayData[selectedDayIndex] : null;
+/** workingDays: 0=Sun, 1=Mon, ... 6=Sat. Controlled selection for split layouts (admin agents). */
+export function AgentAttendanceHeatmap({
+  workingDays = [1, 2, 3, 4, 5, 6],
+  dayData,
+  timeZone = DEFAULT_TENANT_TIMEZONE,
+  selectedDayIndex,
+  onSelectedDayIndexChange,
+}: {
+  workingDays?: number[];
+  dayData: DayAttendance[];
+  timeZone?: string;
+  selectedDayIndex: number | null;
+  onSelectedDayIndexChange: (index: number | null) => void;
+}) {
+  const { dayLabels, monthLabels, isOffDay, columns } = useAttendanceHeatmapModel(workingDays, timeZone);
 
   const tooltipForDay = useCallback(
     (d: DayAttendance, index: number) => {
@@ -235,140 +237,156 @@ export function AgentActivityBar({
   );
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 min-w-0 space-y-4">
-      {/* Heatmap */}
-      <div className="flex flex-1 min-h-0 min-w-0 gap-1">
-        <div className="flex flex-col justify-around text-[10px] text-text-muted pr-2 shrink-0">
-          <span className="h-4 flex items-center opacity-0" aria-hidden>&nbsp;</span>
-          {dayLabels.map((label) => (
-            <span key={label} className="h-4 flex items-center">{label}</span>
+    <div className="flex flex-1 min-h-0 min-w-0 gap-1">
+      <div className="flex flex-col justify-around text-[10px] text-text-muted pr-2 shrink-0">
+        <span className="h-4 flex items-center opacity-0" aria-hidden>&nbsp;</span>
+        {dayLabels.map((label) => (
+          <span key={label} className="h-4 flex items-center">{label}</span>
+        ))}
+      </div>
+      <div className="flex flex-col gap-0.5 flex-1 min-w-0 min-h-[100px]">
+        <div className="flex gap-0.5 w-full">
+          {Array.from({ length: columns }, (_, col) => {
+            const label = monthLabels.find((m) => m.col === col);
+            return (
+              <div
+                key={col}
+                className={`${CELL_BASE} flex-1 min-w-0 flex items-center justify-center text-[9px] text-text-muted font-medium min-h-[14px]`}
+              >
+                {label?.label ?? ''}
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex gap-0.5 flex-1 min-w-0 w-full min-h-0">
+          {Array.from({ length: columns }, (_, col) => (
+            <div key={col} className="flex flex-col gap-0.5 flex-1 min-w-0">
+              {Array.from({ length: DAYS_PER_WEEK }, (_, row) => {
+                const index = col * DAYS_PER_WEEK + row;
+                const d = dayData[index];
+                const offDay = isOffDay(index);
+                const hours = d?.hoursWorked ?? 0;
+                const title = d ? tooltipForDay(d, index) : '';
+                const isSelected = selectedDayIndex === index;
+                return (
+                  <button
+                    type="button"
+                    key={row}
+                    className={`${CELL_BASE} flex-1 min-h-2 min-w-0 cursor-pointer transition-colors border-2 ${heatmapColor(hours, offDay)} ${isSelected ? 'ring-2 ring-primary ring-offset-1 ring-offset-card' : 'border-transparent'}`}
+                    title={title}
+                    onClick={() => onSelectedDayIndexChange(index)}
+                    aria-label={title}
+                  />
+                );
+              })}
+            </div>
           ))}
         </div>
-        <div className="flex flex-col gap-0.5 flex-1 min-w-0 min-h-[100px]">
-          <div className="flex gap-0.5 w-full">
-            {Array.from({ length: columns }, (_, col) => {
-              const label = monthLabels.find((m) => m.col === col);
+      </div>
+    </div>
+  );
+}
+
+/** 24h timeline for the selected attendance day (pairs with AgentAttendanceHeatmap). */
+export function AgentDailyActivityTimeline({
+  selectedDay,
+  timeZone,
+}: {
+  selectedDay: DayAttendance;
+  timeZone: string;
+}) {
+  return (
+    <div className="space-y-3 border-t border-border pt-4">
+      <p className="text-xs font-medium text-text-primary">
+        Daily Activity — {formatDate(selectedDay.date, timeZone)}
+      </p>
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-text-muted w-8">0h</span>
+          <div className="flex-1 h-8 bg-[#ebedf0] rounded relative overflow-hidden flex">
+            {selectedDay.sessions.map((s, i) => {
+              const tip = `${formatTimeFromMinutes(s.startMinutes)} – ${formatTimeFromMinutes(s.endMinutes)} (${formatDurationMinutes(s.durationMinutes)})`;
+              const crossesMidnight =
+                s.durationMinutes > 0 && s.endMinutes < s.startMinutes;
+              if (crossesMidnight) {
+                const w1 = ((1440 - s.startMinutes) / 1440) * 100;
+                const w2 = (s.endMinutes / 1440) * 100;
+                return (
+                  <span key={i} className="contents" title={tip}>
+                    <div
+                      className="absolute h-full bg-red-500 hover:bg-red-600 transition-colors rounded-sm min-w-[4px]"
+                      style={{ left: `${(s.startMinutes / 1440) * 100}%`, width: `${w1}%` }}
+                    />
+                    <div
+                      className="absolute h-full bg-red-500 hover:bg-red-600 transition-colors rounded-sm min-w-[4px]"
+                      style={{ left: '0%', width: `${w2}%` }}
+                    />
+                  </span>
+                );
+              }
+              const left = (s.startMinutes / 1440) * 100;
+              const width = (s.durationMinutes / 1440) * 100;
               return (
                 <div
-                  key={col}
-                  className={`${CELL_BASE} flex-1 min-w-0 flex items-center justify-center text-[9px] text-text-muted font-medium min-h-[14px]`}
-                >
-                  {label?.label ?? ''}
-                </div>
+                  key={i}
+                  className="absolute h-full bg-red-500 hover:bg-red-600 transition-colors rounded-sm min-w-[4px]"
+                  style={{ left: `${left}%`, width: `${Math.max(width, 0.35)}%` }}
+                  title={tip}
+                />
               );
             })}
           </div>
-          <div className="flex gap-0.5 flex-1 min-w-0 w-full min-h-0">
-            {Array.from({ length: columns }, (_, col) => (
-              <div key={col} className="flex flex-col gap-0.5 flex-1 min-w-0">
-                {Array.from({ length: DAYS_PER_WEEK }, (_, row) => {
-                  const index = col * DAYS_PER_WEEK + row;
-                  const d = dayData[index];
-                  const offDay = isOffDay(index);
-                  const hours = d?.hoursWorked ?? 0;
-                  const title = d ? tooltipForDay(d, index) : '';
-                  const isSelected = selectedDayIndex === index;
-                  return (
-                    <button
-                      type="button"
-                      key={row}
-                      className={`${CELL_BASE} flex-1 min-h-2 min-w-0 cursor-pointer transition-colors border-2 ${heatmapColor(hours, offDay)} ${isSelected ? 'ring-2 ring-primary ring-offset-1 ring-offset-card' : 'border-transparent'}`}
-                      title={title}
-                      onClick={() => setSelectedDayIndex(index)}
-                      aria-label={title}
-                    />
-                  );
-                })}
-              </div>
-            ))}
-          </div>
+          <span className="text-[10px] text-text-muted w-8">24h</span>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Daily Activity Timeline + Session table (when a day is selected) */}
-      {selectedDay != null && (
-        <div className="space-y-3 border-t border-border pt-4">
-          <p className="text-xs font-medium text-text-primary">
-            Daily Activity — {formatDate(selectedDay.date, timeZone)}
-          </p>
-          {/* 24h timeline */}
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-text-muted w-8">0h</span>
-              <div className="flex-1 h-8 bg-[#ebedf0] rounded relative overflow-hidden flex">
-                {selectedDay.sessions.map((s, i) => {
-                  const tip = `${formatTimeFromMinutes(s.startMinutes)} – ${formatTimeFromMinutes(s.endMinutes)} (${formatDurationMinutes(s.durationMinutes)})`;
-                  const crossesMidnight =
-                    s.durationMinutes > 0 && s.endMinutes < s.startMinutes;
-                  if (crossesMidnight) {
-                    const w1 = ((1440 - s.startMinutes) / 1440) * 100;
-                    const w2 = (s.endMinutes / 1440) * 100;
-                    return (
-                      <span key={i} className="contents" title={tip}>
-                        <div
-                          className="absolute h-full bg-red-500 hover:bg-red-600 transition-colors rounded-sm min-w-[4px]"
-                          style={{ left: `${(s.startMinutes / 1440) * 100}%`, width: `${w1}%` }}
-                        />
-                        <div
-                          className="absolute h-full bg-red-500 hover:bg-red-600 transition-colors rounded-sm min-w-[4px]"
-                          style={{ left: '0%', width: `${w2}%` }}
-                        />
-                      </span>
-                    );
-                  }
-                  const left = (s.startMinutes / 1440) * 100;
-                  const width = (s.durationMinutes / 1440) * 100;
-                  return (
-                    <div
-                      key={i}
-                      className="absolute h-full bg-red-500 hover:bg-red-600 transition-colors rounded-sm min-w-[4px]"
-                      style={{ left: `${left}%`, width: `${Math.max(width, 0.35)}%` }}
-                      title={tip}
-                    />
-                  );
-                })}
-              </div>
-              <span className="text-[10px] text-text-muted w-8">24h</span>
-            </div>
-          </div>
+/** Login / logout / duration for the selected day — shown beside the heatmap (e.g. Performance card). */
+export function AgentSessionBreakdownTable({ selectedDay }: { selectedDay: DayAttendance | null }) {
+  if (!selectedDay) {
+    return (
+      <p className="text-xs text-text-muted leading-relaxed">
+        Select a day on the heatmap to see login, logout, and session duration.
+      </p>
+    );
+  }
 
-          {/* Session Breakdown table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs border border-border rounded-lg overflow-hidden">
-              <thead>
-                <tr className="bg-panel border-b border-border">
-                  <th className="text-left py-2 px-3 font-medium text-text-muted">Login</th>
-                  <th className="text-left py-2 px-3 font-medium text-text-muted">Logout</th>
-                  <th className="text-left py-2 px-3 font-medium text-text-muted">Duration</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedDay.sessions.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="py-3 px-3 text-text-muted">
-                      No sessions this day
-                    </td>
-                  </tr>
-                ) : (
-                  selectedDay.sessions.map((s, i) => (
-                    <tr key={i} className="border-b border-border last:border-0">
-                      <td className="py-2 px-3 text-text-primary">
-                        {formatTimeFromMinutes(s.startMinutes)}
-                      </td>
-                      <td className="py-2 px-3 text-text-primary">
-                        {formatTimeFromMinutes(s.endMinutes)}
-                      </td>
-                      <td className="py-2 px-3 text-text-primary">
-                        {formatDurationMinutes(s.durationMinutes)}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+  return (
+    <div className="overflow-x-auto min-w-0">
+      <table className="w-full text-xs border border-border rounded-lg overflow-hidden">
+        <thead>
+          <tr className="bg-panel border-b border-border">
+            <th className="text-left py-2 px-2 font-medium text-text-muted">Login</th>
+            <th className="text-left py-2 px-2 font-medium text-text-muted">Logout</th>
+            <th className="text-left py-2 px-2 font-medium text-text-muted">Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          {selectedDay.sessions.length === 0 ? (
+            <tr>
+              <td colSpan={3} className="py-3 px-2 text-text-muted">
+                No sessions this day
+              </td>
+            </tr>
+          ) : (
+            selectedDay.sessions.map((s, i) => (
+              <tr key={i} className="border-b border-border last:border-0">
+                <td className="py-2 px-2 text-text-primary">
+                  {formatTimeFromMinutes(s.startMinutes)}
+                </td>
+                <td className="py-2 px-2 text-text-primary">
+                  {formatTimeFromMinutes(s.endMinutes)}
+                </td>
+                <td className="py-2 px-2 text-text-primary">
+                  {formatDurationMinutes(s.durationMinutes)}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }

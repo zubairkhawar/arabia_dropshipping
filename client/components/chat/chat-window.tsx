@@ -936,8 +936,8 @@ export function ChatWindow({
         byUser.set(r.userId, r);
         continue;
       }
-      const existingTs = new Date(existing.reactedAt).getTime();
-      const nextTs = new Date(r.reactedAt).getTime();
+      const existingTs = (parseBackendUtcDate(existing.reactedAt) ?? new Date(existing.reactedAt)).getTime();
+      const nextTs = (parseBackendUtcDate(r.reactedAt) ?? new Date(r.reactedAt)).getTime();
       if (Number.isFinite(nextTs) && (!Number.isFinite(existingTs) || nextTs >= existingTs)) {
         byUser.set(r.userId, r);
       }
@@ -1956,17 +1956,22 @@ export function ChatWindow({
     return list;
   })();
 
+  const eventDateKey = (iso: string) => {
+    const d = parseBackendUtcDate(iso);
+    return d ? dateKeyInTimeZone(d, timeZone) : iso.slice(0, 10);
+  };
+
   const allDateKeys = [
     ...new Set([
       ...messageGroups.map((g) => g.dateKey),
-      ...teamEvents.map((e) => e.sentAt.slice(0, 10)),
+      ...teamEvents.map((e) => eventDateKey(e.sentAt)),
     ]),
   ].sort();
 
   const unifiedGroups = allDateKeys.map((dateKey) => {
     const msgGroup = messageGroups.find((g) => g.dateKey === dateKey);
     const label = msgGroup?.label ?? formatDateLabel(dateKey + 'T12:00:00');
-    const eventsForDate = teamEvents.filter((e) => e.sentAt.slice(0, 10) === dateKey);
+    const eventsForDate = teamEvents.filter((e) => eventDateKey(e.sentAt) === dateKey);
     return {
       dateKey,
       label,
