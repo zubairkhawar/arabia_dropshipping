@@ -1,5 +1,7 @@
+import asyncio
 import logging
-from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any, Tuple
 
 import httpx
 
@@ -10,12 +12,27 @@ from services.verification_service import send_verification_code_local, verify_c
 logger = logging.getLogger(__name__)
 
 
+def _orders_list_date_window(days: int = 120) -> Tuple[str, str]:
+    """UTC date_from / date_to for /orders/all when the API requires a window."""
+    end = datetime.utcnow().date()
+    start = end - timedelta(days=max(30, min(int(days), 730)))
+    return start.isoformat(), end.isoformat()
+
+
 class StoreIntegrationClient:
     """
     Thin HTTP client that talks to the merchant's API instead of their database.
 
     All methods here should be safe, read-only lookups that our AI and routing
     layer can call for live store/customer data.
+
+    Common Arabia backend routes used here:
+    - ``GET /customers?email=&mobile=`` — resolve customer + ``seller_id``
+    - ``GET /customers/invoice?seller_id=&date_from=&date_to=&all=1`` — invoice rows + ``order_ids``
+    - ``GET /orders/all?seller_id=&date_from=&date_to=`` — list orders in a date window
+    - ``GET /orders/{order_id}?seller_id=`` — single order
+    - ``GET /orders/{order_id}/tracking`` / ``GET /orders/{order_id}/invoice`` — scoped extras
+    - :meth:`fetch_orders_for_order_ids` — multiple singles in parallel (batch hydration)
     """
 
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
@@ -327,6 +344,8 @@ class StoreIntegrationClient:
                 if resp.status_code >= 400:
                     return {}
                 payload = resp.json()
+                if isinstance(payload, dict) and payload.get("success") is False:
+                    return {}
                 if isinstance(payload, dict):
                     data = payload.get("data")
                     if isinstance(data, dict):
@@ -400,7 +419,10 @@ class StoreIntegrationClient:
         if not r or not sid:
             return None
         try:
-            orders = await self.get_orders_all(sid)
+            df, dt = _orders_list_date_window()
+            orders = await self.get_orders_all(sid, date_from=df, date_to=dt)
+            if not orders:
+                orders = await self.get_orders_all(sid)
         except Exception:  # noqa: BLE001
             logger.exception("resolve_order_by_reference: get_orders_all failed for seller_id=%s", sid)
             return None
@@ -440,6 +462,8 @@ class StoreIntegrationClient:
                 if resp.status_code >= 400:
                     return []
                 payload = resp.json()
+                if isinstance(payload, dict) and payload.get("success") is False:
+                    return []
                 if isinstance(payload, dict) and isinstance(payload.get("data"), list):
                     return [x for x in payload.get("data") if isinstance(x, dict)]
                 if isinstance(payload, list):
@@ -447,6 +471,47 @@ class StoreIntegrationClient:
                 return []
         except httpx.HTTPError:
             return []
+
+    async def fetch_orders_for_order_ids(
+        self,
+        seller_id: str,
+        order_ids: List[Any],
+        *,
+        max_orders: int = 15,
+        max_concurrent: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Hydrate order rows by calling GET /orders/{order_id}?seller_id=... for each id.
+
+        Use when /orders/all returns empty but invoice rows list ``order_ids``.
+        """
+        if not self.base_url:
+            return []
+        sid = (seller_id or "").strip()
+        if not sid:
+            return []
+        unique: List[str] = []
+        for raw in order_ids or []:
+            s = str(raw).strip()
+            if s and s not in unique:
+                unique.append(s)
+            if len(unique) >= max_orders:
+                break
+        if not unique:
+            return []
+
+        sem = asyncio.Semaphore(max(1, int(max_concurrent)))
+
+        async def _one(oid: str) -> Optional[Dict[str, Any]]:
+            async with sem:
+                try:
+                    return await self.get_order_by_id(oid, seller_id=sid)
+                except Exception:  # noqa: BLE001
+                    logger.exception("fetch_orders_for_order_ids failed for order_id=%s", oid)
+                    return None
+
+        results = await asyncio.gather(*[_one(o) for o in unique])
+        return [r for r in results if isinstance(r, dict)]
 
     async def get_invoices(self, seller_id: str) -> List[Dict[str, Any]]:
         """

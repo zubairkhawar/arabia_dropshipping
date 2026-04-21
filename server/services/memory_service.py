@@ -83,6 +83,7 @@ class ConversationMemory:
         "verification": "mem:{phone}:verification",
         "context_window": "mem:{phone}:context_window",
         "last_summary": "mem:{phone}:last_summary",
+        "bot_customer_kind": "mem:{phone}:bot_customer_kind",
     }
 
     MAX_CONTEXT_MESSAGES = 5
@@ -492,6 +493,38 @@ class ConversationMemory:
         return None
 
     @classmethod
+    def store_bot_customer_kind(cls, phone: str, kind: str) -> None:
+        r = cls._r()
+        if not r:
+            return
+        k = (kind or "").strip().lower()
+        if k not in ("new", "existing"):
+            return
+        try:
+            r.setex(
+                cls.REDIS_KEYS["bot_customer_kind"].format(phone=phone),
+                cls._ttl(),
+                k,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory: store_bot_customer_kind failed: %s", exc)
+
+    @classmethod
+    def get_bot_customer_kind(cls, phone: str) -> Optional[str]:
+        r = cls._r()
+        if not r:
+            return None
+        try:
+            raw = r.get(cls.REDIS_KEYS["bot_customer_kind"].format(phone=phone))
+            if not raw:
+                return None
+            k = str(raw).strip().lower()
+            return k if k in ("new", "existing") else None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory: get_bot_customer_kind failed: %s", exc)
+        return None
+
+    @classmethod
     def get_all_context(cls, phone: str) -> Dict[str, Any]:
         r = cls._r()
         if not r:
@@ -568,6 +601,7 @@ class ConversationMemory:
                 "verification",
                 "context_window",
                 "last_summary",
+                "bot_customer_kind",
             )
         ]
         try:

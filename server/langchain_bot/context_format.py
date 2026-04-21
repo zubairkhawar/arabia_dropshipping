@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from config import settings
+
 
 _STATUS_PHRASES: Dict[str, str] = {
     "pending": "is being processed",
@@ -185,6 +187,12 @@ def format_single_invoice_for_llm(inv: Dict[str, Any]) -> str:
         parts.append(f"date {inv_date}")
     if inv_items:
         parts.append(f"items {inv_items}")
+    inv_net = _pick_str(inv, "net_total", "net")
+    if inv_net:
+        parts.append(f"net_total {inv_net} AED")
+    inv_profit = _pick_str(inv, "profit")
+    if inv_profit:
+        parts.append(f"profit {inv_profit} AED")
     if inv_payable:
         parts.append(f"payable {inv_payable} AED")
     if raw_ps:
@@ -273,7 +281,9 @@ def build_customer_identity_summary(
         lines.append(
             f"Merchant/store: customer record linked via {vmethod} "
             f"(store customer id {cust.get('id')}, name: {cust.get('name') or 'n/a'}). "
-            "You may use recent_orders from context for personal order questions."
+            "You may use recent_orders from context for personal order questions. "
+            "If **Orders** is empty but **Invoices** lists order_ids, summarize invoice periods "
+            "and those order numbers — do not say there are no orders."
         )
     else:
         lines.append(
@@ -291,14 +301,22 @@ def build_customer_identity_summary(
                 "Scripted chat bot: user chose EXISTING customer and completed the in-chat "
                 "verification step (lightweight; not bank KYC). They may expect order help — "
                 "still only use merchant order list when store is linked; otherwise ask for "
-                "order number or direct them to the bot order flow or /reset."
+                "an order number or offer **support** — never suggest /reset as a fix for missing data."
+            )
+        elif bool(getattr(settings, "customer_bot_bypass_script_verification", False)):
+            lines.append(
+                "Scripted chat bot: user is on the EXISTING-customer path and email/OTP/mobile "
+                "verification is temporarily OFF in settings. The bot collects order numbers "
+                "for lookups instead. Do not ask them to complete email OTP verification or "
+                "send /reset for that reason alone; guide them to share an order number if they "
+                "need order help and store data is not linked."
             )
         else:
             lines.append(
                 "Scripted chat bot: user chose EXISTING customer but has NOT completed the "
                 "bot verification step — treat as UNVERIFIED for account/order answers from "
                 "the script's point of view. Say they should complete verification in the chat "
-                "flow, or send /reset and pick Existing customer again."
+                "flow; do not tell them to use /reset to fix missing orders or invoices."
             )
     elif kind == "new":
         lines.append(

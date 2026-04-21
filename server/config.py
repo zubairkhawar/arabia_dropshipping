@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     # while debugging the store-API customer lookup end-to-end.
     customer_bot_skip_email_otp: bool = False
 
+    # Customer bot: when True, skip the full email → OTP → mobile script for existing
+    # customers and collect order numbers only (OTP / verification temporarily off).
+    # Set CUSTOMER_BOT_BYPASS_SCRIPT_VERIFICATION=true in .env while store verification is disabled.
+    customer_bot_bypass_script_verification: bool = False
+
     # Application
     environment: str = "development"
     debug: bool = True

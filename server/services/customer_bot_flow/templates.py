@@ -278,6 +278,23 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "يرجى إرسال عنوان البريد الإلكتروني المرتبط بحسابك.",
         "roman_urdu": "Apne account se jura hua email address bhejein.",
     },
+    "order_verify_bypass_intro": {
+        "english": (
+            "We're not using email verification in chat right now.\n\n"
+            "Please send your **order number** (for example #157955). "
+            "If you only remember the phone number used on the order, send that and we’ll try to help."
+        ),
+        "arabic": (
+            "لا نستخدم التحقق عبر البريد في الدردشة حاليًا.\n\n"
+            "يرجى إرسال **رقم الطلب** (مثال: #157955). "
+            "إن كان لديك فقط رقم الجوال المستخدم في الطلب، فأرسله وسنحاول المساعدة."
+        ),
+        "roman_urdu": (
+            "Filhaal chat mein email verification use nahi ho rahi.\n\n"
+            "Apna **order number** bhejein (misal #157955). "
+            "Agar sirf woh mobile yaad hai jo order par tha, woh bhejein — dekh kar madad karte hain."
+        ),
+    },
     "email_invalid": {
         "english": "Please enter a valid email address (example: name@email.com).",
         "arabic": "يرجى إدخال بريد إلكتروني صحيح (مثال: name@email.com).",

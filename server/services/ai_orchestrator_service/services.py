@@ -1,11 +1,46 @@
 import logging
 import re
-from typing import Optional, Dict, Any, Set
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, Set, List, Tuple
 
 from services.human_handoff_intent import wants_human_agent
 from services.store_integration_service.client import StoreIntegrationClient
 
 logger = logging.getLogger(__name__)
+
+
+def _store_context_date_window(days: int = 120) -> Tuple[str, str]:
+    """Default date_from / date_to for invoice + orders/list calls (UTC calendar days)."""
+    end = datetime.utcnow().date()
+    start = end - timedelta(days=max(30, min(int(days), 730)))
+    return start.isoformat(), end.isoformat()
+
+
+def _invoices_from_merchant_payload(inv_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if not isinstance(inv_payload, dict) or not inv_payload:
+        return []
+    invs = inv_payload.get("invoices")
+    if isinstance(invs, list):
+        return [x for x in invs if isinstance(x, dict)]
+    one = inv_payload.get("invoice")
+    if isinstance(one, dict):
+        return [one]
+    return []
+
+
+def _order_ids_from_invoices(invoices: List[Dict[str, Any]], max_ids: int = 40) -> List[str]:
+    out: List[str] = []
+    for inv in invoices:
+        raw = inv.get("order_ids")
+        if not isinstance(raw, list):
+            continue
+        for x in raw:
+            s = str(x).strip()
+            if s and s not in out:
+                out.append(s)
+            if len(out) >= max_ids:
+                return out
+    return out
 
 
 def _customer_record_is_linked(customer: Optional[Dict[str, Any]]) -> bool:
@@ -363,22 +398,58 @@ class AIOrchestrator:
 
         # Only use Arabia APIs: orders by id, tracking, faq, invoice by seller_id
         if seller_id:
+            date_from, date_to = _store_context_date_window()
             try:
-                inv_payload = await self.store_client.get_invoice_by_seller_id(seller_id)
+                inv_payload = await self.store_client.get_invoice_by_seller_id(
+                    seller_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    all_invoices=False,
+                )
+                if not _invoices_from_merchant_payload(inv_payload):
+                    inv_payload = await self.store_client.get_invoice_by_seller_id(
+                        seller_id,
+                        date_from=date_from,
+                        date_to=date_to,
+                        all_invoices=True,
+                    )
                 if isinstance(inv_payload.get("orders"), list):
                     orders = [x for x in inv_payload.get("orders") if isinstance(x, dict)]
                 elif isinstance(inv_payload.get("data"), list):
                     orders = [x for x in inv_payload.get("data") if isinstance(x, dict)]
-                if isinstance(inv_payload.get("invoices"), list):
-                    invoices = [x for x in inv_payload.get("invoices") if isinstance(x, dict)]
-                # Invoice payload often has no ``orders`` array even when the seller
-                # has live rows — fall back to /orders/all for LLM + tooling context.
+                invoices = _invoices_from_merchant_payload(inv_payload)
+                # Invoice payload often has no ``orders`` array — use /orders/all with a
+                # sensible window (merchant APIs may return NOT_FOUND for ad-hoc single days).
+                if not orders:
+                    try:
+                        orders = await self.store_client.get_orders_all(
+                            seller_id,
+                            date_from=date_from,
+                            date_to=date_to,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("Store API orders/all with window failed")
+                        store_context_error = (store_context_error or "") + f" orders_all:{exc!s}"[:220]
                 if not orders:
                     try:
                         orders = await self.store_client.get_orders_all(seller_id)
                     except Exception as exc:  # noqa: BLE001
-                        logger.exception("Store API orders/all fallback failed")
-                        store_context_error = (store_context_error or "") + f" orders_all:{exc!s}"[:220]
+                        logger.exception("Store API orders/all unscoped fallback failed")
+                        store_context_error = (store_context_error or "") + f" orders_all_u:{exc!s}"[:220]
+                if not orders and invoices:
+                    oid_list = _order_ids_from_invoices(invoices, max_ids=24)
+                    if oid_list:
+                        try:
+                            orders = await self.store_client.fetch_orders_for_order_ids(
+                                seller_id,
+                                oid_list,
+                                max_orders=15,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.exception("Store API hydrate orders from invoice ids failed")
+                            store_context_error = (
+                                (store_context_error or "") + f" orders_hydrate:{exc!s}"
+                            )[:220]
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Store API invoice by seller_id failed")
                 store_context_error = f"invoice_fetch:{exc!s}"[:220]
