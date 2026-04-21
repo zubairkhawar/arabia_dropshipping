@@ -1,12 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAgents } from '@/contexts/AgentsContext';
-import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Clock, TrendingUp, Pencil, Check, X, Download, KeyRound } from 'lucide-react';
+import { UserPlus, Trash2, Eye, EyeOff, ChevronLeft, ChevronRight, Copy, Pencil, Check, X, Download, KeyRound } from 'lucide-react';
 import { AgentActivityBar, useAgentAttendanceData } from '@/components/agents/activity-bar';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
-import { weekdayInTimeZone } from '@/lib/tenant-time';
 import { useToast } from '@/contexts/ToastContext';
 import { buildSingleAgentPdf, filterByMonth } from '@/lib/attendance-pdf';
 
@@ -17,40 +16,6 @@ function trimmedAvatarUrl(url: string | null | undefined): string | null {
   const u = url != null ? String(url).trim() : '';
   return u !== '' ? u : null;
 }
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  'https://arabia-dropshipping.onrender.com';
-const TENANT_ID = 1;
-
-function formatAvgResponse(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return s > 0 ? `${m}.${Math.round((s / 60) * 10)}m` : `${m}m`;
-}
-
-function getUptimeFromAttendance(
-  dayData: { date: Date; hoursWorked: number }[],
-  workingDays: number[],
-  timeZone: string,
-): { uptimePercent: number } {
-  const now = new Date();
-  const from = new Date(now);
-  from.setDate(from.getDate() - 29);
-  from.setHours(0, 0, 0, 0);
-  const workingSet = new Set(workingDays);
-  const recent = dayData.filter(
-    (d) =>
-      d.date >= from &&
-      d.date <= now &&
-      workingSet.has(weekdayInTimeZone(d.date, timeZone)),
-  );
-  const worked = recent.filter((d) => d.hoursWorked > 0);
-  const uptimePercent = recent.length > 0 ? Math.round((worked.length / recent.length) * 100) : 0;
-  return { uptimePercent };
-}
-
 export default function AdminAgents() {
   const { agents, addAgent, removeAgent, updateAgent } = useAgents();
   const { schedule } = useOnlineSchedule();
@@ -81,62 +46,6 @@ export default function AdminAgents() {
   const [agentReportYear, setAgentReportYear] = useState(() => new Date().getFullYear());
   const [agentReportDownloading, setAgentReportDownloading] = useState(false);
   const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<{ id: string; label: string } | null>(null);
-  const [avgResponseTimeSeconds, setAvgResponseTimeSeconds] = useState(0);
-  const loadAvgResponseFromChats = useCallback(async (agentId: string) => {
-    try {
-      const url = new URL(`${API_BASE}/api/messaging/conversations`);
-      url.searchParams.set('tenant_id', String(TENANT_ID));
-      url.searchParams.set('agent_id', String(Number(agentId)));
-      const convRes = await fetch(url.toString());
-      if (!convRes.ok) {
-        setAvgResponseTimeSeconds(0);
-        return;
-      }
-      const convs = (await convRes.json()) as Array<{ id: number }>;
-      if (!Array.isArray(convs) || convs.length === 0) {
-        setAvgResponseTimeSeconds(0);
-        return;
-      }
-
-      const detailResponses = await Promise.all(
-        convs.map((c) => fetch(`${API_BASE}/api/messaging/conversations/${c.id}`)),
-      );
-      const deltas: number[] = [];
-      for (const res of detailResponses) {
-        if (!res.ok) continue;
-        const data = (await res.json()) as {
-          messages: Array<{ sender_type: string; created_at: string }>;
-        };
-        const msgs = (data.messages || []).slice().sort(
-          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-        );
-        for (let i = 0; i < msgs.length; i += 1) {
-          if (msgs[i].sender_type !== 'customer') continue;
-          for (let j = i + 1; j < msgs.length; j += 1) {
-            if (msgs[j].sender_type === 'agent') {
-              const sec = Math.max(
-                0,
-                Math.floor(
-                  (new Date(msgs[j].created_at).getTime() -
-                    new Date(msgs[i].created_at).getTime()) / 1000,
-                ),
-              );
-              deltas.push(sec);
-              break;
-            }
-          }
-        }
-      }
-      if (deltas.length === 0) {
-        setAvgResponseTimeSeconds(0);
-        return;
-      }
-      const avg = Math.round(deltas.reduce((s, v) => s + v, 0) / deltas.length);
-      setAvgResponseTimeSeconds(avg);
-    } catch {
-      setAvgResponseTimeSeconds(0);
-    }
-  }, []);
 
   useEffect(() => {
     if (!selectedId && agents.length > 0) {
@@ -158,13 +67,6 @@ export default function AdminAgents() {
     () => trimmedAvatarUrl(selectedAgent?.avatarUrl),
     [selectedAgent?.avatarUrl],
   );
-  useEffect(() => {
-    if (!selectedAgent?.id) {
-      setAvgResponseTimeSeconds(0);
-      return;
-    }
-    void loadAvgResponseFromChats(selectedAgent.id);
-  }, [selectedAgent?.id, loadAvgResponseFromChats]);
   const { dayData: attendanceDayData } = useAgentAttendanceData(
     selectedAgent?.id,
     schedule.workingDays,
@@ -182,11 +84,6 @@ export default function AdminAgents() {
       d.date < cutoff ? { ...d, hoursWorked: 0, sessions: [] } : d
     );
   }, [attendanceDayData, selectedAgent]);
-  const performanceMetrics = useMemo(() => {
-    if (!selectedAgent) return { uptimePercent: 0, avgResponseTimeSeconds: 0 };
-    const { uptimePercent } = getUptimeFromAttendance(visibleAttendanceDayData, schedule.workingDays, timeZone);
-    return { uptimePercent, avgResponseTimeSeconds };
-  }, [visibleAttendanceDayData, schedule.workingDays, selectedAgent, avgResponseTimeSeconds, timeZone]);
 
   const toTitle = (value: string) => {
     const v = value.trim().toLowerCase();
@@ -707,9 +604,9 @@ export default function AdminAgents() {
               </div>
             </div>
 
-            {/* Row 2: Attendance (3/4) + Performance (1/4) */}
+            {/* Row 2: Attendance */}
             {selectedAgent && (
-              <div className="lg:col-span-3 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
+              <div className="lg:col-span-4 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4 flex flex-col min-h-0">
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                   <p className="text-xs font-semibold text-text-muted uppercase tracking-wider">
                     Attendance
@@ -731,38 +628,6 @@ export default function AdminAgents() {
                     dayData={visibleAttendanceDayData}
                     timeZone={timeZone}
                   />
-                </div>
-              </div>
-            )}
-            {selectedAgent && (
-              <div className="lg:col-span-1 bg-card rounded-xl border border-border shadow-sm p-6 space-y-4">
-                <p className="text-xs font-semibold text-text-muted uppercase tracking-wider flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4" />
-                  Performance
-                </p>
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-panel">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                      <Clock className="w-5 h-5 text-primary" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-text-muted">Uptime</p>
-                      <p className="text-lg font-semibold text-text-primary">
-                        {performanceMetrics.uptimePercent}%
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-panel">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                      <TrendingUp className="w-5 h-5 text-primary" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-text-muted">Avg response</p>
-                      <p className="text-lg font-semibold text-text-primary">
-                        {formatAvgResponse(performanceMetrics.avgResponseTimeSeconds)}
-                      </p>
-                    </div>
-                  </div>
                 </div>
               </div>
             )}

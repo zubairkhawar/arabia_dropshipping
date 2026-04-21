@@ -650,6 +650,67 @@ async def list_conversations(
     return out
 
 
+def _conversation_visible_to_agent_inbox(
+    conversation: Conversation,
+    agent_id: int,
+    include_transferred_out_for_agent_id: Optional[int],
+) -> bool:
+    """Same visibility rules as list_conversations for agent-scoped inbox."""
+    if conversation.agent_id is not None and int(conversation.agent_id) == int(agent_id):
+        return True
+    if (
+        include_transferred_out_for_agent_id is not None
+        and int(include_transferred_out_for_agent_id) == int(agent_id)
+    ):
+        meta = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
+        tx = meta.get("last_transfer") if isinstance(meta.get("last_transfer"), dict) else {}
+        from_id = tx.get("from_agent_id")
+        if isinstance(from_id, int) and from_id == agent_id:
+            return True
+    return False
+
+
+@router.get("/conversations/{conversation_id}/summary", response_model=ConversationSummary)
+async def get_conversation_inbox_summary(
+    conversation_id: int,
+    tenant_id: int = Query(...),
+    agent_id: Optional[int] = Query(None),
+    include_transferred_out_for_agent_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    One row for inbox merge (agent panel): same shape as list_conversations, without loading all threads.
+    Returns 404 if the conversation is not visible to this agent (assigned or transferred-out).
+    """
+    conversation: Conversation | None = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id, Conversation.tenant_id == tenant_id)
+        .first()
+    )
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    if agent_id is not None:
+        if not _conversation_visible_to_agent_inbox(
+            conversation,
+            agent_id,
+            include_transferred_out_for_agent_id,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found",
+            )
+    _ = conversation.customer
+    _ = conversation.messages
+    u = 0
+    if agent_id is not None:
+        u = _inbox_unread_for_conversation(db, tenant_id, agent_id, conversation.id)
+    # Admin / unscoped callers omit agent_id; unread not computed.
+    return _build_conversation_summary(conversation, unread_count=u)
+
+
 @router.get("/conversations/search", response_model=List[ConversationSearchResult])
 async def search_conversations(
     tenant_id: int,

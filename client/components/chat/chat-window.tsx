@@ -58,6 +58,7 @@ import {
   formatCompactActivity,
   formatTime12hInZone,
   formatWeekdayShortMonthDayInZone,
+  parseBackendUtcDate,
 } from '@/lib/tenant-time';
 import { uploadAttachmentToR2 } from '@/lib/media-upload';
 
@@ -556,7 +557,10 @@ export function ChatWindow({
         sender: 'agent' as const,
         senderName: m.senderName,
         senderAgentId: Number.parseInt(m.senderAgentId, 10) || undefined,
-        timestamp: formatTime12hInZone(new Date(m.createdAt), timeZone),
+        timestamp: formatTime12hInZone(
+          parseBackendUtcDate(m.createdAt) ?? new Date(m.createdAt),
+          timeZone,
+        ),
         sentAt: m.createdAt,
         replyToMessageId: m.replyToMessageId,
         replyTo:
@@ -979,7 +983,10 @@ export function ChatWindow({
         senderAgentId: m.sender_agent_id ?? undefined,
         postedByAdmin: postedByAdmin || undefined,
         channelTeamId: m.team_id,
-        timestamp: formatTime12hInZone(new Date(m.created_at), timeZone),
+        timestamp: formatTime12hInZone(
+          parseBackendUtcDate(m.created_at) ?? new Date(m.created_at),
+          timeZone,
+        ),
         sentAt: m.created_at,
         attachment,
         replyTo: deletedForEveryone ? undefined : payload.replyTo,
@@ -1654,7 +1661,7 @@ export function ChatWindow({
   };
 
   const formatReactionTime = (iso: string) => {
-    const d = new Date(iso);
+    const d = parseBackendUtcDate(iso) ?? new Date(iso);
     const diff = (Date.now() - d.getTime()) / 1000;
     if (diff < 60) return 'Just now';
     if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
@@ -1662,7 +1669,10 @@ export function ChatWindow({
   };
 
   const formatMessageTime = (sentAt?: string, fallbackTimestamp?: string) => {
-    if (sentAt) return formatTime12hInZone(new Date(sentAt), timeZone);
+    if (sentAt) {
+      const d = parseBackendUtcDate(sentAt) ?? new Date(sentAt);
+      return formatTime12hInZone(d, timeZone);
+    }
     return fallbackTimestamp ?? '';
   };
 
@@ -1704,12 +1714,15 @@ export function ChatWindow({
   };
 
   const formatDateLabel = (iso: string) => {
-    const d = new Date(iso);
+    const d = parseBackendUtcDate(iso) ?? new Date(iso);
     return formatWeekdayShortMonthDayInZone(d, timeZone);
   };
 
   const getMessageDateKey = (m: Message) => {
-    if (m.sentAt) return dateKeyInTimeZone(new Date(m.sentAt), timeZone);
+    if (m.sentAt) {
+      const d = parseBackendUtcDate(m.sentAt) ?? new Date(m.sentAt);
+      return dateKeyInTimeZone(d, timeZone);
+    }
     return dateKeyInTimeZone(new Date(), timeZone);
   };
 
@@ -3560,7 +3573,8 @@ export function ChatWindow({
               const prevInGroup = mi > 0 ? group.messages[mi - 1] : null;
               const gapMin =
                 prevInGroup?.sentAt && message.sentAt
-                  ? (new Date(message.sentAt).getTime() - new Date(prevInGroup.sentAt).getTime()) /
+                  ? ((parseBackendUtcDate(message.sentAt) ?? new Date(message.sentAt)).getTime() -
+                      (parseBackendUtcDate(prevInGroup.sentAt) ?? new Date(prevInGroup.sentAt)).getTime()) /
                     60000
                   : Infinity;
               const groupWithPrev =
@@ -4846,7 +4860,9 @@ export function ChatWindow({
         };
 
         if (isInboxPage && !isInternalChat && targetMessage) {
-          const sent = targetMessage.sentAt ? new Date(targetMessage.sentAt) : null;
+          const sent = targetMessage.sentAt
+            ? parseBackendUtcDate(targetMessage.sentAt) ?? new Date(targetMessage.sentAt)
+            : null;
           const st = targetMessage.messageStatus;
           const sentOk = sent && !Number.isNaN(sent.getTime());
           return (
@@ -4883,7 +4899,9 @@ export function ChatWindow({
                   {targetMessage.editedAt && (
                     <p>
                       <span className="text-text-muted">Edited · </span>
-                      {formatReadAt(new Date(targetMessage.editedAt))}
+                      {formatReadAt(
+                        parseBackendUtcDate(targetMessage.editedAt) ?? new Date(targetMessage.editedAt),
+                      )}
                     </p>
                   )}
                   {st && (targetMessage.sender === 'agent' || targetMessage.sender === 'ai') && (
@@ -4912,12 +4930,17 @@ export function ChatWindow({
 
         if (isDmPage && isInternalChat && targetMessage) {
           const outgoingDmInfo = targetMessage.senderName === 'You';
-          const sentDm = targetMessage.sentAt ? new Date(targetMessage.sentAt) : null;
+          const sentDm = targetMessage.sentAt
+            ? parseBackendUtcDate(targetMessage.sentAt) ?? new Date(targetMessage.sentAt)
+            : null;
           const sentOkDm = sentDm && !Number.isNaN(sentDm.getTime());
           const deliveredDm = targetMessage.peerDeliveredAt
-            ? new Date(targetMessage.peerDeliveredAt)
+            ? parseBackendUtcDate(targetMessage.peerDeliveredAt) ??
+              new Date(targetMessage.peerDeliveredAt)
             : null;
-          const readDm = targetMessage.peerReadAt ? new Date(targetMessage.peerReadAt) : null;
+          const readDm = targetMessage.peerReadAt
+            ? parseBackendUtcDate(targetMessage.peerReadAt) ?? new Date(targetMessage.peerReadAt)
+            : null;
           const deliveredOk = deliveredDm && !Number.isNaN(deliveredDm.getTime());
           const readOk = readDm && !Number.isNaN(readDm.getTime());
           const deliveredAtForDisplay =
@@ -5003,13 +5026,17 @@ export function ChatWindow({
 
         if (isTeamChannel && isInternalChat && targetMessage) {
           const outgoingTeamBubble = isOutgoingMessage(targetMessage);
-          const sentTeam = targetMessage.sentAt ? new Date(targetMessage.sentAt) : null;
+          const sentTeam = targetMessage.sentAt
+            ? parseBackendUtcDate(targetMessage.sentAt) ?? new Date(targetMessage.sentAt)
+            : null;
           const sentOkTeam = sentTeam && !Number.isNaN(sentTeam.getTime());
           const sumT = targetMessage.teamReceiptSummary;
           const rcT = sumT?.recipient_count ?? 0;
           const allReadTeam = Boolean(sumT && rcT > 0 && sumT.read_count >= rcT);
           const readTeamAt =
-            allReadTeam && sumT?.last_read_at ? new Date(sumT.last_read_at) : null;
+            allReadTeam && sumT?.last_read_at
+              ? parseBackendUtcDate(sumT.last_read_at) ?? new Date(sumT.last_read_at)
+              : null;
           const readOkTeam = readTeamAt && !Number.isNaN(readTeamAt.getTime());
 
           const anchor = messageInfoAnchor;

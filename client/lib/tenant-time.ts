@@ -137,7 +137,7 @@ export function formatConversationListTime(
   now: Date = new Date(),
 ): string {
   if (!iso) return '—';
-  const d = new Date(iso);
+  const d = parseBackendUtcDate(iso) ?? new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
   const msgKey = dateKeyInTimeZone(d, timeZone);
   const todayKey = dateKeyInTimeZone(now, timeZone);
@@ -156,7 +156,7 @@ export function formatMessageBubbleTime(
   timeZone: string,
 ): string {
   if (iso) {
-    const d = new Date(iso);
+    const d = parseBackendUtcDate(iso) ?? new Date(iso);
     if (!Number.isNaN(d.getTime())) return formatTime12hInZone(d, timeZone);
   }
   return fallbackLabel ?? '';
@@ -164,7 +164,7 @@ export function formatMessageBubbleTime(
 
 /** Short "Just now" / "5m ago" then calendar-aware time in zone. */
 export function formatCompactActivity(iso: string, timeZone: string, now: Date = new Date()): string {
-  const d = new Date(iso);
+  const d = parseBackendUtcDate(iso) ?? new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
   const diffSec = Math.max(0, (now.getTime() - d.getTime()) / 1000);
   if (diffSec < 60) return 'Just now';

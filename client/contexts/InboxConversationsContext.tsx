@@ -5,7 +5,11 @@ import { useAgents } from '@/contexts/AgentsContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { usePathname } from 'next/navigation';
 import { useAgentPortalRealtime } from '@/contexts/AgentPortalRealtimeContext';
-import { formatConversationListTime, formatTime12hInZone } from '@/lib/tenant-time';
+import {
+  formatConversationListTime,
+  formatTime12hInZone,
+  parseBackendUtcDate,
+} from '@/lib/tenant-time';
 import {
   readAuthAgentId,
   readLastInboxConversationId,
@@ -34,6 +38,8 @@ export interface InboxConversation {
   transferredToAgentName?: string;
   transferredFromAgentName?: string;
   transferredAt?: string;
+  /** Raw API `last_activity_at` for sorting merged rows (not shown in UI). */
+  lastActivityIso?: string | null;
 }
 
 export interface InboxMessage {
@@ -193,7 +199,10 @@ function apiMessageToInbox(
     content,
     sender: st,
     senderName,
-    timestamp: formatTime12hInZone(new Date(m.created_at), timeZone),
+    timestamp: formatTime12hInZone(
+      parseBackendUtcDate(m.created_at) ?? new Date(m.created_at),
+      timeZone,
+    ),
     sentAt: m.created_at,
     replyToMessageId: m.reply_to_message_id ?? undefined,
     editedAt: m.edited_at ?? undefined,
@@ -234,6 +243,9 @@ function pickInboxSelection(
 
 export function InboxConversationsProvider({ children }: { children: ReactNode }) {
   const { agents, currentAgentId } = useAgents();
+  /** Latest roster for name lookup without re-creating mapConversation when agents[] identity changes (that was retriggering the full list fetch effect). */
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
   const { timeZone } = useTenantTimezone();
   const { subscribe } = useAgentPortalRealtime();
   const pathname = usePathname();
@@ -252,7 +264,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       const handlerAgentId = c.agent_id != null ? String(c.agent_id) : undefined;
       const handlerName =
         handlerAgentId != null
-          ? agents.find((a) => a.id === handlerAgentId)?.name
+          ? agentsRef.current.find((a) => a.id === handlerAgentId)?.name
           : (c.last_handler_agent_name ?? undefined);
       // Show as "transferred" for the prior handler when they no longer own the thread.
       // (Do not require transfer_to !== agent_id — after a successful handoff both match the new assignee.)
@@ -268,6 +280,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         customerId: `#${c.customer_id}`,
         lastMessage: c.last_message || '',
         lastActivityAt: formatConversationListTime(c.last_activity_at, timeZone),
+        lastActivityIso: c.last_activity_at ?? null,
         unread: typeof c.unread_count === 'number' ? c.unread_count : 0,
         channel: c.channel,
         status: transferredOut ? 'transferred' : toConversationStatus(c.status),
@@ -280,7 +293,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         transferredAt: transferredOut ? formatConversationListTime(c.last_activity_at, timeZone) : undefined,
       };
     },
-    [agents, currentAgentId, timeZone],
+    [currentAgentId, timeZone],
   );
 
   const fetchConversationRowsFromApi = useCallback(async (): Promise<ConversationSummaryApi[]> => {
@@ -341,6 +354,72 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       setIsLoading(false);
     }
   }, [fetchConversationRowsFromApi, mapConversation]);
+
+  const sortInboxByActivity = useCallback((rows: InboxConversation[]) => {
+    return [...rows].sort((a, b) => {
+      const ta = parseBackendUtcDate(a.lastActivityIso ?? undefined)?.getTime() ?? 0;
+      const tb = parseBackendUtcDate(b.lastActivityIso ?? undefined)?.getTime() ?? 0;
+      return tb - ta;
+    });
+  }, []);
+
+  /** Merge one row from GET …/summary — avoids refetching the full list on every WS event. */
+  const upsertConversationFromSummary = useCallback(
+    async (convId: number) => {
+      if (!isAgentPortal) {
+        const url = new URL(`${API_BASE}/api/messaging/conversations/${convId}/summary`);
+        url.searchParams.set('tenant_id', String(TENANT_ID));
+        try {
+          const res = await fetch(url.toString());
+          if (!res.ok) {
+            void refreshConversations();
+            return;
+          }
+          const row = (await res.json()) as ConversationSummaryApi;
+          const mapped = mapConversation(row);
+          setConversations((prev) => {
+            const filtered = prev.filter((c) => c.id !== mapped.id);
+            return sortInboxByActivity([...filtered, mapped]);
+          });
+        } catch {
+          void refreshConversations();
+        }
+        return;
+      }
+      const aid = currentAgentId ?? readAuthAgentId();
+      if (!aid) return;
+      const url = new URL(`${API_BASE}/api/messaging/conversations/${convId}/summary`);
+      url.searchParams.set('tenant_id', String(TENANT_ID));
+      url.searchParams.set('agent_id', String(Number(aid)));
+      url.searchParams.set('include_transferred_out_for_agent_id', String(Number(aid)));
+      try {
+        const res = await fetch(url.toString());
+        if (res.status === 404) {
+          setConversations((prev) => {
+            const next = prev.filter((c) => c.id !== convId);
+            const sel = selectedIdRef.current;
+            if (sel === convId) {
+              queueMicrotask(() => {
+                setSelectedId(next[0]?.id ?? null);
+              });
+            }
+            return next;
+          });
+          return;
+        }
+        if (!res.ok) return;
+        const row = (await res.json()) as ConversationSummaryApi;
+        const mapped = mapConversation(row);
+        setConversations((prev) => {
+          const filtered = prev.filter((c) => c.id !== mapped.id);
+          return sortInboxByActivity([...filtered, mapped]);
+        });
+      } catch {
+        // ignore
+      }
+    },
+    [isAgentPortal, currentAgentId, mapConversation, refreshConversations, sortInboxByActivity],
+  );
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -446,7 +525,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
             const exists = prev.some((c) => c.id === convId);
             if (!exists) {
               queueMicrotask(() => {
-                void refreshConversations();
+                void upsertConversationFromSummary(convId);
               });
               return prev;
             }
@@ -496,37 +575,46 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         return;
       }
       if (msg.type === 'inbox_conversation_refresh') {
-        queueMicrotask(() => {
-          void refreshConversations();
-        });
-        return;
-      }
-      if (msg.type === 'conversation_transferred') {
-        queueMicrotask(() => {
-          void refreshConversations();
-        });
-        return;
-      }
-      if (msg.type === 'portal_connected') {
-        queueMicrotask(() => {
-          void refreshConversations();
-        });
-        return;
-      }
-      // New bot→agent handoff pushes `notification` (bot_new_chat); refresh so Live appears without polling.
-      if (msg.type === 'notification' && msg.notification && typeof msg.notification === 'object') {
-        if (!isAgentPortal) return;
-        const raw = msg.notification as Record<string, unknown>;
-        const t = String(raw.type ?? '');
-        if (t === 'bot_new_chat') {
+        if (typeof convId === 'number') {
+          queueMicrotask(() => {
+            void upsertConversationFromSummary(convId);
+          });
+        } else {
           queueMicrotask(() => {
             void refreshConversations();
           });
         }
         return;
       }
+      if (msg.type === 'conversation_transferred') {
+        if (typeof convId === 'number') {
+          queueMicrotask(() => {
+            void upsertConversationFromSummary(convId);
+          });
+        } else {
+          queueMicrotask(() => {
+            void refreshConversations();
+          });
+        }
+        return;
+      }
+      // New bot→agent handoff: merge one row (conversation_id on notification).
+      if (msg.type === 'notification' && msg.notification && typeof msg.notification === 'object') {
+        if (!isAgentPortal) return;
+        const raw = msg.notification as Record<string, unknown>;
+        const t = String(raw.type ?? '');
+        if (t === 'bot_new_chat') {
+          const cid = Number(raw.conversation_id);
+          if (Number.isFinite(cid)) {
+            queueMicrotask(() => {
+              void upsertConversationFromSummary(cid);
+            });
+          }
+        }
+        return;
+      }
     });
-  }, [subscribe, syncInboxReadState, timeZone, refreshConversations, isAgentPortal]);
+  }, [subscribe, syncInboxReadState, timeZone, upsertConversationFromSummary, refreshConversations, isAgentPortal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -761,10 +849,10 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       } catch (err) {
         console.error('send-to-ai request error', err);
       } finally {
-        void refreshConversations();
+        void upsertConversationFromSummary(convId);
       }
     })();
-  }, [timeZone, refreshConversations]);
+  }, [timeZone, upsertConversationFromSummary]);
 
   const getMessages = useCallback((convId: number) => messagesByConvId[convId] ?? [], [messagesByConvId]);
 
