@@ -4,17 +4,20 @@ Fetch orders + invoices from the merchant API and build CSV bytes.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from services.orders_export_service.csv_builder import (
     build_invoice_index,
+    normalize_export_column_keys,
     orders_to_csv_bytes,
+    resolve_include_tracking_flag,
 )
 from services.store_integration_service.client import StoreIntegrationClient
 
 logger = logging.getLogger(__name__)
 
 MAX_EXPORT_ORDERS = 5000
+_TRACKING_ENRICH_CONCURRENCY = 12
 
 
 def _invoices_from_merchant_payload(inv_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -74,10 +77,20 @@ async def build_orders_csv_export_bytes(
     seller_id: str,
     date_from: str,
     date_to: str,
+    *,
+    column_keys: Optional[Sequence[str]] = None,
+    include_tracking: Optional[bool] = None,
 ) -> Tuple[bytes, int, bool]:
     """
     Returns (csv_bytes, row_count, truncated).
+
+    When ``include_tracking`` is true (default when status/tracking columns are present),
+    calls GET /orders/{id}/tracking for each order (bounded concurrency) and merges fields.
     """
+    sid = (seller_id or "").strip()
+    keys = normalize_export_column_keys(list(column_keys) if column_keys is not None else None)
+    do_tracking = resolve_include_tracking_flag(keys, include_tracking)
+
     orders, invoices = await fetch_orders_and_invoices_for_export(
         store_client, seller_id, date_from, date_to
     )
@@ -85,6 +98,18 @@ async def build_orders_csv_export_bytes(
     if len(orders) > MAX_EXPORT_ORDERS:
         orders = orders[:MAX_EXPORT_ORDERS]
         truncated = True
+
+    if do_tracking and orders and sid:
+        try:
+            orders = await store_client.enrich_orders_with_tracking(
+                sid,
+                orders,
+                max_orders=MAX_EXPORT_ORDERS,
+                max_concurrent=_TRACKING_ENRICH_CONCURRENCY,
+            )
+        except Exception:
+            logger.exception("export: tracking enrichment failed seller_id=%s", sid[:8])
+
     inv_idx = build_invoice_index(invoices)
-    body = orders_to_csv_bytes(orders, invoices_by_order_id=inv_idx)
+    body = orders_to_csv_bytes(orders, invoices_by_order_id=inv_idx, column_keys=keys)
     return body, len(orders), truncated

@@ -325,16 +325,17 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     [timeZone],
   );
 
-  const fetchConversationRowsFromApi = useCallback(async (): Promise<ConversationSummaryApi[]> => {
+  /** `null` = skip or request failed — callers must not replace inbox state with []. */
+  const fetchConversationRowsFromApi = useCallback(async (): Promise<ConversationSummaryApi[] | null> => {
     const aid = isAgentPortal ? (currentAgentId ?? readAuthAgentId()) : null;
-    if (isAgentPortal && !aid) return [];
+    if (isAgentPortal && !aid) return null;
     const url = new URL(`${API_BASE}/api/messaging/conversations`);
     url.searchParams.set('tenant_id', String(TENANT_ID));
     if (isAgentPortal && aid) {
       url.searchParams.set('agent_id', String(Number(aid)));
     }
     const res = await fetch(url.toString(), { headers: authJsonHeaders() });
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const rows = (await res.json()) as ConversationSummaryApi[];
     if (isAgentPortal) return rows;
     // Admin: show all conversations — bot-handled, agent-handled, and closed
@@ -372,9 +373,10 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
   }, [isAgentPortal]);
 
   const refreshConversations = useCallback(async () => {
+    const rows = await fetchConversationRowsFromApi();
+    if (rows === null) return;
     setIsLoading(true);
     try {
-      const rows = await fetchConversationRowsFromApi();
       const mapped = applyPhoneDuplicateNewLeadRule(rows.map(mapConversation));
       setConversations(mapped);
       setSelectedId((prev) => pickInboxSelection(mapped, readLastInboxConversationId(), prev));
@@ -688,6 +690,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         try {
           const rows = await fetchConversationRowsFromApi();
           if (cancelled) return;
+          if (rows === null) return;
           const mapped = applyPhoneDuplicateNewLeadRule(rows.map(mapConversation));
           setConversations(mapped);
           setSelectedId((prev) => pickInboxSelection(mapped, readLastInboxConversationId(), prev));

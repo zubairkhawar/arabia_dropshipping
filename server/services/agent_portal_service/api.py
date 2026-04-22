@@ -1,6 +1,6 @@
 import json
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import StreamingResponse
@@ -143,6 +143,14 @@ async def agent_download_orders_csv(
     conversation_id: int = Query(..., ge=1),
     date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
     date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    columns: Optional[str] = Query(
+        None,
+        description="Comma-separated export column keys; omit for full default.",
+    ),
+    include_tracking: Optional[bool] = Query(
+        None,
+        description="When null, inferred from selected columns (status/tracking).",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -196,8 +204,19 @@ async def agent_download_orders_csv(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date_from or date_to")
 
+    col_list: Optional[List[str]] = None
+    if (columns or "").strip():
+        col_list = [c.strip() for c in str(columns).split(",") if c.strip()]
+
     store = StoreIntegrationClient()
-    body, row_count, _trunc = await build_orders_csv_export_bytes(store, seller_id, df, dt)
+    body, row_count, _trunc = await build_orders_csv_export_bytes(
+        store,
+        seller_id,
+        df,
+        dt,
+        column_keys=col_list,
+        include_tracking=include_tracking,
+    )
     if not body or row_count <= 0:
         raise HTTPException(status_code=404, detail="No orders in range")
 

@@ -1,5 +1,6 @@
 from datetime import datetime
 import base64
+import copy
 import hashlib
 from io import BytesIO
 import logging
@@ -8,7 +9,7 @@ from typing import Any, List, Optional, Dict, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, status, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -57,6 +58,58 @@ def _to_knowledge_source_out(row: KnowledgeSource) -> KnowledgeSourceOut:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def _sanitize_followup_question_list(raw: List[str], *, max_items: int = 12, max_len: int = 220) -> List[str]:
+    out: List[str] = []
+    for x in raw or []:
+        s = str(x).strip()
+        if not s:
+            continue
+        out.append(s[:max_len])
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _preserve_chunk_followup_questions(prev_chunks: List[Any], md: Dict[str, Any]) -> None:
+    """After re-chunking, copy ``followup_questions`` onto new rows when ``index`` still exists."""
+    new_chunks = md.get("chunks")
+    if not isinstance(prev_chunks, list) or not isinstance(new_chunks, list):
+        return
+    old_by_idx: Dict[int, List[str]] = {}
+    for c in prev_chunks:
+        if not isinstance(c, dict):
+            continue
+        idx = c.get("index")
+        if not isinstance(idx, int):
+            continue
+        fq = c.get("followup_questions")
+        if isinstance(fq, list) and fq:
+            old_by_idx[idx] = _sanitize_followup_question_list([str(x) for x in fq])
+    if not old_by_idx:
+        return
+    for c in new_chunks:
+        if not isinstance(c, dict):
+            continue
+        idx = c.get("index")
+        if isinstance(idx, int) and idx in old_by_idx:
+            c["followup_questions"] = list(old_by_idx[idx])
+
+
+class ChunkFollowupUpdate(BaseModel):
+    """Match chunks by their stored ``index`` field (see chunk objects in source metadata)."""
+
+    index: int = Field(..., ge=0, description="Chunk index to update")
+    followup_questions: List[str] = Field(
+        default_factory=list,
+        description="Suggested follow-up lines for the LLM (English or any language; max 12, trimmed).",
+    )
+
+
+class PatchChunkFollowupsIn(BaseModel):
+    tenant_id: int = Field(..., ge=1)
+    updates: List[ChunkFollowupUpdate] = Field(..., min_length=1, max_length=300)
 
 
 def _needs_refresh(row: KnowledgeSource) -> bool:
@@ -151,6 +204,7 @@ def _chunk_text(
     page: Optional[int] = None,
     start_index: int = 0,
 ) -> List[Dict[str, Any]]:
+    """Chunk dicts include ``text``, ``index``, etc. Admins may add ``followup_questions`` (list of strings) per chunk in metadata."""
     if not text:
         return []
     size = max(300, chunk_size)
@@ -503,6 +557,9 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
     Returns: status, chunk_count, metadata_patch
     """
     md = dict(src.knowledge_metadata or {})
+    prev_chunks_snapshot = (
+        copy.deepcopy(md.get("chunks")) if isinstance(md.get("chunks"), list) else []
+    )
     md.pop("last_error", None)
     md["last_fetched_at"] = datetime.utcnow().isoformat()
 
@@ -524,6 +581,7 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
             return "error", 0, md
         chunks = _chunk_text(text, source_name=src.name)
         md["chunks"] = chunks
+        _preserve_chunk_followup_questions(prev_chunks_snapshot, md)
         md["chunk_schema"] = "v2_object"
         md["content_preview"] = text[:500]
         md["content_hash"] = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
@@ -538,6 +596,7 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
         text = _build_api_source_text(src)
         chunks = _chunk_text(text, chunk_size=700, overlap=80, source_name=src.name)
         md["chunks"] = chunks
+        _preserve_chunk_followup_questions(prev_chunks_snapshot, md)
         md["chunk_schema"] = "v2_object"
         md["content_preview"] = text[:500]
         md["content_hash"] = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
@@ -572,6 +631,7 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
                 elif is_pdf:
                     pdf_done, text = _ingest_pdf_blob(blob, src, md)
                     if pdf_done is not None:
+                        _preserve_chunk_followup_questions(prev_chunks_snapshot, md)
                         return pdf_done
                 elif mime in {
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -616,6 +676,7 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
             parse_method = "file_text_clean"
         chunks = _chunk_text(cleaned, source_name=src.name)
         md["chunks"] = chunks
+        _preserve_chunk_followup_questions(prev_chunks_snapshot, md)
         md["chunk_schema"] = "v2_object"
         md["content_preview"] = cleaned[:500]
         md["content_hash"] = hashlib.sha256(cleaned.encode("utf-8", errors="ignore")).hexdigest()
@@ -639,6 +700,7 @@ async def _ingest_source_content(src: KnowledgeSource) -> Tuple[str, int, Dict[s
             "end_char": len(filename),
         }
     ]
+    _preserve_chunk_followup_questions(prev_chunks_snapshot, md)
     md["chunk_schema"] = "v2_object"
     md["content_preview"] = f"File source connected: {filename}"
     md["parse_method"] = "file_placeholder"
@@ -749,6 +811,72 @@ async def reindex_stale_sources(tenant_id: int, db: Session = Depends(get_db)):
         db.refresh(src)
         updated.append(_to_knowledge_source_out(src))
     return updated
+
+
+@router.patch("/sources/{source_id}/chunk-followups", response_model=KnowledgeSourceOut)
+async def patch_chunk_followups(
+    source_id: int,
+    body: PatchChunkFollowupsIn,
+    db: Session = Depends(get_db),
+):
+    """
+    Attach ``followup_questions`` to chunk dicts matched by ``index`` (used by the LLM KB follow-up block).
+
+    Does not re-run ingestion; safe to call after chunks exist. Empty ``followup_questions`` clears the field.
+    """
+    src = db.query(KnowledgeSource).filter(KnowledgeSource.id == source_id).first()
+    if not src:
+        raise HTTPException(status_code=404, detail="Knowledge source not found")
+    if int(src.tenant_id) != int(body.tenant_id):
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+
+    md = dict(src.knowledge_metadata or {})
+    chunks = md.get("chunks")
+    if not isinstance(chunks, list) or not chunks:
+        raise HTTPException(status_code=400, detail="Source has no chunks to update")
+
+    wanted = {u.index for u in body.updates}
+    found_idx: set[int] = set()
+    for c in chunks:
+        if isinstance(c, dict) and isinstance(c.get("index"), int):
+            found_idx.add(int(c["index"]))
+
+    missing = sorted(wanted - found_idx)
+    applied = 0
+    by_index = {u.index: u for u in body.updates}
+    for c in chunks:
+        if not isinstance(c, dict):
+            continue
+        idx = c.get("index")
+        if not isinstance(idx, int) or idx not in by_index:
+            continue
+        upd = by_index[idx]
+        cleaned = _sanitize_followup_question_list(upd.followup_questions)
+        if cleaned:
+            c["followup_questions"] = cleaned
+        else:
+            c.pop("followup_questions", None)
+        applied += 1
+
+    if applied == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No chunks matched updates. Missing chunk indices: {missing}",
+        )
+    if missing:
+        logger.warning(
+            "KB patch_chunk_followups: source_id=%s partial match; missing indices=%s",
+            source_id,
+            missing,
+        )
+
+    md["chunks"] = chunks
+    src.knowledge_metadata = md
+    src.updated_at = datetime.utcnow()
+    db.add(src)
+    db.commit()
+    db.refresh(src)
+    return _to_knowledge_source_out(src)
 
 
 @router.delete("/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)

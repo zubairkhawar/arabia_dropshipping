@@ -140,6 +140,8 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         ? mapped.find((a) => a.email.trim().toLowerCase() === authEmail)?.id ?? null
         : null;
       if (byEmail) return byEmail;
+      // Empty roster from API (transient error / race) — keep a hydrated id instead of nulling.
+      if (mapped.length === 0) return prev;
       if (authEmail) return null;
       if (prev && mapped.some((a) => a.id === prev)) return prev;
       return mapped[0]?.id ?? null;

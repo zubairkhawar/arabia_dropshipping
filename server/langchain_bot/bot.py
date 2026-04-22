@@ -2,7 +2,7 @@ from datetime import datetime
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
@@ -20,6 +20,7 @@ from langchain_bot.context_format import (
     format_order_invoice_match_hints,
     format_orders_summary_for_llm,
 )
+from langchain_bot.kb_followup_hints import dedupe_suggestions, heuristic_kb_followups
 from langchain_bot.prompts import (
     build_prompt,
     knowledge_gap_reply,
@@ -79,6 +80,29 @@ KB_QUERY_PHRASE_HINTS: Dict[str, List[str]] = {
 }
 
 # Extra stems merged into the query token set when the user is asking for offerings / catalog.
+def _chunk_followup_questions(chunk: Any) -> List[str]:
+    """Read optional per-chunk follow-ups from ingest metadata (``followup_questions`` etc.)."""
+    if not isinstance(chunk, dict):
+        return []
+    raw = chunk.get("followup_questions")
+    if raw is None:
+        raw = chunk.get("follow_up_questions") or chunk.get("followups")
+    if not isinstance(raw, list):
+        return []
+    return [str(x).strip() for x in raw if str(x).strip()]
+
+
+def _format_kb_followup_suggestions_block(lines: List[str]) -> str:
+    if not lines:
+        return "None"
+    body = "\n".join(f"- {x}" for x in lines[:12])
+    return (
+        "Suggested follow-up questions (from retrieved knowledge excerpts — translate to Detected language; "
+        "use to shape your **three** bullets when applicable):\n"
+        f"{body}"
+    )
+
+
 _SERVICE_QUERY_STEMS: tuple[str, ...] = (
     "dropshipping",
     "sourcing",
@@ -268,7 +292,7 @@ class ArabiaLangChainBot:
         max_items: int = 8,
         max_chunks: int = 8,
         min_score: int = 1,
-    ) -> str:
+    ) -> Tuple[str, str]:
         rows = (
             self.db.query(KnowledgeSource)
             .filter(
@@ -280,11 +304,11 @@ class ArabiaLangChainBot:
             .all()
         )
         if not rows:
-            return "No knowledge sources connected."
+            return "No knowledge sources connected.", "None"
 
         tokens = self._normalized_query_tokens(user_message)
         tokens = self._merge_service_query_tokens(tokens, user_message)
-        scored_chunks: List[tuple[int, str]] = []
+        scored_entries: List[tuple[int, str, Any]] = []
         items: List[str] = []
         for src in rows:
             metadata = src.knowledge_metadata or {}
@@ -298,7 +322,9 @@ class ArabiaLangChainBot:
                     if score < max(min_score, 0) and tokens:
                         continue
                     cite = self._chunk_citation(chunk)
-                    scored_chunks.append((score, f"[{src.name}{cite}] {chunk_text[:700]}"))
+                    scored_entries.append(
+                        (score, f"[{src.name}{cite}] {chunk_text[:700]}", chunk),
+                    )
             if src.type == "api":
                 base_url = src.url or metadata.get("base_url") or "N/A"
                 schema_notes = metadata.get("schema_notes") or ""
@@ -308,14 +334,27 @@ class ArabiaLangChainBot:
             else:
                 filename = metadata.get("filename") or src.name
                 items.append(f"- FILE: {filename} (chunks: {src.chunk_count})")
-        scored_chunks.sort(key=lambda x: x[0], reverse=True)
-        top_chunks = [c for _, c in scored_chunks[:max_chunks]]
+        scored_entries.sort(key=lambda x: x[0], reverse=True)
+        top_entries = scored_entries[:max_chunks]
+        top_chunks = [line for _, line, _ in top_entries]
+
         if not top_chunks and self._service_catalog_question(user_message):
             top_chunks = self._keyword_fallback_chunk_lines(
                 rows, user_message, max_chunks=max_chunks
             )
+            merged_followups = dedupe_suggestions(
+                heuristic_kb_followups(user_message, top_chunks),
+                max_items=10,
+            )
+        else:
+            merged: List[str] = []
+            for _, _, ch in top_entries:
+                merged.extend(_chunk_followup_questions(ch))
+            merged.extend(heuristic_kb_followups(user_message, top_chunks))
+            merged_followups = dedupe_suggestions(merged, max_items=10)
+
         if top_chunks:
-            return "\n".join(
+            knowledge_str = "\n".join(
                 [
                     "Connected knowledge sources:",
                     *items,
@@ -324,7 +363,9 @@ class ArabiaLangChainBot:
                     *[f"- {c}" for c in top_chunks],
                 ]
             )
-        return "\n".join(items)
+            return knowledge_str, _format_kb_followup_suggestions_block(merged_followups)
+
+        return "\n".join(items), "None"
 
     def _load_knowledge_rows(self, tenant_id: int, max_items: int = 8) -> List[KnowledgeSource]:
         return (
@@ -533,7 +574,7 @@ class ArabiaLangChainBot:
         user_message: str,
         max_items: int = 8,
         max_chunks: int = 8,
-    ) -> str:
+    ) -> Tuple[str, str]:
         """
         Optional semantic retrieval hook.
         TODO: integrate pgvector/external embeddings; currently falls back to token overlap.
@@ -655,12 +696,12 @@ class ArabiaLangChainBot:
         min_score = max(0, int(getattr(settings, "kb_min_score", 1) or 0))
         rows = self._load_knowledge_rows(tenant_id)
         if bool(getattr(settings, "kb_use_embeddings", False)):
-            knowledge_context = self._build_knowledge_context_embeddings(
+            knowledge_context, kb_followup_suggestions = self._build_knowledge_context_embeddings(
                 tenant_id,
                 user_message=user_message,
             )
         else:
-            knowledge_context = self._build_knowledge_context(
+            knowledge_context, kb_followup_suggestions = self._build_knowledge_context(
                 tenant_id,
                 user_message=user_message,
                 min_score=min_score,
@@ -713,6 +754,7 @@ class ArabiaLangChainBot:
             agent_availability_context=agent_availability_context,
             post_close_handover_context=post_close_handover_context,
             knowledge_context=knowledge_context,
+            kb_followup_suggestions=kb_followup_suggestions,
             conversation_history=history_block,
             user_message=user_message,
         )
@@ -810,6 +852,7 @@ class ArabiaLangChainBot:
             agent_availability_context=agent_availability_context,
             post_close_handover_context=post_close_handover_context,
             knowledge_context=knowledge_context,
+            kb_followup_suggestions="None",
             conversation_history=history_block,
             user_message=user_message,
         )

@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -15,7 +15,12 @@ from config import settings
 from models import User
 from services.auth_service.api import get_current_user
 from services.media_storage.r2 import is_r2_configured, presign_get, put_bytes
-from services.orders_export_service.csv_builder import object_key_for_orders_csv
+from services.orders_export_service.csv_builder import (
+    export_options_fingerprint,
+    normalize_export_column_keys,
+    object_key_for_orders_csv,
+    resolve_include_tracking_flag,
+)
 from services.orders_export_service.exporter import build_orders_csv_export_bytes
 from services.store_integration_service.client import StoreIntegrationClient
 
@@ -45,16 +50,29 @@ def _redis_client():
         return None
 
 
-def _cache_key(tenant_id: int, seller_id: str, date_from: str, date_to: str) -> str:
-    return f"orders_csv_url:t{tenant_id}:s{seller_id}:{date_from}:{date_to}"
+def _cache_key(
+    tenant_id: int,
+    seller_id: str,
+    date_from: str,
+    date_to: str,
+    options_fp: str,
+) -> str:
+    # v2: cache includes column + tracking options (v1 omitted tracking enrichment).
+    return f"orders_csv_url:v2:t{tenant_id}:s{seller_id}:{date_from}:{date_to}:{options_fp}"
 
 
-def _cache_get(tenant_id: int, seller_id: str, date_from: str, date_to: str) -> Optional[Dict[str, Any]]:
+def _cache_get(
+    tenant_id: int,
+    seller_id: str,
+    date_from: str,
+    date_to: str,
+    options_fp: str,
+) -> Optional[Dict[str, Any]]:
     r = _redis_client()
     if not r:
         return None
     try:
-        raw = r.get(_cache_key(tenant_id, seller_id, date_from, date_to))
+        raw = r.get(_cache_key(tenant_id, seller_id, date_from, date_to, options_fp))
         if not raw:
             return None
         return json.loads(raw)
@@ -62,12 +80,23 @@ def _cache_get(tenant_id: int, seller_id: str, date_from: str, date_to: str) -> 
         return None
 
 
-def _cache_set(tenant_id: int, seller_id: str, date_from: str, date_to: str, payload: Dict[str, Any]) -> None:
+def _cache_set(
+    tenant_id: int,
+    seller_id: str,
+    date_from: str,
+    date_to: str,
+    options_fp: str,
+    payload: Dict[str, Any],
+) -> None:
     r = _redis_client()
     if not r:
         return
     try:
-        r.setex(_cache_key(tenant_id, seller_id, date_from, date_to), 86400, json.dumps(payload))
+        r.setex(
+            _cache_key(tenant_id, seller_id, date_from, date_to, options_fp),
+            86400,
+            json.dumps(payload),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("orders export: cache set failed %s", exc)
 
@@ -77,6 +106,17 @@ class OrdersCsvExportIn(BaseModel):
     date_from: str = Field(..., min_length=10, max_length=10)
     date_to: str = Field(..., min_length=10, max_length=10)
     format: str = Field(default="csv")
+    columns: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional ordered column keys (e.g. order_id, order_date, status, tracking_number, …). "
+            "Omitted = full default set."
+        ),
+    )
+    include_tracking: Optional[bool] = Field(
+        default=None,
+        description="When null, true if status or tracking_number is among exported columns.",
+    )
 
 
 class OrdersCsvExportOut(BaseModel):
@@ -108,7 +148,11 @@ async def post_orders_export_csv(
     df = body.date_from.strip()[:10]
     dt = body.date_to.strip()[:10]
 
-    cached = _cache_get(tenant_id, seller_id, df, dt)
+    column_keys = normalize_export_column_keys(body.columns)
+    do_track = resolve_include_tracking_flag(column_keys, body.include_tracking)
+    options_fp = export_options_fingerprint(column_keys, do_track)
+
+    cached = _cache_get(tenant_id, seller_id, df, dt, options_fp)
     if cached and cached.get("download_url") and cached.get("expires_at"):
         try:
             exp = datetime.fromisoformat(str(cached["expires_at"]).replace("Z", "+00:00"))
@@ -124,11 +168,18 @@ async def post_orders_export_csv(
             pass
 
     store = StoreIntegrationClient()
-    csv_bytes, row_count, truncated = await build_orders_csv_export_bytes(store, seller_id, df, dt)
+    csv_bytes, row_count, truncated = await build_orders_csv_export_bytes(
+        store,
+        seller_id,
+        df,
+        dt,
+        column_keys=column_keys,
+        include_tracking=body.include_tracking,
+    )
     if not csv_bytes or row_count <= 0:
         raise HTTPException(status_code=404, detail="No orders in the selected range")
 
-    key = object_key_for_orders_csv(seller_id)
+    key = object_key_for_orders_csv(seller_id, options_fp)
     put_bytes(key, csv_bytes, "text/csv")
     ttl = 86400
     url = presign_get(key, ttl)
@@ -146,6 +197,7 @@ async def post_orders_export_csv(
         seller_id,
         df,
         dt,
+        options_fp,
         {
             "download_url": url,
             "expires_at": out.expires_at,

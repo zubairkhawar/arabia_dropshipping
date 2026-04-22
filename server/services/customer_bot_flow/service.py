@@ -2807,7 +2807,41 @@ def _wants_orders_csv_file(text: str) -> bool:
         return True
     if "excel" in t and ("file" in t or "sheet" in t):
         return True
+    # Follow-up: "also include tracking/status…" without repeating the word "csv"
+    if "include" in t and any(
+        x in t for x in ("track", "status", "invoice", "column", "awb", "shipment")
+    ):
+        return True
+    if any(x in t for x in ("tracking", "awb", "delivery status")) and any(
+        x in t for x in ("csv", "export", "spreadsheet", "excel", "sheet", "file", "download")
+    ):
+        return True
     return False
+
+
+def _csv_user_requests_enriched_export_wording(text: str) -> bool:
+    """True when the user explicitly asks for tracking/status/invoice in the file."""
+    if not _wants_orders_csv_file(text):
+        return False
+    t = (text or "").lower()
+    return any(
+        x in t
+        for x in (
+            "tracking",
+            " awb",
+            "shipment",
+            "delivery status",
+            "invoice",
+            "payable",
+            "payment status",
+            "also include",
+            "add column",
+            "include status",
+            "updated csv",
+            "new csv",
+            "regenerate",
+        )
+    )
 
 
 def _safe_int(value: Any) -> int:
@@ -3151,10 +3185,23 @@ async def process_customer_bot_message(
                 df = str(win["date_from"])[:10]
                 dt = str(win["date_to"])[:10]
                 try:
+                    from services.orders_export_service.csv_builder import (
+                        export_options_fingerprint,
+                        normalize_export_column_keys,
+                        object_key_for_orders_csv,
+                        resolve_include_tracking_flag,
+                    )
                     from services.orders_export_service.exporter import build_orders_csv_export_bytes
 
+                    column_keys = normalize_export_column_keys(None)
+                    do_track = resolve_include_tracking_flag(column_keys, None)
                     body, n, trunc = await build_orders_csv_export_bytes(
-                        store_client, str(sid_csv), df, dt
+                        store_client,
+                        str(sid_csv),
+                        df,
+                        dt,
+                        column_keys=column_keys,
+                        include_tracking=None,
                     )
                     if n <= 0:
                         return save(
@@ -3167,17 +3214,40 @@ async def process_customer_bot_message(
                             {**flow, "step": "conversational"},
                             "The export is too large to send on WhatsApp (over 100 MB). Please ask support for a split export or a shorter date range.",
                         )
-                    fname = f"orders_{sid_csv}_{df}_to_{dt}.csv".replace(" ", "_")[:200]
+                    opt_fp = export_options_fingerprint(column_keys, do_track)
+                    fname = f"orders_{sid_csv}_{df}_to_{dt}_{opt_fp}.csv".replace(" ", "_")[:200]
                     cap = f"Orders export ({n} orders)"
                     if trunc:
                         cap += " (capped at 5000 rows)"
                     reply = (
-                        "I have prepared a CSV with your orders. Tap the file below to open it in WhatsApp."
+                        "I have prepared a CSV with your orders (including tracking status and invoice "
+                        "columns where the store provides them). Tap the file below to open it in WhatsApp."
                     )
+                    if _csv_user_requests_enriched_export_wording(user_message):
+                        reply = (
+                            "Sure — here is a fresh CSV with tracking numbers, order status, and invoice "
+                            "fields filled in wherever our systems have that data. Tap the file below."
+                        )
                     if flow_lang == "roman_urdu":
-                        reply = "Main ne CSV file bana di hai. Neeche file par tap kar ke WhatsApp mein khol lein."
+                        reply = (
+                            "Main ne CSV bana di hai jisme tracking, status, aur invoice ki fields shamil "
+                            "hain jahan data mojood ho. Neeche file par tap kar ke WhatsApp mein khol lein."
+                        )
+                        if _csv_user_requests_enriched_export_wording(user_message):
+                            reply = (
+                                "Bilkul — yeh nayi CSV hai jisme tracking number, status, aur invoice details "
+                                "shamil hain jahan mojood hon. Neeche file par tap karein."
+                            )
                     elif flow_lang == "arabic":
-                        reply = "جهزت لك ملف CSV. اضغط على الملف أدناه لفتحه في واتساب."
+                        reply = (
+                            "جهزت لك ملف CSV يتضمن حالة التتبع والفاتورة حيثما توفرت البيانات. "
+                            "اضغط على الملف أدناه لفتحه في واتساب."
+                        )
+                        if _csv_user_requests_enriched_export_wording(user_message):
+                            reply = (
+                                "حسناً — إليك ملف CSV محدث يتضمن أرقام التتبع والحالة وتفاصيل الفاتورة "
+                                "عند توفرها. اضغط على الملف أدناه."
+                            )
                     doc_item: Dict[str, Any] = {
                         "content_bytes": body,
                         "filename": fname,
@@ -3186,10 +3256,9 @@ async def process_customer_bot_message(
                     }
                     try:
                         from services.media_storage.r2 import is_r2_configured, presign_get, put_bytes
-                        from services.orders_export_service.csv_builder import object_key_for_orders_csv
 
                         if is_r2_configured():
-                            key = object_key_for_orders_csv(str(sid_csv))
+                            key = object_key_for_orders_csv(str(sid_csv), opt_fp)
                             put_bytes(key, body, "text/csv")
                             doc_item["document_url"] = presign_get(key, 86400)
                     except Exception:
