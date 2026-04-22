@@ -1153,6 +1153,16 @@ async def send_message(
         )
         phone = customer.phone if customer else None
         wa = MetaWhatsAppClient()
+
+        # Resolve the WhatsApp message ID of the quoted message (for reply context).
+        reply_context_wa_id: Optional[str] = None
+        if msg.reply_to_message_id:
+            replied_msg = db.query(Message).filter(Message.id == msg.reply_to_message_id).first()
+            if replied_msg and isinstance(replied_msg.message_metadata, dict):
+                raw_wa = replied_msg.message_metadata.get("wa_message_id")
+                if isinstance(raw_wa, str) and raw_wa.strip():
+                    reply_context_wa_id = raw_wa.strip()
+
         if phone and wa.is_configured():
             try:
                 if has_media and meta_to_store and meta_to_store.get("type") == "image":
@@ -1174,7 +1184,11 @@ async def send_message(
                                 msg.message_metadata = meta_next
                     else:
                         line = caption or "[Image]"
-                        wa_resp = await wa.send_text_message(to_phone=str(phone), text=line[:4096])
+                        wa_resp = await wa.send_text_message(
+                            to_phone=str(phone),
+                            text=line[:4096],
+                            context_message_id=reply_context_wa_id,
+                        )
                         msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
                         if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
                             out_wa_id = str(msgs[0].get("id") or "").strip()
@@ -1236,7 +1250,11 @@ async def send_message(
                             line = content_stripped if content_stripped != "Voice message" else "Voice message"
                         elif meta_to_store and meta_to_store.get("type") == "file":
                             line = content_stripped
-                    wa_resp = await wa.send_text_message(to_phone=str(phone), text=line[:4096])
+                    wa_resp = await wa.send_text_message(
+                        to_phone=str(phone),
+                        text=line[:4096],
+                        context_message_id=reply_context_wa_id,
+                    )
                     msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
                     if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
                         out_wa_id = str(msgs[0].get("id") or "").strip()

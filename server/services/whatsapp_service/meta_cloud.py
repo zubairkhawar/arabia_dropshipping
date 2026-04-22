@@ -47,17 +47,24 @@ class MetaWhatsAppClient:
             f"{self.phone_number_id}/media"
         )
 
-    async def send_text_message(self, to_phone: str, text: str) -> Dict[str, Any]:
+    async def send_text_message(
+        self,
+        to_phone: str,
+        text: str,
+        context_message_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         if not self.is_configured():
             raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
 
         url = self._messages_url()
-        payload = {
+        payload: Dict[str, Any] = {
             "messaging_product": "whatsapp",
             "to": to_phone,
             "type": "text",
             "text": {"body": text},
         }
+        if context_message_id and context_message_id.strip():
+            payload["context"] = {"message_id": context_message_id.strip()}
         headers = self._headers()
         logger.info(
             "Sending WhatsApp message using:\nPHONE_NUMBER_ID = %s\nTO = %s\n(body length: %s chars)",

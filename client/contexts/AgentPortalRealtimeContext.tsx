@@ -114,6 +114,36 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
     }
   }, []);
 
+  // Heartbeat: ping the server every 30 minutes while the tab is visible and the
+  // agent is online. This ensures open attendance sessions stay alive and a missing
+  // session (accidentally closed) gets recreated automatically.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const token = localStorage.getItem('auth_token');
+    const role = (localStorage.getItem('auth_role') || '').toLowerCase();
+    if (!token || role !== 'agent') return;
+
+    const sendHeartbeat = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (sessionStorage.getItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY) === '1') return;
+      const id = readAuthAgentId();
+      if (!id) return;
+      void fetch(`${API_BASE}/api/routing/agents/${id}/heartbeat`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => undefined);
+    };
+
+    // Fire once after a short delay (page load / reconnect), then every 30 minutes.
+    const initialTimer = window.setTimeout(sendHeartbeat, 5000);
+    const intervalTimer = window.setInterval(sendHeartbeat, 30 * 60 * 1000);
+
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalTimer);
+    };
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const token = localStorage.getItem('auth_token');

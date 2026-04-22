@@ -151,15 +151,34 @@ async def update_agent_status(
             .first()
         )
         if not open_session:
-            db.add(
-                AgentAttendanceSession(
-                    tenant_id=agent.tenant_id,
-                    agent_id=agent.id,
-                    started_at=now,
-                    ended_at=None,
-                    created_at=now,
+            # Check if a session was closed within the last 30 seconds (page refresh
+            # artifact: pagehide fires offline beacon, then onopen fires online again).
+            # Reopen that session instead of creating a new 0-second one.
+            refresh_cutoff = now - timedelta(seconds=30)
+            recent_closed = (
+                db.query(AgentAttendanceSession)
+                .filter(
+                    AgentAttendanceSession.tenant_id == agent.tenant_id,
+                    AgentAttendanceSession.agent_id == agent.id,
+                    AgentAttendanceSession.ended_at >= refresh_cutoff,
                 )
+                .order_by(AgentAttendanceSession.ended_at.desc())
+                .first()
             )
+            if recent_closed:
+                # Page refresh — reopen the existing session, discard the gap.
+                recent_closed.ended_at = None
+                db.add(recent_closed)
+            else:
+                db.add(
+                    AgentAttendanceSession(
+                        tenant_id=agent.tenant_id,
+                        agent_id=agent.id,
+                        started_at=now,
+                        ended_at=None,
+                        created_at=now,
+                    )
+                )
 
     if not is_active:
         # Close ALL open attendance sessions when going offline (or already offline).
@@ -189,6 +208,53 @@ async def update_agent_status(
     return agent
 
 
+@router.post("/agents/{agent_id}/heartbeat")
+async def agent_heartbeat(
+    agent_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Lightweight keepalive from the agent portal (sent every ~30 minutes while the tab is
+    visible and the agent is online).  Ensures the open attendance session stays alive so a
+    forgotten-open tab doesn't produce a wildly inflated session once the stale auto-close
+    kicks in — the session is either actively receiving heartbeats (agent is still there) or
+    it will be capped at 8 hours by the stale-session cleanup.
+
+    Also recovers a missing open session: if the agent's DB status is online/busy but no
+    open session exists (e.g. session was accidentally closed), a new one is created.
+    """
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    now = datetime.utcnow()
+    is_active = agent.status in (AgentStatus.online.value, AgentStatus.busy.value)
+    if is_active:
+        open_session = (
+            db.query(AgentAttendanceSession)
+            .filter(
+                AgentAttendanceSession.tenant_id == agent.tenant_id,
+                AgentAttendanceSession.agent_id == agent.id,
+                AgentAttendanceSession.ended_at.is_(None),
+            )
+            .first()
+        )
+        if not open_session:
+            # Session missing for an active agent — recreate it.
+            db.add(
+                AgentAttendanceSession(
+                    tenant_id=agent.tenant_id,
+                    agent_id=agent.id,
+                    started_at=now,
+                    ended_at=None,
+                    created_at=now,
+                )
+            )
+            db.commit()
+
+    return {"ok": True}
+
+
 @router.get("/agents/{agent_id}/attendance", response_model=AttendanceResponse)
 async def get_agent_attendance(
     agent_id: int,
@@ -215,9 +281,9 @@ async def get_agent_attendance(
     start_date = today - timedelta(days=max(1, min(days, 400)) - 1)
     start_dt = datetime.combine(start_date, datetime.min.time())
 
-    # Auto-close stale sessions (open for > 16 hours and agent is currently offline).
-    # This prevents runaway durations from crashed browsers / missed logouts.
-    stale_cutoff = now - timedelta(hours=16)
+    # Auto-close stale sessions (open for > 8 hours).
+    # This prevents runaway durations from crashed browsers / forgotten tabs.
+    stale_cutoff = now - timedelta(hours=8)
     stale_sessions = (
         db.query(AgentAttendanceSession)
         .filter(
@@ -230,8 +296,8 @@ async def get_agent_attendance(
     )
     if stale_sessions:
         for ss in stale_sessions:
-            # Cap stale session at 16 hours from its start
-            ss.ended_at = ss.started_at + timedelta(hours=16)
+            # Cap stale session at 8 hours from its start
+            ss.ended_at = ss.started_at + timedelta(hours=8)
             db.add(ss)
         db.commit()
 
@@ -248,13 +314,19 @@ async def get_agent_attendance(
 
     by_day: dict[str, AttendanceDayOut] = {}
     for s in sessions:
+        end_at = s.ended_at or now
+        duration_secs = (end_at - s.started_at).total_seconds()
+        # Skip sub-minute sessions: these are almost always page-refresh artifacts
+        # (pagehide fires the offline beacon before the page reloads). Only skip
+        # sessions that are fully closed — an open session is still accumulating time.
+        if s.ended_at is not None and duration_secs < 60:
+            continue
         start_utc = s.started_at.replace(tzinfo=dt_timezone.utc)
         local_start = start_utc.astimezone(tenant_tz)
         day = local_start.date().isoformat()
         if day not in by_day:
             by_day[day] = AttendanceDayOut(date=day, total_minutes=0, sessions=[])
-        end_at = s.ended_at or now
-        minutes = max(0, int((end_at - s.started_at).total_seconds() // 60))
+        minutes = max(0, int(duration_secs // 60))
         by_day[day].total_minutes += minutes
         by_day[day].sessions.append(
             AttendanceSessionOut(start_at=s.started_at, end_at=s.ended_at)
