@@ -504,8 +504,6 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                     onClick={async () => {
                       if (currentAgentId) {
                         await setAgentStatus(currentAgentId, 'offline');
-                        const key = `${ACTIVE_SINCE_PREFIX}${currentAgentId}`;
-                        if (typeof window !== 'undefined') localStorage.removeItem(key);
                       }
                       setShowUserMenu(false);
                       if (typeof window !== 'undefined') {
