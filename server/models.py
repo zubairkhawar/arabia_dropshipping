@@ -127,6 +127,8 @@ class Agent(Base):
     team = Column(String, nullable=True)  # Team A, B, C, etc.
     max_concurrent_chats = Column(Integer, default=5)
     can_transfer_conversations = Column(Boolean, nullable=False, default=True)
+    # When False, agent keeps existing chats but does not receive new bot handoffs while online.
+    accepting_chats = Column(Boolean, nullable=False, default=True)
     # Plaintext copy of the agent's login password, kept so the admin panel can display
     # and share credentials across devices. Tenant admins explicitly opted into this
     # trade-off; it is only ever returned from admin-facing endpoints.

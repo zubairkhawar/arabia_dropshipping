@@ -1,6 +1,5 @@
 from typing import Dict, List, Optional
 from enum import Enum
-import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from datetime import timezone as dt_timezone
@@ -50,6 +49,7 @@ class AgentStatusUpdate(BaseModel):
     status: AgentStatus
     max_concurrent_chats: Optional[int] = None
     team: Optional[str] = None
+    accepting_chats: Optional[bool] = None
 
 
 class AssignRequest(BaseModel):
@@ -289,106 +289,14 @@ async def update_agent_status(
         agent.max_concurrent_chats = payload.max_concurrent_chats
     if payload.team is not None:
         agent.team = payload.team
+    if payload.accepting_chats is not None:
+        agent.accepting_chats = bool(payload.accepting_chats)
 
     db.add(agent)
     db.commit()
     db.refresh(agent)
 
-    # When an agent comes online, immediately drain any conversations that are
-    # stuck in "awaiting_agent" (customer already asked for a human but routing
-    # failed because no one was available at that moment).
-    if not was_active and is_active:
-        await _drain_pending_handoff_queue(db, agent)
-
     return agent
-
-
-async def _drain_pending_handoff_queue(db: Session, agent: Agent) -> None:
-    """
-    Assign unattended 'awaiting_agent' conversations to the newly-online agent.
-    Runs synchronously inside the status-update request so the agent's inbox
-    is populated the moment they come online — no customer message needed.
-    Also sends the customer a WhatsApp message confirming they are connected.
-    """
-    from services.agent_portal_service.broadcast import notify_bot_handoff_assigned
-
-    if not _agent_has_capacity(db, agent):
-        return
-
-    # Find all unassigned active WhatsApp conversations for this tenant where
-    # the bot flow is stuck in "awaiting_agent", oldest first.
-    pending = (
-        db.query(Conversation)
-        .filter(
-            Conversation.tenant_id == agent.tenant_id,
-            Conversation.agent_id.is_(None),
-            Conversation.status == "active",
-            Conversation.channel == "whatsapp",
-        )
-        .order_by(Conversation.updated_at.asc())
-        .all()
-    )
-
-    wa = MetaWhatsAppClient()
-    aname = lookup_agent_display_name(db, agent.id) or "Support"
-
-    for conv in pending:
-        if not _agent_has_capacity(db, agent):
-            break
-        meta = conv.conversation_metadata if isinstance(conv.conversation_metadata, dict) else {}
-        bf = meta.get("bot_flow") if isinstance(meta.get("bot_flow"), dict) else {}
-        if bf.get("step") != "awaiting_agent":
-            continue
-
-        # Assign this conversation to the agent.
-        conv.agent_id = agent.id
-        conv.updated_at = datetime.utcnow()
-        db.add(conv)
-        db.commit()
-
-        # Tell the customer they are now connected.
-        try:
-            bf_lang = bf.get("lang") or "english"
-            connected_text = append_handoff_agent_line(bf_lang, "", aname).strip()
-            if connected_text and wa.is_configured():
-                customer = db.query(Customer).filter(Customer.id == conv.customer_id).first()
-                if customer and customer.phone:
-                    greeting_msg = Message(
-                        conversation_id=conv.id,
-                        content=connected_text,
-                        sender_type="ai",
-                        sender_id=None,
-                        language=bf_lang,
-                        created_at=datetime.utcnow(),
-                    )
-                    db.add(greeting_msg)
-                    db.commit()
-                    db.refresh(greeting_msg)
-                    wa_resp = await wa.send_text_message(
-                        to_phone=str(customer.phone), text=connected_text
-                    )
-                    msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
-                    if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
-                        out_wa_id = str(msgs[0].get("id") or "").strip()
-                        if out_wa_id:
-                            greeting_msg.message_metadata = {"wa_message_id": out_wa_id}
-                    greeting_msg.wa_delivered_at = datetime.utcnow()
-                    db.add(greeting_msg)
-                    db.commit()
-        except Exception:
-            pass  # Don't let a failed WhatsApp send block the assignment
-
-        try:
-            await notify_bot_handoff_assigned(
-                db,
-                agent.tenant_id,
-                agent.id,
-                conv.id,
-                conv.customer_id,
-                conv.store_id,
-            )
-        except Exception:
-            pass  # Notification failure should not block the assignment
 
 
 @router.post("/agents/{agent_id}/heartbeat")
@@ -699,6 +607,34 @@ def _agent_has_capacity(db: Session, agent: Agent) -> bool:
     return _active_assigned_conversations(db, agent.id) < _agent_capacity_limit(agent)
 
 
+def _agent_accepts_new_routing_assignments(agent: Agent) -> bool:
+    """New bot handoffs go only to agents that are **online** (not busy) and accepting chats."""
+    if (agent.status or "").lower() != AgentStatus.online.value:
+        return False
+    return bool(getattr(agent, "accepting_chats", True))
+
+
+def any_online_agent_accepts_handoffs(
+    db: Session, tenant_id: int, team: Optional[str] = None
+) -> bool:
+    """
+    True when at least one agent is online and accepting_chats (ignores current load).
+    Used to decide whether to enter the handoff / queue flow vs hard 'no agents' messaging.
+    """
+    q = db.query(Agent).filter(
+        Agent.tenant_id == tenant_id,
+        Agent.status == AgentStatus.online.value,
+    )
+    if team:
+        q = q.filter(Agent.team == team)
+    for a in q.all():
+        if bool(getattr(a, "accepting_chats", True)):
+            return True
+    if team is not None:
+        return any_online_agent_accepts_handoffs(db, tenant_id, team=None)
+    return False
+
+
 def _get_store_mapped_agent(
     db: Session, tenant_id: int, store_id: int
 ) -> Optional[Agent]:
@@ -716,42 +652,44 @@ def _get_store_mapped_agent(
     return None
 
 
-def _get_random_available_agent(
+def _get_least_loaded_available_agent(
     db: Session, tenant_id: int, team: Optional[str] = None
 ) -> Optional[Agent]:
-    """Pick a random online agent under capacity, optionally filtered by team."""
-    query = db.query(Agent).filter(
-        Agent.tenant_id == tenant_id,
-        Agent.status.in_((AgentStatus.online.value, AgentStatus.busy.value)),
-    )
+    """
+    Least-loaded among online agents under max concurrent chats (ties → lower agent id).
+    Busy/offline agents never receive new assignments here.
+    """
+    q = db.query(Agent).filter(Agent.tenant_id == tenant_id)
     if team:
-        query = query.filter(Agent.team == team)
-
-    eligible = [a for a in query.all() if _agent_has_capacity(db, a)]
+        q = q.filter(Agent.team == team)
+    eligible = [
+        a
+        for a in q.all()
+        if _agent_accepts_new_routing_assignments(a) and _agent_has_capacity(db, a)
+    ]
+    if not eligible and team is not None:
+        return _get_least_loaded_available_agent(db, tenant_id, team=None)
     if not eligible:
         return None
-    return random.choice(eligible)
+    eligible.sort(key=lambda a: (_active_assigned_conversations(db, a.id), a.id))
+    return eligible[0]
 
 
 def any_agent_available(db: Session, tenant_id: int, team: Optional[str] = None) -> bool:
     """
-    Return True if at least one online/busy agent with capacity exists.
-    Checks the requested team first; if none found (or no team specified), checks across all teams.
-    Used by the bot flow to decide between "connecting…" and "no agents online" messages.
+    Return True if at least one online agent (accepting handoffs) has spare capacity.
+    Checks the requested team first; if none found, checks across all teams.
     """
-    if _get_random_available_agent(db, tenant_id, team=team) is not None:
-        return True
-    # Fall back: if there are any agents regardless of team
-    if team is not None:
-        return _get_random_available_agent(db, tenant_id, team=None) is not None
-    return False
+    return _get_least_loaded_available_agent(db, tenant_id, team=team) is not None
 
 
 def perform_conversation_assignment(
-    db: Session, payload: AssignRequest
+    db: Session,
+    payload: AssignRequest,
 ) -> Optional[AssignResponse]:
     """
     Core assignment rules. Returns None if conversation does not exist.
+    When no eligible agent has capacity, returns ``no_available_agent`` (no queue).
     """
     conversation = (
         db.query(Conversation)
@@ -782,7 +720,7 @@ def perform_conversation_assignment(
         )
 
     if payload.prefer_team_first and payload.routed_team:
-        team_first = _get_random_available_agent(
+        team_first = _get_least_loaded_available_agent(
             db, payload.tenant_id, team=payload.routed_team
         )
         if team_first:
@@ -794,18 +732,26 @@ def perform_conversation_assignment(
         payload.customer_id,
         exclude_conversation_id=conversation.id,
     )
-    if previous_agent and _agent_has_capacity(db, previous_agent):
+    if (
+        previous_agent
+        and _agent_has_capacity(db, previous_agent)
+        and _agent_accepts_new_routing_assignments(previous_agent)
+    ):
         return _commit(previous_agent, "previous_agent_for_customer")
 
     mapped_agent = _get_store_mapped_agent(db, payload.tenant_id, payload.store_id)
-    if mapped_agent and _agent_has_capacity(db, mapped_agent):
+    if (
+        mapped_agent
+        and _agent_has_capacity(db, mapped_agent)
+        and _agent_accepts_new_routing_assignments(mapped_agent)
+    ):
         return _commit(mapped_agent, "store_mapped_agent")
 
-    candidate = _get_random_available_agent(
+    candidate = _get_least_loaded_available_agent(
         db, payload.tenant_id, team=payload.routed_team
     )
     if not candidate:
-        candidate = _get_random_available_agent(db, payload.tenant_id, team=None)
+        candidate = _get_least_loaded_available_agent(db, payload.tenant_id, team=None)
     if not candidate:
         return AssignResponse(
             conversation_id=conversation.id,
@@ -813,7 +759,7 @@ def perform_conversation_assignment(
             reason="no_available_agent",
         )
 
-    return _commit(candidate, "random_available_agent")
+    return _commit(candidate, "least_loaded_available_agent")
 
 
 def assign_from_bot_flow(
@@ -851,9 +797,10 @@ async def assign_conversation(payload: AssignRequest, db: Session = Depends(get_
     """
     Assign conversation to an available agent following routing rules:
 
-    1. Old customer → previous agent if exists (when under capacity).
-    2. Store mapped to an agent → mapped agent (when under capacity).
-    3. Otherwise → random online agent in routed team (if provided) or any team.
+    1. Old customer → previous agent if exists (when under capacity and accepting chats).
+    2. Store mapped to an agent → mapped agent (when under capacity and accepting chats).
+    3. Otherwise → least-loaded **online** agent (not busy) in routed team (if provided) or any team.
+    If no agent has spare capacity, ``reason`` is ``no_available_agent`` (customer is told to try again later).
     Each agent accepts at most max_concurrent_chats open conversations (not closed/resolved; 1–100, tenant default).
     """
     result = perform_conversation_assignment(db, payload)
@@ -886,7 +833,7 @@ async def transfer_conversation(
     Transfer conversation between agents.
 
     - If target_agent_id provided → direct transfer.
-    - Else if target_team provided → random online agent from that team.
+    - Else if target_team provided → least-loaded online agent from that team.
 
     Caller must be tenant admin, or the currently assigned agent with transfer permission enabled.
     """
@@ -933,7 +880,7 @@ async def transfer_conversation(
                 detail="Target agent is not in this tenant",
             )
     else:
-        agent = _get_random_available_agent(
+        agent = _get_least_loaded_available_agent(
             db, tenant_id=conversation.tenant_id, team=payload.target_team
         )
         if not agent:

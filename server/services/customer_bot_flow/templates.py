@@ -541,6 +541,20 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Thora intezar karein — jaisay hi koi free ho ga connect kar dein ge."
         ),
     },
+    "handoff_try_later_dropbot": {
+        "english": (
+            "No support agents are available right now. Please try again later. "
+            "In the meantime, I (Dropbot) can still help you. What would you like to know?"
+        ),
+        "arabic": (
+            "لا يتوفر أي وكيل دعم حالياً. يرجى المحاولة لاحقاً. "
+            "في هذه الأثناء، يمكنني (Dropbot) مساعدتك. ماذا تريد أن تعرف؟"
+        ),
+        "roman_urdu": (
+            "Abhi koi support agent available nahi hai. Kuch dair baad dobara try karein. "
+            "Tab tak main (Dropbot) aap ki madad kar sakta hoon. Kya aap poochna chahte hain?"
+        ),
+    },
     "handoff_unavailable": {
         "english": (
             "⚠️ No agents are online right now.\n"

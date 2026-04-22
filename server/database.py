@@ -243,6 +243,29 @@ def ensure_tenant_agent_management_columns() -> None:
         pass
 
 
+def ensure_agent_accepting_chats_column() -> None:
+    """Per-agent toggle for receiving new handoff assignments while online."""
+    try:
+        insp = inspect(engine)
+        if "agents" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("agents")}
+    except Exception:
+        return
+    if "accepting_chats" in cols:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE agents ADD COLUMN accepting_chats "
+                    "BOOLEAN NOT NULL DEFAULT true"
+                )
+            )
+    except Exception:
+        pass
+
+
 def ensure_agent_plaintext_password_column() -> None:
     """
     Add `agents.plaintext_password` on existing DBs.

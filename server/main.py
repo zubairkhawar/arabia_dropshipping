@@ -22,6 +22,7 @@ from database import (
     ensure_tenant_openai_api_key_column,
     ensure_user_avatar_url_column,
     ensure_agent_plaintext_password_column,
+    ensure_agent_accepting_chats_column,
     ensure_tenant_agent_management_columns,
     ensure_message_enhancements,
     ensure_dm_team_message_metadata_json,
@@ -160,6 +161,7 @@ async def lifespan(app: FastAPI):
     ensure_tenant_openai_api_key_column()
     ensure_user_avatar_url_column()
     ensure_agent_plaintext_password_column()
+    ensure_agent_accepting_chats_column()
     ensure_tenant_agent_management_columns()
     ensure_message_enhancements()
     ensure_dm_team_message_metadata_json()

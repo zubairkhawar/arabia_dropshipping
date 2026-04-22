@@ -2332,49 +2332,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 store.id,
             )
         elif assign_result.agent_id is None and assign_result.reason == "no_available_agent":
-            _meta_h = (
-                conversation.conversation_metadata
-                if isinstance(conversation.conversation_metadata, dict)
-                else {}
-            )
-            _rh_h = format_recent_context_hint_for_prompt(_meta_h)
-            extra = await bot.generate_handoff_unavailable_addon(
-                tenant_id=tenant_id,
-                language=bf_lang or detected_language,
-                channel="whatsapp",
-                customer_message=text,
-                conversation_id=conversation.id,
-                exclude_history_message_id=customer_msg.id,
-                recent_context_hint=_rh_h,
-                memory_context=memory_block,
-                customer_context=customer_ctx,
-                bot_flow=flow.merge_metadata.get("bot_flow")
-                if isinstance(flow.merge_metadata, dict)
-                else None,
-            )
-            if (extra or "").strip():
-                reply_text = f"{(reply_text or '').strip()}\n\n{extra.strip()}".strip()
-            else:
-                fb = resolve_bot_template(bf_lang or detected_language, "handoff_unavailable")
-                if fb:
-                    schedule_line = ""
-                    sched = (
-                        db.query(TenantSchedule)
-                        .filter(TenantSchedule.tenant_id == tenant_id)
-                        .first()
-                    )
-                    if sched and sched.working_days and sched.start_time and sched.end_time:
-                        schedule_line = format_tenant_schedule_line_for_handoff(
-                            bf_lang or detected_language,
-                            sched.working_days,
-                            sched.start_time,
-                            sched.end_time,
-                        )
-                    try:
-                        fb = fb.format(schedule=schedule_line)
-                    except (KeyError, IndexError):
-                        fb = fb.replace("{schedule}", schedule_line)
-                    reply_text = f"{(reply_text or '').strip()}\n\n{fb}".strip()
+            fb = resolve_bot_template(bf_lang or detected_language, "handoff_try_later_dropbot")
+            if fb:
+                reply_text = f"{(reply_text or '').strip()}\n\n{fb}".strip()
 
     if not (reply_text or "").strip():
         reply_text = resolve_bot_template(bf_lang or detected_language, "fallback")

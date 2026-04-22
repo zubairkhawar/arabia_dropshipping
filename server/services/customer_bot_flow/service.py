@@ -2994,6 +2994,13 @@ def _any_agent_available(db: Session, tenant_id: int, team: Optional[str] = None
     return any_agent_available(db, tenant_id, team=team)
 
 
+def _any_online_agent_for_handoff(db: Session, tenant_id: int, team: Optional[str] = None) -> bool:
+    """True if at least one agent is online and accepting chats (ignores load)."""
+    from services.agent_routing_service.api import any_online_agent_accepts_handoffs  # noqa: PLC0415
+
+    return any_online_agent_accepts_handoffs(db, tenant_id, team=team)
+
+
 def _build_handoff_unavailable_reply(db: Session, tenant_id: int, lang: str) -> str:
     """
     Return the fully-formatted handoff_unavailable message with an optional schedule line.
@@ -3694,9 +3701,8 @@ async def process_customer_bot_message(
             team = exp_team or TEAM_BEGINNER
         else:
             team = TEAM_NEW_CUSTOMER
-        # Check agent availability BEFORE saying "connecting" so we never enter
-        # the awaiting_agent retry loop when no one is online.
-        if not _any_agent_available(db, tenant_id, team=team):
+        # Check for at least one online agent before "connecting" (capacity may be full → queue).
+        if not _any_online_agent_for_handoff(db, tenant_id, team=team):
             nf = {**flow, "step": "conversational", "intro_shown": True, "lang": flow_lang}
             return save(nf, _build_handoff_unavailable_reply(db, tenant_id, flow_lang), skip_api=True)
         f = {
@@ -4799,7 +4805,7 @@ async def process_customer_bot_message(
                 else TEAM_NEW_CUSTOMER
             )
         )
-        if not _any_agent_available(db, tenant_id, team=_agt_team):
+        if not _any_online_agent_for_handoff(db, tenant_id, team=_agt_team):
             nf = {**flow, "step": "conversational", "intro_shown": True, "lang": flow_lang}
             nf.pop("pending_handoff_team", None)
             return save(nf, _build_handoff_unavailable_reply(db, tenant_id, flow_lang), skip_api=True)

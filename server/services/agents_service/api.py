@@ -92,6 +92,7 @@ class AgentOut(BaseModel):
     max_concurrent_chats: int = 5
     # Open (non-closed) customer threads currently assigned to this agent.
     live_customer_chats: int = 0
+    accepting_chats: bool = True
     can_transfer_conversations: bool = True
     # Plaintext login password, kept so tenant admins can view/share credentials
     # from the admin panel across devices. Older agents created before this feature
@@ -135,6 +136,7 @@ class AgentUpdate(BaseModel):
     full_name: Optional[str] = None
     team: Optional[str] = None
     avatar_url: Optional[str] = None
+    accepting_chats: Optional[bool] = None
     can_transfer_conversations: Optional[bool] = None
 
     @field_validator("full_name")
@@ -185,6 +187,7 @@ async def list_agents(
                 team=agent.team,
                 max_concurrent_chats=int(agent.max_concurrent_chats or 5),
                 live_customer_chats=int(count_map.get(agent.id, 0)),
+                accepting_chats=bool(getattr(agent, "accepting_chats", True)),
                 can_transfer_conversations=bool(
                     getattr(agent, "can_transfer_conversations", True)
                 ),
@@ -232,6 +235,7 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
         status="offline",
         team=payload.team,
         max_concurrent_chats=cap,
+        accepting_chats=True,
         can_transfer_conversations=True,
         plaintext_password=payload.password,
         created_at=datetime.utcnow(),
@@ -315,6 +319,7 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
         team=agent.team,
         max_concurrent_chats=int(agent.max_concurrent_chats or 5),
         live_customer_chats=live_customer_conversation_count(db, agent.id),
+        accepting_chats=bool(getattr(agent, "accepting_chats", True)),
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),
@@ -354,6 +359,18 @@ async def update_agent(
             )
         agent.can_transfer_conversations = bool(data["can_transfer_conversations"])
         del data["can_transfer_conversations"]
+    if "accepting_chats" in data:
+        if (
+            current_user is None
+            or (current_user.role or "").lower() != "admin"
+            or current_user.tenant_id != agent.tenant_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only tenant admin can change accepting_chats",
+            )
+        agent.accepting_chats = bool(data["accepting_chats"])
+        del data["accepting_chats"]
     if "email" in data:
         user.email = data["email"]
     if "full_name" in data:
@@ -383,6 +400,7 @@ async def update_agent(
         team=agent.team,
         max_concurrent_chats=int(agent.max_concurrent_chats or 5),
         live_customer_chats=live_customer_conversation_count(db, agent.id),
+        accepting_chats=bool(getattr(agent, "accepting_chats", True)),
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),
@@ -431,6 +449,7 @@ async def update_agent_password(
         team=agent.team,
         max_concurrent_chats=int(agent.max_concurrent_chats or 5),
         live_customer_chats=live_customer_conversation_count(db, agent.id),
+        accepting_chats=bool(getattr(agent, "accepting_chats", True)),
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),
@@ -623,6 +642,7 @@ async def get_me(current_user: User = Depends(get_current_user), db: Session = D
         team=agent.team,
         max_concurrent_chats=int(agent.max_concurrent_chats or 5),
         live_customer_chats=live_customer_conversation_count(db, agent.id),
+        accepting_chats=bool(getattr(agent, "accepting_chats", True)),
         can_transfer_conversations=bool(
             getattr(agent, "can_transfer_conversations", True)
         ),

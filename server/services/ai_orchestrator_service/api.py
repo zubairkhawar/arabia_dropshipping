@@ -14,7 +14,7 @@ from langchain_bot.conversation_hints import (
     format_recent_context_hint_for_prompt,
     patch_conversation_metadata_with_last_topic,
 )
-from models import Conversation, Message, Tenant, TenantSchedule
+from models import Conversation, Message, Tenant
 from services.customer_bot_flow import (
     append_handoff_agent_line,
     format_kb_reply,
@@ -24,7 +24,6 @@ from services.customer_bot_flow import (
     resolve_bot_template,
 )
 from services.customer_bot_flow.session_reset import release_agent_and_clear_bot_flow
-from services.tenant_schedule_text import format_tenant_schedule_line_for_handoff
 from services.human_handoff_intent import is_slash_reset_command
 from services.agent_portal_service.broadcast import notify_bot_handoff_assigned
 from services.agent_routing_service.api import assign_from_bot_flow
@@ -334,48 +333,9 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
                 if isinstance(bf_lang, str) and bf_lang.strip()
                 else detected_language
             )
-            _hint_meta_h = (
-                conversation.conversation_metadata
-                if conversation and isinstance(conversation.conversation_metadata, dict)
-                else {}
-            )
-            _rh_h = format_recent_context_hint_for_prompt(_hint_meta_h)
-            extra = await bot.generate_handoff_unavailable_addon(
-                tenant_id=message.tenant_id,
-                language=lang,
-                channel=(message.channel or "web").strip().lower(),
-                customer_message=message.message,
-                conversation_id=conversation.id if conversation else None,
-                recent_context_hint=_rh_h,
-                memory_context=memory_block,
-                customer_context=customer,
-                bot_flow=flow.merge_metadata.get("bot_flow")
-                if isinstance(flow.merge_metadata, dict)
-                else None,
-            )
-            if (extra or "").strip():
-                reply_text = f"{(reply_text or '').strip()}\n\n{extra.strip()}".strip()
-            else:
-                fb = resolve_bot_template(lang, "handoff_unavailable")
-                if fb:
-                    schedule_line = ""
-                    sched = (
-                        db.query(TenantSchedule)
-                        .filter(TenantSchedule.tenant_id == message.tenant_id)
-                        .first()
-                    )
-                    if sched and sched.working_days and sched.start_time and sched.end_time:
-                        schedule_line = format_tenant_schedule_line_for_handoff(
-                            lang,
-                            sched.working_days,
-                            sched.start_time,
-                            sched.end_time,
-                        )
-                    try:
-                        fb = fb.format(schedule=schedule_line)
-                    except (KeyError, IndexError):
-                        fb = fb.replace("{schedule}", schedule_line)
-                    reply_text = f"{(reply_text or '').strip()}\n\n{fb}".strip()
+            fb = resolve_bot_template(lang, "handoff_try_later_dropbot")
+            if fb:
+                reply_text = f"{(reply_text or '').strip()}\n\n{fb}".strip()
 
     if conversation:
         db.add(
