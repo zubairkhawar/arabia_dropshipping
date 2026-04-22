@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { MessageCircle, Bot, Users, CircleDot, Languages, Activity } from 'lucide-react';
+import { MessageCircle, Users, CircleDot, Languages, Activity, ArrowUpRight } from 'lucide-react';
 import { KPICard } from '@/components/cards/kpi-card';
 import { LineChartComponent } from '@/components/charts/line-chart';
 import { PieChartComponent } from '@/components/charts/pie-chart';
@@ -17,11 +17,21 @@ const TENANT_ID = 1;
 interface DashboardAnalyticsApi {
   total_conversations: number;
   total_conversations_change_percent: number;
-  ai_handled_conversations: number;
-  ai_handled_percent: number;
+  escalations_last_30_days: number;
+  escalations_period_days?: number;
   total_agents: number;
   active_agents: number;
   period_days: number;
+}
+
+function formatLanguageChartName(code: string): string {
+  const map: Record<string, string> = {
+    arabic: 'Arabic',
+    english: 'English',
+    roman_urdu: 'Roman Urdu',
+    urdu: 'Urdu',
+  };
+  return map[code] ?? code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 interface AgentActivityApi {
@@ -74,7 +84,7 @@ export default function AdminDashboard() {
         setAgentActivity(activitySeries);
         setLanguageDistribution(
           languagesData.languages.map((l) => ({
-            name: l.language,
+            name: formatLanguageChartName(l.language),
             value: Number(l.percent.toFixed(2)),
           })),
         );
@@ -96,8 +106,7 @@ export default function AdminDashboard() {
   }, [toast]);
 
   const totalConversations = dashboard?.total_conversations ?? 0;
-  const aiHandledConversations = dashboard?.ai_handled_conversations ?? 0;
-  const aiHandledPercent = dashboard?.ai_handled_percent ?? 0;
+  const escalations = dashboard?.escalations_last_30_days ?? 0;
   const totalAgents = dashboard?.total_agents ?? 0;
   const activeAgents = dashboard?.active_agents ?? 0;
   const conversationsChange = dashboard?.total_conversations_change_percent ?? 0;
@@ -124,11 +133,9 @@ export default function AdminDashboard() {
           icon={<MessageCircle className={iconClass} />}
         />
         <KPICard
-          title="AI Handled"
-          value={aiHandledConversations.toLocaleString()}
-          change={`${aiHandledPercent.toFixed(1)}% of conversations`}
-          changeType="positive"
-          icon={<Bot className={iconClass} />}
+          title="Escalations"
+          value={escalations.toLocaleString()}
+          icon={<ArrowUpRight className={iconClass} />}
         />
         <KPICard
           title="Total Agents"
@@ -140,8 +147,8 @@ export default function AdminDashboard() {
         <KPICard
           title="Active Agents"
           value={activeAgents}
-          change="Currently online"
-          changeType="positive"
+          change="Monitors real-time workforce availability (status: online)."
+          changeType="neutral"
           icon={<CircleDot className={iconClass} />}
         />
       </div>

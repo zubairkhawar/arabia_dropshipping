@@ -1,14 +1,38 @@
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, case, distinct
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, distinct
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Message, Conversation, Agent
 
 router = APIRouter()
+
+# Rolling window for “escalations” (conversations with an agent reply).
+_ESCALATION_LOOKBACK_DAYS = 30
+
+
+def _canonical_language_label(raw: Optional[str]) -> Optional[str]:
+    """
+    Normalize stored message language strings so analytics group Arabic (and
+    common aliases) into ``arabic`` alongside ``english`` and ``roman_urdu``.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
+    if not s:
+        return None
+    if s in ("ar", "ara", "arab", "arabic", "arabic_script", "ar_sa", "ar_ae"):
+        return "arabic"
+    if s in ("en", "eng", "english", "en_us", "en_gb"):
+        return "english"
+    if s in ("roman_urdu", "romanurdu", "urdu_roman", "roman_ur", "r_urdu"):
+        return "roman_urdu"
+    if s in ("ur", "urd", "urdu"):
+        return "urdu"
+    return s
 
 
 @router.get("/dashboard")
@@ -22,10 +46,9 @@ async def get_dashboard_analytics(
     Returns:
     - total_conversations (all conversations in the period)
     - total_conversations_change_percent (vs previous period)
-    - ai_handled_conversations (conversations handled entirely by AI, no agent assigned)
-    - ai_handled_percent (percentage of total conversations handled by AI)
+    - escalations_last_30_days (distinct conversations with an agent message in the last 30 days)
     - total_agents
-    - active_agents (online)
+    - active_agents (status == \"online\")
     """
     now = datetime.utcnow()
     period_start = now - timedelta(days=days)
@@ -65,22 +88,18 @@ async def get_dashboard_analytics(
             / total_conversations_prev
         ) * 100.0
 
-    # AI-handled conversations: conversations where no agent was ever assigned
-    ai_handled_conversations = (
-        db.query(func.count(Conversation.id))
+    esc_start = now - timedelta(days=_ESCALATION_LOOKBACK_DAYS)
+    escalations_last_30_days = (
+        db.query(func.count(distinct(Message.conversation_id)))
+        .join(Conversation, Message.conversation_id == Conversation.id)
         .filter(
             Conversation.tenant_id == tenant_id,
-            Conversation.agent_id.is_(None),
-            Conversation.created_at >= period_start,
-            Conversation.created_at <= now,
+            Message.sender_type == "agent",
+            Message.created_at >= esc_start,
+            Message.created_at <= now,
         )
         .scalar()
         or 0
-    )
-    ai_handled_percent = (
-        (ai_handled_conversations / total_conversations_current) * 100.0
-        if total_conversations_current > 0
-        else 0.0
     )
 
     # Agent counts
@@ -100,8 +119,8 @@ async def get_dashboard_analytics(
     return {
         "total_conversations": total_conversations_current,
         "total_conversations_change_percent": total_conversations_change_percent,
-        "ai_handled_conversations": ai_handled_conversations,
-        "ai_handled_percent": ai_handled_percent,
+        "escalations_last_30_days": int(escalations_last_30_days),
+        "escalations_period_days": _ESCALATION_LOOKBACK_DAYS,
         "total_agents": total_agents,
         "active_agents": active_agents,
         "period_days": days,
@@ -211,15 +230,29 @@ async def get_language_distribution(
         .all()
     )
 
-    total = sum(int(c) for _, c in rows) or 1
-    distribution: List[Dict[str, Any]] = []
+    merged: Dict[str, int] = {}
     for language, count in rows:
-        distribution.append(
-            {
-                "language": language,
-                "count": int(count),
-                "percent": (int(count) / total) * 100.0,
-            }
-        )
+        canon = _canonical_language_label(language)
+        if not canon:
+            continue
+        merged[canon] = merged.get(canon, 0) + int(count)
+
+    total = sum(merged.values()) or 1
+    distribution: List[Dict[str, Any]] = []
+    preferred_order = ("arabic", "english", "roman_urdu", "urdu")
+    seen: set = set()
+    for lang in preferred_order:
+        c = merged.get(lang, 0)
+        if c > 0:
+            distribution.append(
+                {"language": lang, "count": c, "percent": (c / total) * 100.0}
+            )
+            seen.add(lang)
+    for lang in sorted(k for k in merged.keys() if k not in seen):
+        c = merged[lang]
+        if c > 0:
+            distribution.append(
+                {"language": lang, "count": c, "percent": (c / total) * 100.0}
+            )
 
     return {"languages": distribution, "period_days": days}
