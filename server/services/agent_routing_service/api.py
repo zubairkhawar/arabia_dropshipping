@@ -716,6 +716,20 @@ def _get_random_available_agent(
     return random.choice(eligible)
 
 
+def any_agent_available(db: Session, tenant_id: int, team: Optional[str] = None) -> bool:
+    """
+    Return True if at least one online/busy agent with capacity exists.
+    Checks the requested team first; if none found (or no team specified), checks across all teams.
+    Used by the bot flow to decide between "connecting…" and "no agents online" messages.
+    """
+    if _get_random_available_agent(db, tenant_id, team=team) is not None:
+        return True
+    # Fall back: if there are any agents regardless of team
+    if team is not None:
+        return _get_random_available_agent(db, tenant_id, team=None) is not None
+    return False
+
+
 def perform_conversation_assignment(
     db: Session, payload: AssignRequest
 ) -> Optional[AssignResponse]:

@@ -52,7 +52,11 @@ from services.customer_bot_flow.trending_llm_runner import (
     memory_to_flow_patch,
     run_trending_llm,
 )
-from services.tenant_schedule_text import format_tenant_schedule_for_customer
+from services.tenant_schedule_text import (
+    format_tenant_schedule_for_customer,
+    format_tenant_schedule_line_for_handoff,
+)
+from services.agent_routing_service.api import any_agent_available
 try:
     from langchain_core.messages import HumanMessage, SystemMessage
 except ImportError:  # pragma: no cover — older langchain pin
@@ -1034,17 +1038,16 @@ def _empty_catalog_followups(country_code: str, mode: str, lang: str) -> List[st
 
 
 def _exit_trending_for_greeting(flow: Dict[str, Any], flow_lang: str) -> Tuple[Dict[str, Any], str]:
-    """Leave trending steps on hi/hello; keep customer_kind when set, else show new/existing greeting."""
+    """Leave trending steps on hi/hello; keep customer_kind when set, else acknowledge and go conversational."""
     nf = {**flow, "lang": flow_lang}
     for k in TRENDING_STATE_KEYS:
         nf.pop(k, None)
     nf["step"] = "conversational"
+    nf["intro_shown"] = True
     if flow.get("customer_kind"):
         return nf, _t(flow_lang, MSGS["hello_ack"])
-    nf["step"] = "awaiting_customer_type"
-    nf["intro_shown"] = True
     nf["customer_kind"] = None
-    return nf, _t(flow_lang, MSGS["greeting"])
+    return nf, _t(flow_lang, MSGS["hello_ack"])
 
 
 def _parse_trending_category(text: str) -> Optional[str]:
@@ -1694,7 +1697,7 @@ def _needs_account_verification(flow: Dict[str, Any]) -> bool:
 
 def _reset_bot_flow(lang_code: str) -> Dict[str, Any]:
     return {
-        "step": "awaiting_customer_type",
+        "step": "conversational",
         "intro_shown": True,
         "lang": lang_code,
         "verified": False,
@@ -3110,6 +3113,28 @@ class BotFlowResult:
     support boilerplate while we're still inside a trending conversation."""
 
 
+def _build_handoff_unavailable_reply(db: Session, tenant_id: int, lang: str) -> str:
+    """
+    Return the fully-formatted handoff_unavailable message with an optional schedule line.
+    Used when we know up-front that no agents are online so we can skip the 'connecting…' loop.
+    """
+    template = _t(lang, MSGS["handoff_unavailable"])
+    schedule_line = ""
+    sched = (
+        db.query(TenantSchedule)
+        .filter(TenantSchedule.tenant_id == tenant_id)
+        .first()
+    )
+    if sched and sched.working_days and sched.start_time and sched.end_time:
+        schedule_line = format_tenant_schedule_line_for_handoff(
+            lang, sched.working_days, sched.start_time, sched.end_time
+        )
+    try:
+        return template.format(schedule=schedule_line)
+    except (KeyError, IndexError):
+        return template.replace("{schedule}", schedule_line)
+
+
 async def process_customer_bot_message(
     *,
     db: Session,
@@ -3672,6 +3697,11 @@ async def process_customer_bot_message(
             team = exp_team or TEAM_BEGINNER
         else:
             team = TEAM_NEW_CUSTOMER
+        # Check agent availability BEFORE saying "connecting" so we never enter
+        # the awaiting_agent retry loop when no one is online.
+        if not any_agent_available(db, tenant_id, team=team):
+            nf = {**flow, "step": "conversational", "intro_shown": True, "lang": flow_lang}
+            return save(nf, _build_handoff_unavailable_reply(db, tenant_id, flow_lang), skip_api=True)
         f = {
             **flow,
             "step": "awaiting_agent",
@@ -4733,6 +4763,20 @@ async def process_customer_bot_message(
         )
 
     if step == "awaiting_agent":
+        # Re-check agent availability on every message so we stop looping if no one comes online.
+        _agt_team = (
+            flow.get("pending_handoff_team")
+            or (
+                (flow.get("experience_team") or TEAM_BEGINNER)
+                if flow.get("verified")
+                else TEAM_NEW_CUSTOMER
+            )
+        )
+        if not any_agent_available(db, tenant_id, team=_agt_team):
+            nf = {**flow, "step": "conversational", "intro_shown": True, "lang": flow_lang}
+            nf.pop("pending_handoff_team", None)
+            return save(nf, _build_handoff_unavailable_reply(db, tenant_id, flow_lang), skip_api=True)
+
         if not wants_human_agent(text) and is_conversational_acknowledgment(text):
             skip = not flow.get("verified")
             return ai_forward(

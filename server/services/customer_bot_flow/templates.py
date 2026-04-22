@@ -77,8 +77,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "🔹 Orders / Store Setup\n"
             "🔹 Local & China Sourcing\n"
             "🔹 Store Creation & Marketing Services\n\n"
-            "Just type your choice, and I'll take care of the rest 🙂\n\n"
-            "**1** — New customer · **2** — Existing customer · or type any topic above."
+            "Just type your choice, and I'll take care of the rest 🙂"
         ),
         "arabic": (
             "مرحبًا 👋 أهلاً بك في ArabiaDropshipping!\n\n"
@@ -94,8 +93,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "🔹 الطلبات / إعداد المتجر\n"
             "🔹 التوريد المحلي والصين\n"
             "🔹 إنشاء المتجر وخدمات التسويق\n\n"
-            "اكتب اختيارك فقط، وسأتولى الباقي 🙂\n\n"
-            "**1** — عميل جديد · **2** — عميل حالي · أو اكتب أي موضوع من القائمة."
+            "اكتب اختيارك فقط، وسأتولى الباقي 🙂"
         ),
         "roman_urdu": (
             "Hey 👋 ArabiaDropshipping mein khushamdeed!\n\n"
@@ -111,8 +109,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "🔹 Orders / Store Setup\n"
             "🔹 Local & China Sourcing\n"
             "🔹 Store Creation & Marketing Services\n\n"
-            "Apni pasand likh dein, baaki main dekh loonga 🙂\n\n"
-            "**1** — Naya customer · **2** — Pehle se customer · ya upar koi topic likhein."
+            "Apni pasand likh dein, baaki main dekh loonga 🙂"
         ),
     },
     "new_customer_welcome": {
@@ -140,8 +137,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "🔹 Orders / Store Setup\n"
             "🔹 Local & China Sourcing\n"
             "🔹 Store Creation & Marketing Services\n\n"
-            "Just type your choice, and I'll take care of the rest 🙂\n\n"
-            "**1** — New customer · **2** — Existing customer · or type any topic above."
+            "Just type your choice, and I'll take care of the rest 🙂"
         ),
         "arabic": (
             "مرحبًا 👋 أهلاً بك في ArabiaDropshipping!\n\n"
@@ -157,8 +153,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "🔹 الطلبات / إعداد المتجر\n"
             "🔹 التوريد المحلي والصين\n"
             "🔹 إنشاء المتجر وخدمات التسويق\n\n"
-            "اكتب اختيارك فقط، وسأتولى الباقي 🙂\n\n"
-            "**1** — عميل جديد · **2** — عميل حالي · أو اكتب أي موضوع من القائمة."
+            "اكتب اختيارك فقط، وسأتولى الباقي 🙂"
         ),
         "roman_urdu": (
             "Hey 👋 ArabiaDropshipping mein khushamdeed!\n\n"
@@ -174,8 +169,7 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "🔹 Orders / Store Setup\n"
             "🔹 Local & China Sourcing\n"
             "🔹 Store Creation & Marketing Services\n\n"
-            "Apni pasand likh dein, baaki main dekh loonga 🙂\n\n"
-            "**1** — Naya customer · **2** — Pehle se customer · ya upar koi topic likhein."
+            "Apni pasand likh dein, baaki main dekh loonga 🙂"
         ),
     },
     "order_verify_intro": {
