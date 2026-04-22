@@ -528,6 +528,18 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     [inboxMetaByConvId],
   );
 
+  // Refresh the conversation list whenever the WebSocket (re)connects — ensures
+  // conversations added during a disconnect gap are shown without needing a manual refresh.
+  useEffect(() => {
+    if (!isAgentPortal) return;
+    return subscribe((msg) => {
+      if (msg.type !== 'portal_connected') return;
+      queueMicrotask(() => {
+        void refreshConversations();
+      });
+    });
+  }, [subscribe, refreshConversations, isAgentPortal]);
+
   useEffect(() => {
     return subscribe((msg) => {
       const convId = msg.conversation_id;
@@ -687,7 +699,8 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
 
       const aid = currentAgentId ?? readAuthAgentId();
       if (!aid) {
-        setConversations([]);
+        // Agent ID not yet available (SSR/hydration race) — skip fetch but don't wipe
+        // existing conversations so the list doesn't flash empty on reconnect.
         setIsLoading(false);
         return;
       }

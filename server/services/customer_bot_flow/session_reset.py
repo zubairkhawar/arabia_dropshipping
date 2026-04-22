@@ -25,7 +25,10 @@ def normalize_bot_flow_after_human_handoff_end(conversation: Conversation) -> No
     raw = conversation.conversation_metadata
     md: Dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
     bf = md.get(BOT_FLOW_KEY)
-    if not isinstance(bf, dict) or not bf:
+    if not isinstance(bf, dict):
+        # If bot_flow key is absent or non-dict, write a fresh conversational state.
+        md[BOT_FLOW_KEY] = {"step": "conversational"}
+        conversation.conversation_metadata = md
         return
     new_bf = dict(bf)
     new_bf["step"] = "conversational"

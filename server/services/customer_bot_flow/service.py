@@ -3663,8 +3663,10 @@ async def process_customer_bot_message(
         nf = _reset_bot_flow(flow_lang)
         return save(nf, _t(flow_lang, MSGS["greeting"]), skip_api=False)
 
-    # Global handoff: any step (incl. verification) when user asks for a human agent
-    if wants_human_agent(text):
+    # Global handoff: any step (incl. verification) when user asks for a human agent.
+    # Suppressed on the first turn after an agent closes the chat so the bot can respond
+    # before potentially re-routing again on the next turn.
+    if wants_human_agent(text) and not suppress_escalation_after_agent_close:
         exp_team = flow.get("experience_team")
         if flow.get("verified"):
             team = exp_team or TEAM_BEGINNER
