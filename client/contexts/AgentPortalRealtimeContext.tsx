@@ -13,6 +13,7 @@ import React, {
 
 import { useAgents } from '@/contexts/AgentsContext';
 import {
+  AGENT_PORTAL_IDLE_OFFLINE_KEY,
   AGENT_PORTAL_PREFERS_OFFLINE_KEY,
   readAuthAgentId,
 } from '@/lib/agent-session-storage';
@@ -60,7 +61,7 @@ function parseUnread(msg: Record<string, unknown>): AgentPortalUnread | null {
 }
 
 export function AgentPortalRealtimeProvider({ children }: { children: ReactNode }) {
-  const { setAgentStatus } = useAgents();
+  const { setAgentStatus, getCurrentAgent } = useAgents();
   const [unread, setUnread] = useState<AgentPortalUnread>(defaultUnread);
   const listenersRef = useRef(new Set<PortalListener>());
   const wsRef = useRef<WebSocket | null>(null);
@@ -126,6 +127,7 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
     const sendHeartbeat = () => {
       if (document.visibilityState !== 'visible') return;
       if (sessionStorage.getItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY) === '1') return;
+      if (sessionStorage.getItem(AGENT_PORTAL_IDLE_OFFLINE_KEY) === '1') return;
       const id = readAuthAgentId();
       if (!id) return;
       void fetch(`${API_BASE}/api/routing/agents/${id}/heartbeat`, {
@@ -143,6 +145,67 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
       window.clearInterval(intervalTimer);
     };
   }, []);
+
+  // Auto-offline after inactivity (visible tab) or a long backgrounded tab, so attendance
+  // does not stay "online" when the agent has walked away.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const token = localStorage.getItem('auth_token');
+    const role = (localStorage.getItem('auth_role') || '').toLowerCase();
+    if (!token || role !== 'agent') return;
+
+    const INACTIVITY_MS = 15 * 60 * 1000;
+    const HIDDEN_MS = 30 * 60 * 1000;
+    const lastActivityRef = { current: Date.now() };
+    let hiddenSince: number | null = null;
+
+    const bump = () => {
+      lastActivityRef.current = Date.now();
+    };
+    const passive = { passive: true } as AddEventListenerOptions;
+    window.addEventListener('pointerdown', bump, passive);
+    window.addEventListener('keydown', bump);
+    window.addEventListener('wheel', bump, passive);
+
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenSince = Date.now();
+      } else {
+        hiddenSince = null;
+        lastActivityRef.current = Date.now();
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+
+    const maybeIdleOffline = () => {
+      if (sessionStorage.getItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY) === '1') return;
+      const id = readAuthAgentId();
+      if (!id) return;
+      const me = getCurrentAgent();
+      if (!me || (me.status !== 'online' && me.status !== 'busy')) return;
+
+      const now = Date.now();
+      if (document.visibilityState === 'hidden' && hiddenSince != null && now - hiddenSince >= HIDDEN_MS) {
+        sessionStorage.setItem(AGENT_PORTAL_IDLE_OFFLINE_KEY, '1');
+        void setAgentStatus(id, 'offline');
+        hiddenSince = null;
+        return;
+      }
+      if (document.visibilityState === 'visible' && now - lastActivityRef.current >= INACTIVITY_MS) {
+        sessionStorage.setItem(AGENT_PORTAL_IDLE_OFFLINE_KEY, '1');
+        void setAgentStatus(id, 'offline');
+      }
+    };
+
+    const intervalTimer = window.setInterval(maybeIdleOffline, 30_000);
+    return () => {
+      window.clearInterval(intervalTimer);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pointerdown', bump);
+      window.removeEventListener('keydown', bump);
+      window.removeEventListener('wheel', bump);
+    };
+  }, [getCurrentAgent, setAgentStatus]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -173,6 +236,7 @@ export function AgentPortalRealtimeProvider({ children }: { children: ReactNode 
         if (typeof window === 'undefined') return;
         const sync = () => {
           if (sessionStorage.getItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY) === '1') return;
+          if (sessionStorage.getItem(AGENT_PORTAL_IDLE_OFFLINE_KEY) === '1') return;
           const id = readAuthAgentId();
           if (id) void setAgentStatus(id, 'online');
         };

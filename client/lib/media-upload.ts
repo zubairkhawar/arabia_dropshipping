@@ -48,7 +48,7 @@ export type MediaMetaPayload = Record<string, unknown>;
 
 /** Upload a browser attachment (blob/data URL) to R2; returns metadata for message_metadata JSON. */
 export async function uploadAttachmentToR2(att: {
-  type: 'photo' | 'voice' | 'file';
+  type: 'photo' | 'voice' | 'file' | 'video';
   name: string;
   url: string;
   durationSeconds?: number;
@@ -57,7 +57,13 @@ export async function uploadAttachmentToR2(att: {
   const blob = await res.blob();
   const ct =
     blob.type ||
-    (att.type === 'voice' ? 'audio/webm' : att.type === 'photo' ? 'image/jpeg' : 'application/octet-stream');
+    (att.type === 'voice'
+      ? 'audio/webm'
+      : att.type === 'photo'
+        ? 'image/jpeg'
+        : att.type === 'video'
+          ? 'video/mp4'
+          : 'application/octet-stream');
   const signType = att.type === 'photo' ? 'image' : att.type === 'voice' ? 'voice' : 'file';
   const sign = await signMediaUpload({
     type: signType,
@@ -66,13 +72,15 @@ export async function uploadAttachmentToR2(att: {
     durationSeconds: att.durationSeconds,
   });
   await putToSignedUrl(sign.upload_url, blob, ct);
+  const storedType =
+    signType === 'image' ? 'image' : signType === 'voice' ? 'voice' : att.type === 'video' ? 'video' : 'file';
   const meta: MediaMetaPayload = {
-    type: signType === 'image' ? 'image' : signType === 'voice' ? 'voice' : 'file',
+    type: storedType,
     object_key: sign.object_key,
     mime_type: ct,
     size_bytes: blob.size,
   };
-  if (att.type === 'file' || att.type === 'photo') meta.filename = att.name;
+  if (att.type === 'file' || att.type === 'photo' || att.type === 'video') meta.filename = att.name;
   if (att.type === 'voice' && typeof att.durationSeconds === 'number') {
     meta.duration_seconds = att.durationSeconds;
   }

@@ -431,9 +431,59 @@ def _message_dict_for_ws(db: Session, m: Message) -> Dict[str, Any]:
     return _inbox_message_api_dict(m, conv, rec, reply_row)
 
 
+_MEDIA_CAPTION_MIN_LEN = 12
+
+
+def _wa_inbound_substantive_caption(inbound: Dict[str, Any], kind: str) -> Optional[str]:
+    """Long enough caption → continue to normal bot/LLM flow with this text (media still stored)."""
+    if kind not in ("image", "document", "video"):
+        return None
+    cap = (inbound.get("caption") or "").strip()
+    if len(cap) >= _MEDIA_CAPTION_MIN_LEN:
+        return cap
+    return None
+
+
+def _bot_decline_text_for_whatsapp_media(kind: str, language: str) -> str:
+    """Version 1: text-only assistant; media is stored for agents but not analyzed by the bot."""
+    lk = (language or "english").strip().lower()
+    en = {
+        "image": (
+            "Thanks for the image. I'm a text-based assistant. Please describe what's in the image "
+            "or ask your question in words."
+        ),
+        "video": (
+            "I can't watch videos. Please describe the video content or send a picture."
+        ),
+        "audio": (
+            "I can't listen to voice notes. Please type your message."
+        ),
+        "document": (
+            "I can't open documents. Please copy and paste the important text or describe the issue."
+        ),
+    }
+    ar = {
+        "image": "شكرًا على الصورة. أعمل بالنص فقط. يُرجى وصف الصورة أو طرح سؤالك كتابةً.",
+        "video": "لا أستطيع مشاهدة الفيديو. يُرجى وصف المحتوى أو إرسال صورة.",
+        "audio": "لا أستطيع الاستماع إلى الرسائل الصوتية. يُرجى كتابة رسالتك.",
+        "document": "لا أستطيع فتح المستندات. يُرجى نسخ النص المهم هنا أو وصف المشكلة.",
+    }
+    ur = {
+        "image": "Tasveer ke liye shukriya — main sirf text par kaam karta hoon. Meharbani kar ke image mein kya hai ya apna sawal lafzon mein likhein.",
+        "video": "Main video nahi dekh sakta. Video ka mukhtasar bayaan likh dein ya tasveer bhej dein.",
+        "audio": "Main voice note nahi sun sakta. Apna sawal type kar dein.",
+        "document": "Main documents nahi khol sakta. Zaroori text yahan paste kar dein ya masla mukhtasar likhein.",
+    }
+    if lk == "arabic":
+        return ar.get(kind, ar["image"])
+    if lk in ("roman_urdu", "urdu", "roman urdu"):
+        return ur.get(kind, ur["image"])
+    return en.get(kind, en["image"])
+
+
 def _parse_meta_whatsapp_inbound(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Parse Meta webhook: first inbound user message as text, image, or audio.
+    Parse Meta webhook: first inbound user message as text, image, audio, video, or document.
     """
     if payload.get("object") != "whatsapp_business_account":
         return None
@@ -489,16 +539,30 @@ def _parse_meta_whatsapp_inbound(payload: Dict[str, Any]) -> Optional[Dict[str, 
                         "media_id": str(mid),
                         "duration_seconds": duration_seconds,
                     }
+                if mtype == "video":
+                    vid = msg.get("video") or {}
+                    mid = vid.get("id")
+                    if not mid:
+                        continue
+                    cap = (vid.get("caption") or "") if isinstance(vid.get("caption"), str) else ""
+                    return {
+                        **base,
+                        "kind": "video",
+                        "media_id": str(mid),
+                        "caption": cap,
+                    }
                 if mtype == "document":
                     doc = msg.get("document") or {}
                     mid = doc.get("id")
                     if not mid:
                         continue
+                    cap = (doc.get("caption") or "") if isinstance(doc.get("caption"), str) else ""
                     return {
                         **base,
                         "kind": "document",
                         "media_id": str(mid),
                         "filename": str(doc.get("filename") or "File"),
+                        "caption": cap,
                     }
                 if mtype == "reaction":
                     rxn = msg.get("reaction") or {}
@@ -1119,6 +1183,8 @@ async def send_message(
             content_stripped = "Image"
         elif mt == "voice":
             content_stripped = "Voice message"
+        elif mt == "video":
+            content_stripped = "Video"
         elif mt == "file":
             content_stripped = (meta_to_store.get("filename") if meta_to_store else None) or "Attachment"
         else:
@@ -1815,62 +1881,6 @@ async def delete_inbox_for_me(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.delete("/messages/{message_id}/for-everyone", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_inbox_for_everyone(
-    message_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    m = db.query(Message).filter(Message.id == message_id).first()
-    if not m:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
-    conv = db.query(Conversation).filter(Conversation.id == m.conversation_id).first()
-    if not conv or conv.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
-    if m.deleted_for_everyone_at:
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-    role = (current_user.role or "").lower()
-    ag = (
-        db.query(Agent)
-        .filter(Agent.user_id == current_user.id, Agent.tenant_id == conv.tenant_id)
-        .first()
-    )
-    allowed = False
-    if role == "admin":
-        allowed = True
-    elif ag and m.sender_type == "agent" and m.sender_id == ag.id:
-        if (datetime.utcnow() - m.created_at).total_seconds() <= 300:
-            allowed = True
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete this message for everyone"
-        )
-    prev_meta = m.message_metadata or {}
-    ok = prev_meta.get("object_key")
-    if isinstance(ok, str) and ok:
-        delete_object(ok)
-    prev = m.content or ""
-    meta = dict(prev_meta)
-    meta["deleted_original_content"] = prev
-    m.message_metadata = meta
-    m.content = "[Message deleted]"
-    m.deleted_for_everyone_at = datetime.utcnow()
-    db.add(m)
-    db.commit()
-    if conv.agent_id:
-        await push_inbox_sync_event(
-            db,
-            conv.tenant_id,
-            conv.agent_id,
-            {
-                "type": "MESSAGE_DELETED",
-                "conversation_id": conv.id,
-                "message_id": m.id,
-            },
-        )
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
 @router.get("/whatsapp/webhook")
 async def whatsapp_webhook_verify(
     hub_mode: Optional[str] = Query(None, alias="hub.mode"),
@@ -2006,15 +2016,25 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                         msg_meta["duration_seconds"] = d
         except Exception:
             logger.exception("Inbound WhatsApp audio download/R2 failed")
-    elif kind == "document":
-        text = (inbound.get("filename") or "File").strip() or "File"
+    elif kind == "video":
+        cap = (inbound.get("caption") or "").strip()
+        text = cap or "Video"
         try:
             wa_dl = MetaWhatsAppClient()
             if wa_dl.is_configured():
                 raw, mime = await wa_dl.download_media(inbound["media_id"])
-                msg_meta = store_inbound_whatsapp_media(raw, "audio", mime)
+                msg_meta = store_inbound_whatsapp_media(raw, "video", mime)
+        except Exception:
+            logger.exception("Inbound WhatsApp video download/R2 failed")
+    elif kind == "document":
+        cap = (inbound.get("caption") or "").strip()
+        text = cap or (inbound.get("filename") or "File").strip() or "File"
+        try:
+            wa_dl = MetaWhatsAppClient()
+            if wa_dl.is_configured():
+                raw, mime = await wa_dl.download_media(inbound["media_id"])
+                msg_meta = store_inbound_whatsapp_media(raw, "document", mime)
                 if isinstance(msg_meta, dict):
-                    msg_meta["type"] = "file"
                     msg_meta["filename"] = str(inbound.get("filename") or "File")
         except Exception:
             logger.exception("Inbound WhatsApp document download/R2 failed")
@@ -2089,16 +2109,23 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 "skipped": "human_agent",
                 "reply_text": "",
                 "language": detected_language,
-                "escalate": False,
                 "meta_response": None,
             }
 
-    if kind in {"image", "audio", "document"}:
-        detected_language = await orchestrator.detect_language(text)
-        unsupported_text = (
-            "I can only handle text messages right now. "
-            "For images, files, or voice notes, please talk to support by choosing option 3."
+    media_decline_only = False
+    if kind in ("image", "audio", "document", "video"):
+        cap_use = _wa_inbound_substantive_caption(inbound, kind)
+        if cap_use:
+            text = cap_use
+        else:
+            media_decline_only = True
+
+    if media_decline_only:
+        lang_probe = {"image": "photo", "video": "video", "audio": "voice", "document": "file"}.get(
+            kind, "message"
         )
+        detected_language = await orchestrator.detect_language(lang_probe)
+        decline_text = _bot_decline_text_for_whatsapp_media(kind, detected_language)
         customer_msg = Message(
             conversation_id=conversation.id,
             content=text,
@@ -2110,7 +2137,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         )
         ai_msg = Message(
             conversation_id=conversation.id,
-            content=unsupported_text,
+            content=decline_text,
             sender_type="ai",
             sender_id=None,
             language=detected_language,
@@ -2137,20 +2164,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         client = MetaWhatsAppClient()
         if client.is_configured():
             try:
-                wa_response = await client.send_text_message(to_phone=from_phone, text=unsupported_text)
+                wa_response = await client.send_text_message(to_phone=from_phone, text=decline_text)
                 ai_msg.wa_delivered_at = datetime.utcnow()
                 db.add(ai_msg)
                 db.commit()
                 db.refresh(ai_msg)
             except Exception:
-                logger.exception("WhatsApp unsupported-media reply failed (conversation_id=%s)", conversation.id)
+                logger.exception("WhatsApp media-decline reply failed (conversation_id=%s)", conversation.id)
                 wa_response = {"error": "meta_send_failed"}
         else:
             wa_response = {"error": "meta_not_configured"}
         return {
             "status": "ok",
             "conversation_id": conversation.id,
-            "reply_text": unsupported_text,
+            "reply_text": decline_text,
             "language": detected_language,
             "escalate": False,
             "meta_response": wa_response,

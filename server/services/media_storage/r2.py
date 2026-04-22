@@ -16,7 +16,9 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB (generic agent uploads)
+# WhatsApp Business API allows larger inbound video; keep inbound separate from trending uploads.
+_MAX_WA_INBOUND_BYTES = 18 * 1024 * 1024  # 18 MB (typical WA video cap ~16 MB + headroom)
 
 
 def is_r2_configured() -> bool:
@@ -149,20 +151,31 @@ def guess_ext_from_mime(mime: Optional[str]) -> str:
 
 def store_inbound_whatsapp_media(body: bytes, wa_kind: str, mime: Optional[str]) -> Optional[Dict[str, Any]]:
     """
-    Upload bytes from WhatsApp to R2. wa_kind is 'image' or 'audio'.
+    Upload bytes from WhatsApp to R2.
+
+    ``wa_kind``: ``image`` | ``audio`` | ``video`` | ``document`` (alias ``file``).
     Returns metadata dict with object_key, type, mime_type, size_bytes or None.
     """
-    if not body or len(body) > _MAX_UPLOAD_BYTES:
+    if not body or len(body) > _MAX_WA_INBOUND_BYTES:
         return None
     if not is_r2_configured():
         return None
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     uid = uuid.uuid4().hex
     ext = guess_ext_from_mime(mime)
-    if wa_kind == "image":
+    kind = (wa_kind or "audio").lower()
+    if kind == "image":
         key = f"images/wa/{day}/{uid}{ext}"
         typ = "image"
         ct = mime or "image/jpeg"
+    elif kind == "video":
+        key = f"video/wa/{day}/{uid}{ext}"
+        typ = "video"
+        ct = mime or "video/mp4"
+    elif kind in ("file", "document"):
+        key = f"files/wa/{day}/{uid}{ext}"
+        typ = "file"
+        ct = mime or "application/octet-stream"
     else:
         key = f"voice/wa/{day}/{uid}{ext}"
         typ = "voice"
@@ -200,7 +213,7 @@ def enrich_metadata_for_api(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str
     out = dict(meta)
     key = out.get("object_key")
     typ = out.get("type")
-    if key and typ in ("image", "voice", "file") and is_r2_configured():
+    if key and typ in ("image", "voice", "file", "video") and is_r2_configured():
         try:
             out["media_url"] = presign_get(str(key), settings.r2_presign_get_seconds)
         except Exception as e:

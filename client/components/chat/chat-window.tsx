@@ -39,6 +39,7 @@ import {
   Pause,
   Pencil,
   Search,
+  Video,
 } from 'lucide-react';
 import { useAgentProfile } from '@/contexts/AgentProfileContext';
 import { useInboxConversations } from '@/contexts/InboxConversationsContext';
@@ -59,8 +60,15 @@ import {
 } from '@/lib/tenant-time';
 import { uploadAttachmentToR2 } from '@/lib/media-upload';
 
+let _inboxOptimisticSeq = 0;
+
+/** Negative client-only ids for inbox optimistic sends — avoids colliding with real DB ids (e.g. reactions targeting the wrong row). */
+function nextInboxOptimisticClientMessageId(): number {
+  return -((Date.now() << 10) | ((_inboxOptimisticSeq++) & 0x3ff));
+}
+
 interface MessageAttachment {
-  type: 'file' | 'photo' | 'voice';
+  type: 'file' | 'photo' | 'voice' | 'video';
   name: string;
   url: string;
   durationSeconds?: number;
@@ -522,6 +530,8 @@ export function ChatWindow({
       if (md && typeof md === 'object' && typeof md.media_url === 'string') {
         const url = md.media_url;
         if (md.type === 'image') attachment = { type: 'photo' as const, name: 'Image', url };
+        else if (md.type === 'video')
+          attachment = { type: 'video' as const, name: 'Video', url };
         else if (md.type === 'voice')
           attachment = {
             type: 'voice' as const,
@@ -551,7 +561,11 @@ export function ChatWindow({
                 senderName: parent.senderName,
                 content:
                   parentParsed.text ||
-                  (parentParsed.attachment?.type === 'voice' ? 'Voice message' : parent.content),
+                  (parentParsed.attachment?.type === 'voice'
+                    ? 'Voice message'
+                    : parentParsed.attachment?.type === 'video'
+                      ? 'Video'
+                      : parent.content),
               }
             : undefined,
         editedAt: m.editedAt,
@@ -943,6 +957,8 @@ export function ChatWindow({
         const url = md.media_url;
         if (md.type === 'image')
           attachment = { type: 'photo' as const, name: 'Image', url };
+        else if (md.type === 'video')
+          attachment = { type: 'video' as const, name: 'Video', url };
         else if (md.type === 'voice')
           attachment = {
             type: 'voice' as const,
@@ -1471,6 +1487,7 @@ export function ChatWindow({
 
   const persistInboxReaction = async (messageId: number, emoji: string) => {
     if (!isInboxPage || isInternalChat) return;
+    if (messageId < 0) return;
     try {
       const res = await fetch(`${API_BASE}/api/messaging/messages/${messageId}/reaction`, {
         method: 'POST',
@@ -1612,6 +1629,12 @@ export function ChatWindow({
   const addReaction = (id: number, emoji: string) => {
     const target = messages.find((m) => m.id === id);
     if (!target) return;
+    if (isInboxPage && !isInternalChat && id < 0) {
+      addSystemNote('Wait until the message is saved before adding a reaction.');
+      setActiveReactionPickerId(null);
+      setActiveMessageMenuId(null);
+      return;
+    }
     const list = target.reactions ?? [];
     const withoutMe = list.filter((r) => r.userId !== reactionActorId);
     const existing = list.find((r) => r.userId === reactionActorId);
@@ -1974,14 +1997,40 @@ export function ChatWindow({
   const showChatThreadSkeleton =
     (inboxThreadSkeleton && filteredMessages.length === 0) || dmThreadSkeleton;
 
-  const sharedChatMedia = messages
-    .filter((m) => m.attachment?.type === 'photo' && m.attachment.url)
-    .map((m) => ({
-      id: `chat-media-${m.id}`,
-      name: m.attachment!.name || 'Image',
-      url: m.attachment!.url,
-      isHeic: isHeicLikeAttachment(m.attachment),
-    }));
+  type SharedChatMediaItem = {
+    id: string;
+    name: string;
+    url: string;
+    isHeic: boolean;
+    isVideo: boolean;
+  };
+  const sharedChatMedia: SharedChatMediaItem[] = messages.flatMap((m): SharedChatMediaItem[] => {
+    const att = m.attachment;
+    if (!att?.url) return [];
+    if (att.type === 'photo') {
+      return [
+        {
+          id: `chat-media-${m.id}`,
+          name: att.name || 'Image',
+          url: att.url,
+          isHeic: isHeicLikeAttachment(att),
+          isVideo: false,
+        },
+      ];
+    }
+    if (att.type === 'video') {
+      return [
+        {
+          id: `chat-media-${m.id}`,
+          name: att.name || 'Video',
+          url: att.url,
+          isHeic: false,
+          isVideo: true,
+        },
+      ];
+    }
+    return [];
+  });
 
   const sharedChatDocs = messages
     .filter((m) => m.attachment?.type === 'file' && m.attachment.url)
@@ -2110,7 +2159,8 @@ export function ChatWindow({
     ) {
       const sid = inboxConv.selectedId;
       const msgs = inboxConv.getMessages(sid);
-      const maxId = msgs.length ? Math.max(...msgs.map((m) => m.id)) : 0;
+      const positiveIds = msgs.map((m) => m.id).filter((x) => x > 0);
+      const maxId = positiveIds.length ? Math.max(...positiveIds) : 0;
       if (maxId > 0) {
         const prev = lastSyncedInboxReadRef.current;
         if (!prev || prev.convId !== sid || prev.id !== maxId) {
@@ -2237,32 +2287,7 @@ export function ChatWindow({
   }, [messageInfoId, isDmPage, isTeamChannel, isInternalChat, closeMessageInfo]);
 
   const deleteMessage = async (id: number) => {
-    if (isInboxPage && !isInternalChat) {
-      try {
-        const res = await fetch(`${API_BASE}/api/messaging/messages/${id}/for-everyone`, {
-          method: 'DELETE',
-          headers: teamChannelJsonHeaders(),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          addSystemNote(
-            typeof err.detail === 'string' ? err.detail : 'Could not delete for everyone.',
-          );
-          setActiveMessageMenuId(null);
-          return;
-        }
-        if (inboxConv?.selectedId != null) {
-          inboxConv.patchInboxMessage(inboxConv.selectedId, id, {
-            content: '[Message deleted]',
-            deletedForEveryone: true,
-          });
-        }
-      } catch {
-        addSystemNote('Could not delete for everyone.');
-        setActiveMessageMenuId(null);
-        return;
-      }
-    } else if (isInternalChat && isTeamChannel && teamId) {
+    if (isInternalChat && isTeamChannel && teamId) {
       try {
         const res = await fetch(
           `${API_BASE}/api/teams/${Number(teamId)}/channel/messages/${id}/for-everyone?tenant_id=${TENANT_ID}`,
@@ -2382,7 +2407,7 @@ export function ChatWindow({
     const convId = inboxConv.selectedId;
     inboxConv.removeInboxMessage(convId, m.id);
     const now = new Date();
-    const nextId = Date.now();
+    const nextId = nextInboxOptimisticClientMessageId();
     const im: InboxMessage = {
       id: nextId,
       content: m.content,
@@ -2509,7 +2534,10 @@ export function ChatWindow({
       addSystemNote('Voice notes from agent to customer are disabled.');
       return;
     }
-    const nextId = Math.max(0, ...messages.map((m) => m.id)) + 1;
+    const nextId =
+      isInboxPage && !isInternalChat
+        ? nextInboxOptimisticClientMessageId()
+        : Math.max(0, ...messages.map((m) => m.id)) + 1;
     const now = new Date();
     const newMsg: Message = {
       id: nextId,
@@ -2519,7 +2547,9 @@ export function ChatWindow({
           ? 'Voice message'
           : pendingAttachment?.type === 'photo'
             ? 'Image'
-            : pendingAttachment?.name || 'Attachment'),
+            : pendingAttachment?.type === 'video'
+              ? 'Video'
+              : pendingAttachment?.name || 'Attachment'),
       sender: 'agent' as const,
       senderName: showBroadcastInput ? 'Admin' : 'You',
       timestamp: formatTime12hInZone(now, timeZone),
@@ -2547,11 +2577,14 @@ export function ChatWindow({
           }
         } else if (
           pendingAttachment &&
-          (pendingAttachment.type === 'photo' || pendingAttachment.type === 'file')
+          (pendingAttachment.type === 'photo' ||
+            pendingAttachment.type === 'file' ||
+            pendingAttachment.type === 'video')
         ) {
           const att = pendingAttachment;
           const caption =
-            text.trim() || (att.type === 'photo' ? 'Image' : att.name || 'Attachment');
+            text.trim() ||
+            (att.type === 'photo' ? 'Image' : att.type === 'video' ? 'Video' : att.name || 'Attachment');
           try {
             const meta = await uploadAttachmentToR2(att);
             await sendMessageBySlug(dmSlug, caption, replyingTo?.id, meta);
@@ -2566,7 +2599,7 @@ export function ChatWindow({
               encodeDmMessagePayload({
                 text: caption,
                 attachment: {
-                  type: att.type === 'photo' ? 'photo' : 'file',
+                  type: att.type === 'photo' ? 'photo' : att.type === 'video' ? 'video' : 'file',
                   name: att.name,
                   url: dataUrl,
                 },
@@ -3691,7 +3724,8 @@ export function ChatWindow({
                     })()}
                   <div
                     className={`relative flex min-w-0 flex-col ${
-                      message.attachment?.type === 'voice'
+                      message.attachment?.type === 'voice' ||
+                      message.attachment?.type === 'video'
                         ? 'w-full max-w-[min(100%,22rem)] sm:max-w-[min(100%,26rem)]'
                         : 'max-w-[85%]'
                     } ${outgoing ? 'items-end' : 'items-start'}`}
@@ -3700,6 +3734,8 @@ export function ChatWindow({
                       className={`relative rounded-2xl px-2.5 pb-1.5 pt-2 pr-9 ${
                         message.attachment?.type === 'voice'
                           ? 'w-full min-w-[min(100%,260px)] max-w-full'
+                          : message.attachment?.type === 'video'
+                            ? 'w-full min-w-[min(100%,240px)] max-w-full'
                           : 'min-w-[8rem] max-w-message-bubble'
                       } ${getMessageStyle(message, outgoing)} ${
                         isCurrentThreadSearchHit ? 'ring-2 ring-yellow-300' : ''
@@ -3784,6 +3820,27 @@ export function ChatWindow({
                                 <FileText className="h-5 w-5 flex-shrink-0" />
                                 <span className="truncate text-sm">{message.attachment.name}</span>
                               </a>
+                            )}
+                            {message.attachment.type === 'video' && (
+                              <div className="flex flex-col gap-1.5 py-1">
+                                <video
+                                  src={message.attachment.url}
+                                  controls
+                                  playsInline
+                                  className="max-h-72 w-full rounded-lg bg-black"
+                                  preload="metadata"
+                                />
+                                <a
+                                  href={message.attachment.url}
+                                  download={message.attachment.name || 'video'}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1.5 text-xs font-medium text-[#53bdeb] hover:underline"
+                                >
+                                  <Video className="h-3.5 w-3.5 flex-shrink-0" />
+                                  Download video
+                                </a>
+                              </div>
                             )}
                             {message.attachment.type === 'voice' && (() => {
                               const totalSec = voiceTotalSec[message.id] ?? message.attachment.durationSeconds ?? 0;
@@ -4002,7 +4059,13 @@ export function ChatWindow({
                       {!readOnly && (
                         <button
                           type="button"
-                          onClick={() => setActiveReactionPickerId(message.id)}
+                          onClick={() => {
+                            if (isInboxPage && !isInternalChat && message.id < 0) {
+                              addSystemNote('Wait until the message is saved before adding a reaction.');
+                              return;
+                            }
+                            setActiveReactionPickerId(message.id);
+                          }}
                           className={`flex-shrink-0 rounded-full border p-1 transition-colors ${
                             myReaction
                               ? 'border-[#53bdeb] bg-[#e7f8ff] text-[#111b21]'
@@ -4122,6 +4185,11 @@ export function ChatWindow({
                           type="button"
                           className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
                           onClick={() => {
+                            if (isInboxPage && !isInternalChat && message.id < 0) {
+                              addSystemNote('Wait until the message is saved before replying.');
+                              setActiveMessageMenuId(null);
+                              return;
+                            }
                             setReplyingTo({
                               id: message.id,
                               senderName: message.senderName,
@@ -4136,7 +4204,14 @@ export function ChatWindow({
                         <button
                           type="button"
                           className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
-                          onClick={() => setActiveReactionPickerId(message.id)}
+                          onClick={() => {
+                            if (isInboxPage && !isInternalChat && message.id < 0) {
+                              addSystemNote('Wait until the message is saved before adding a reaction.');
+                              setActiveMessageMenuId(null);
+                              return;
+                            }
+                            setActiveReactionPickerId(message.id);
+                          }}
                         >
                           <Smile className="h-4 w-4 text-[#54656f]" />
                           React
@@ -4179,25 +4254,6 @@ export function ChatWindow({
                             Retry send
                           </button>
                         )}
-                        {isInboxPage &&
-                          !isInternalChat &&
-                          outgoing &&
-                          message.sender === 'agent' &&
-                          !message.sendFailed &&
-                          !message.deletedForEveryone &&
-                          message.content !== '[Message deleted]' && (
-                            <button
-                              type="button"
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#111b21] hover:bg-[#f0f2f5]"
-                              onClick={() => {
-                                setThreadMessageEdit({ source: 'inbox', id: message.id, text: message.content });
-                                setActiveMessageMenuId(null);
-                              }}
-                            >
-                              <Pencil className="h-4 w-4 text-[#54656f]" />
-                              Edit
-                            </button>
-                          )}
                         {isInternalChat &&
                           isDmPage &&
                           outgoing &&
@@ -4278,7 +4334,7 @@ export function ChatWindow({
                               <Trash2 className="h-4 w-4" />
                               Delete for me
                             </button>
-                            {(!isInboxPage || isInternalChat || message.sender === 'agent') && (
+                            {isInternalChat && (
                               <button
                                 type="button"
                                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-status-error hover:bg-red-50"
@@ -5236,8 +5292,27 @@ export function ChatWindow({
                           <p className="text-xs text-text-muted col-span-4">No data exists.</p>
                         ) : (
                           <>
-                            {sharedChatMedia.map((m) => (
-                              m.isHeic ? (
+                            {sharedChatMedia.map((m) =>
+                              m.isVideo ? (
+                                <button
+                                  type="button"
+                                  key={m.id}
+                                  onClick={() => window.open(m.url, '_blank', 'noopener,noreferrer')}
+                                  className="relative aspect-square overflow-hidden rounded-lg border border-border bg-black"
+                                  title={m.name}
+                                >
+                                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                                  <video
+                                    src={m.url}
+                                    className="pointer-events-none h-full w-full object-cover opacity-90"
+                                    muted
+                                    preload="metadata"
+                                  />
+                                  <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 text-[9px] font-medium text-white">
+                                    Video
+                                  </span>
+                                </button>
+                              ) : m.isHeic ? (
                                 <button
                                   type="button"
                                   key={m.id}
@@ -5258,8 +5333,8 @@ export function ChatWindow({
                                   {/* eslint-disable-next-line @next/next/no-img-element */}
                                   <img src={m.url} alt={m.name} className="w-full h-full object-cover" />
                                 </button>
-                              )
-                            ))}
+                              ),
+                            )}
                             {teamAssets
                               .filter((a) => a.asset_type === 'image')
                               .map((a) => (

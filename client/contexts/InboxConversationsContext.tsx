@@ -60,7 +60,12 @@ export interface InboxMessage {
   sendFailed?: boolean;
   /** Stored server-side (object_key, type); omit media_url — API adds signed URL when loading. */
   messageMetadata?: Record<string, unknown> | null;
-  attachment?: { type: 'photo' | 'voice' | 'file'; name: string; url: string; durationSeconds?: number };
+  attachment?: {
+    type: 'photo' | 'voice' | 'file' | 'video';
+    name: string;
+    url: string;
+    durationSeconds?: number;
+  };
   reactions?: Array<{ emoji: string; userId: string; userName: string; reactedAt: string }>;
   [key: string]: unknown;
 }
@@ -154,6 +159,8 @@ export function inboxMetaToAttachment(meta: unknown): InboxMessage['attachment']
   const url = typeof o.media_url === 'string' ? o.media_url : undefined;
   if (!url) return undefined;
   if (o.type === 'image') return { type: 'photo', name: 'Image', url };
+  if (o.type === 'video')
+    return { type: 'video', name: 'Video', url };
   if (o.type === 'voice')
     return { type: 'voice', name: 'Voice', url, durationSeconds: Number(o.duration_seconds) || 0 };
   if (o.type === 'file') return { type: 'file', name: String(o.filename || 'File'), url };
@@ -172,8 +179,11 @@ function apiMessageToInbox(
   if (!attachment && content.startsWith('data:image')) {
     attachment = { type: 'photo', name: 'Image', url: content };
     content = '';
-  } else if (!attachment && (content.startsWith('data:audio') || content.startsWith('data:video'))) {
+  } else if (!attachment && content.startsWith('data:audio')) {
     attachment = { type: 'voice', name: 'Voice', url: content };
+    content = '';
+  } else if (!attachment && content.startsWith('data:video')) {
+    attachment = { type: 'video', name: 'Video', url: content };
     content = '';
   }
   const meta = (m.message_metadata ?? undefined) as Record<string, unknown> | undefined;
@@ -216,6 +226,15 @@ function apiMessageToInbox(
         }
       : undefined,
   };
+}
+
+function compareInboxMessagesChronological(a: InboxMessage, b: InboxMessage): number {
+  const ta = a.sentAt ? Date.parse(a.sentAt) : NaN;
+  const tb = b.sentAt ? Date.parse(b.sentAt) : NaN;
+  if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
+  if (Number.isFinite(ta) && !Number.isFinite(tb)) return -1;
+  if (!Number.isFinite(ta) && Number.isFinite(tb)) return 1;
+  return a.id - b.id;
 }
 
 function toConversationStatus(status: string): ConversationStatus {
@@ -491,7 +510,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           const byId = new Map<number, InboxMessage>();
           for (const m of chunk) byId.set(m.id, m);
           for (const m of cur) byId.set(m.id, m);
-          const merged = Array.from(byId.values()).sort((a, b) => a.id - b.id);
+          const merged = Array.from(byId.values()).sort(compareInboxMessagesChronological);
           return { ...prev, [convId]: merged };
         });
         setInboxMetaByConvId((prev) => ({
@@ -526,7 +545,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           setMessagesByConvId((prev) => {
             const cur = prev[convId] || [];
             if (cur.some((x) => x.id === id)) return prev;
-            return { ...prev, [convId]: [...cur, im].sort((a, b) => a.id - b.id) };
+            return { ...prev, [convId]: [...cur, im].sort(compareInboxMessagesChronological) };
           });
           void syncInboxReadState(convId, id);
         } else {

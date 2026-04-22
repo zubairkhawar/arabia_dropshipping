@@ -11,10 +11,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
 from database import get_db
-from models import Agent, Conversation, Customer, Store, StoreAgentMapping, AgentAttendanceSession, Tenant
+from models import Agent, Conversation, Customer, Message, Store, StoreAgentMapping, AgentAttendanceSession, Tenant
 from services.auth_service.api import get_current_user
 from services.auth_service.models import User as AuthUser
-from services.customer_bot_flow import lookup_agent_display_name
+from services.customer_bot_flow import append_handoff_agent_line, lookup_agent_display_name
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 
 
@@ -154,7 +154,7 @@ async def update_agent_status(
             # Check if a session was closed within the last 30 seconds (page refresh
             # artifact: pagehide fires offline beacon, then onopen fires online again).
             # Reopen that session instead of creating a new 0-second one.
-            refresh_cutoff = now - timedelta(seconds=30)
+            refresh_cutoff = now - timedelta(minutes=3)
             recent_closed = (
                 db.query(AgentAttendanceSession)
                 .filter(
@@ -205,7 +205,102 @@ async def update_agent_status(
     db.add(agent)
     db.commit()
     db.refresh(agent)
+
+    # When an agent comes online, immediately drain any conversations that are
+    # stuck in "awaiting_agent" (customer already asked for a human but routing
+    # failed because no one was available at that moment).
+    if not was_active and is_active:
+        await _drain_pending_handoff_queue(db, agent)
+
     return agent
+
+
+async def _drain_pending_handoff_queue(db: Session, agent: Agent) -> None:
+    """
+    Assign unattended 'awaiting_agent' conversations to the newly-online agent.
+    Runs synchronously inside the status-update request so the agent's inbox
+    is populated the moment they come online — no customer message needed.
+    Also sends the customer a WhatsApp message confirming they are connected.
+    """
+    from services.agent_portal_service.broadcast import notify_bot_handoff_assigned
+
+    if not _agent_has_capacity(db, agent):
+        return
+
+    # Find all unassigned active WhatsApp conversations for this tenant where
+    # the bot flow is stuck in "awaiting_agent", oldest first.
+    pending = (
+        db.query(Conversation)
+        .filter(
+            Conversation.tenant_id == agent.tenant_id,
+            Conversation.agent_id.is_(None),
+            Conversation.status == "active",
+            Conversation.channel == "whatsapp",
+        )
+        .order_by(Conversation.updated_at.asc())
+        .all()
+    )
+
+    wa = MetaWhatsAppClient()
+    aname = lookup_agent_display_name(db, agent.id) or "Support"
+
+    for conv in pending:
+        if not _agent_has_capacity(db, agent):
+            break
+        meta = conv.conversation_metadata if isinstance(conv.conversation_metadata, dict) else {}
+        bf = meta.get("bot_flow") if isinstance(meta.get("bot_flow"), dict) else {}
+        if bf.get("step") != "awaiting_agent":
+            continue
+
+        # Assign this conversation to the agent.
+        conv.agent_id = agent.id
+        conv.updated_at = datetime.utcnow()
+        db.add(conv)
+        db.commit()
+
+        # Tell the customer they are now connected.
+        try:
+            bf_lang = bf.get("lang") or "english"
+            connected_text = append_handoff_agent_line(bf_lang, "", aname).strip()
+            if connected_text and wa.is_configured():
+                customer = db.query(Customer).filter(Customer.id == conv.customer_id).first()
+                if customer and customer.phone:
+                    greeting_msg = Message(
+                        conversation_id=conv.id,
+                        content=connected_text,
+                        sender_type="ai",
+                        sender_id=None,
+                        language=bf_lang,
+                        created_at=datetime.utcnow(),
+                    )
+                    db.add(greeting_msg)
+                    db.commit()
+                    db.refresh(greeting_msg)
+                    wa_resp = await wa.send_text_message(
+                        to_phone=str(customer.phone), text=connected_text
+                    )
+                    msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
+                    if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
+                        out_wa_id = str(msgs[0].get("id") or "").strip()
+                        if out_wa_id:
+                            greeting_msg.message_metadata = {"wa_message_id": out_wa_id}
+                    greeting_msg.wa_delivered_at = datetime.utcnow()
+                    db.add(greeting_msg)
+                    db.commit()
+        except Exception:
+            pass  # Don't let a failed WhatsApp send block the assignment
+
+        try:
+            await notify_bot_handoff_assigned(
+                db,
+                agent.tenant_id,
+                agent.id,
+                conv.id,
+                conv.customer_id,
+                conv.store_id,
+            )
+        except Exception:
+            pass  # Notification failure should not block the assignment
 
 
 @router.post("/agents/{agent_id}/heartbeat")
@@ -313,8 +408,14 @@ async def get_agent_attendance(
     )
 
     by_day: dict[str, AttendanceDayOut] = {}
+    max_session = timedelta(hours=16)
     for s in sessions:
         end_at = s.ended_at or now
+        if end_at < s.started_at:
+            end_at = s.started_at
+        capped_end = s.started_at + max_session
+        if end_at > capped_end:
+            end_at = capped_end
         duration_secs = (end_at - s.started_at).total_seconds()
         # Skip sub-minute sessions: these are almost always page-refresh artifacts
         # (pagehide fires the offline beacon before the page reloads). Only skip
@@ -328,8 +429,9 @@ async def get_agent_attendance(
             by_day[day] = AttendanceDayOut(date=day, total_minutes=0, sessions=[])
         minutes = max(0, int(duration_secs // 60))
         by_day[day].total_minutes += minutes
+        sess_end_out: Optional[datetime] = end_at if s.ended_at is not None else None
         by_day[day].sessions.append(
-            AttendanceSessionOut(start_at=s.started_at, end_at=s.ended_at)
+            AttendanceSessionOut(start_at=s.started_at, end_at=sess_end_out)
         )
 
     # Sort days chronologically (most recent first for display).

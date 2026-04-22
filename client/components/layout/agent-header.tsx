@@ -12,7 +12,11 @@ import { useNotifications } from '@/contexts/NotificationsContext';
 import type { AgentNotification } from '@/contexts/NotificationsContext';
 import { useToast } from '@/contexts/ToastContext';
 import { usePathname, useRouter } from 'next/navigation';
-import { AGENT_PORTAL_PREFERS_OFFLINE_KEY, readAuthAgentId } from '@/lib/agent-session-storage';
+import {
+  AGENT_PORTAL_IDLE_OFFLINE_KEY,
+  AGENT_PORTAL_PREFERS_OFFLINE_KEY,
+  readAuthAgentId,
+} from '@/lib/agent-session-storage';
 import { useAgentSearch } from '@/contexts/AgentSearchContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { formatCompactActivity } from '@/lib/tenant-time';
@@ -149,6 +153,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
           sessionStorage.setItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY, '1');
         } else {
           sessionStorage.removeItem(AGENT_PORTAL_PREFERS_OFFLINE_KEY);
+          sessionStorage.removeItem(AGENT_PORTAL_IDLE_OFFLINE_KEY);
         }
       }
       if (currentAgentId) {

@@ -165,6 +165,10 @@ RULES:
 - The server **pre-fetches** merchant/store data each turn and injects it below. You do not call HTTP
   APIs yourself — treat **Orders**, **Invoices**, **Customer identity**, and **Knowledge** blocks as
   the ground truth for this message (like tools that already ran).
+- **WhatsApp media (bot handling)**: Images, video, voice notes, and documents are stored for the agent
+  inbox but **not** analyzed or transcribed for you in v1. The customer receives a text-only reply asking
+  them to restate their question in writing; if they already sent a long **caption** with the media,
+  that caption may appear as their message text — answer from text only, not from the file.
 - **Orders** (Arabia-style fields): `id`, `createdon`, `items[]` (title, price, qty), `shipping_charges`,
   `profit`, address/mobile, embedded `tracking_result` when present.
 - **Invoices**: each row has `date`, `no_of_items`, `payable`, `pay_status` (Yes/No style), `order_ids[]`,
