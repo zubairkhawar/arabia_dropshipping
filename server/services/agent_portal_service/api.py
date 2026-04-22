@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, List, Optional
 
@@ -10,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import SessionLocal, get_db
-from models import Conversation, User
+from models import Agent, Conversation, User
 from services.auth_service.api import get_current_user
 from services.agent_portal_service.hub import hub
 from services.agent_portal_service.unread_compute import (
@@ -22,8 +24,57 @@ from services.store_integration_service.client import (
     StoreIntegrationClient,
     merchant_seller_scope_from_row,
 )
+from services.attendance_session_redis import (
+    attendance_redis_available,
+    delete_attendance_session_redis,
+)
+from services.broadcasts_service.broadcast_agent_lock import _close_open_attendance_sessions
+from services.messaging_service.conversation_offline_release import (
+    release_live_conversations_when_agent_went_offline,
+)
 
 router = APIRouter()
+_ws_grace_logger = logging.getLogger(__name__)
+
+AGENT_WS_OFFLINE_GRACE_SECONDS = 30
+
+
+async def _agent_ws_disconnect_grace(tenant_id: int, agent_id: int) -> None:
+    """
+    If no portal WebSocket reconnects within the grace window, mark the agent offline and
+    return assigned live chats to the bot (same as manual offline).
+    """
+    await asyncio.sleep(AGENT_WS_OFFLINE_GRACE_SECONDS)
+    if await hub.has_active_connection(tenant_id, agent_id):
+        return
+    db = SessionLocal()
+    try:
+        agent = db.query(Agent).filter(Agent.id == agent_id).first()
+        if not agent:
+            return
+        st = (agent.status or "").lower()
+        if st not in ("online", "busy"):
+            return
+        now = datetime.utcnow()
+        if attendance_redis_available():
+            delete_attendance_session_redis(agent.id)
+        _close_open_attendance_sessions(db, agent, now)
+        await release_live_conversations_when_agent_went_offline(db, agent)
+        agent.status = "offline"
+        db.add(agent)
+        db.commit()
+    except Exception:
+        _ws_grace_logger.exception("agent_ws_disconnect_grace failed (agent_id=%s)", agent_id)
+    finally:
+        db.close()
+
+
+def _schedule_agent_disconnect_grace(tenant_id: int, agent_id: int) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_agent_ws_disconnect_grace(tenant_id, agent_id))
 
 
 class UnreadSummaryOut(BaseModel):
@@ -293,3 +344,4 @@ async def agent_portal_websocket(websocket: WebSocket):
         pass
     finally:
         await hub.disconnect(websocket, tenant_id, ag_id)
+        _schedule_agent_disconnect_grace(tenant_id, ag_id)

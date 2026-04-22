@@ -18,7 +18,7 @@ from services.broadcasts_service.whatsapp_delivery import (
 )
 from services.broadcasts_service.broadcast_agent_lock import (
     broadcast_covers_now,
-    enforce_tenant_agents_offline_for_broadcast,
+    enforce_tenant_agents_offline_for_broadcast_async,
 )
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 
@@ -378,7 +378,7 @@ async def create_broadcast(
     db.refresh(b)
 
     if payload.target_ai and broadcast_covers_now(b, datetime.utcnow()):
-        if enforce_tenant_agents_offline_for_broadcast(db, payload.tenant_id):
+        if await enforce_tenant_agents_offline_for_broadcast_async(db, payload.tenant_id):
             db.commit()
             db.refresh(b)
 
@@ -523,7 +523,7 @@ async def update_broadcast(
     db.refresh(row)
 
     if bool(getattr(row, "target_ai", True)) and broadcast_covers_now(row, datetime.utcnow()):
-        if enforce_tenant_agents_offline_for_broadcast(db, int(row.tenant_id)):
+        if await enforce_tenant_agents_offline_for_broadcast_async(db, int(row.tenant_id)):
             db.commit()
             db.refresh(row)
 

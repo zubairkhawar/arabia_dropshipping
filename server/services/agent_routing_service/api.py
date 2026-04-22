@@ -284,6 +284,13 @@ async def update_agent_status(
             open_session.ended_at = now
             db.add(open_session)
 
+    if was_active and not is_active:
+        from services.messaging_service.conversation_offline_release import (
+            release_live_conversations_when_agent_went_offline,
+        )
+
+        await release_live_conversations_when_agent_went_offline(db, agent)
+
     agent.status = next_status
     if payload.max_concurrent_chats is not None:
         agent.max_concurrent_chats = payload.max_concurrent_chats

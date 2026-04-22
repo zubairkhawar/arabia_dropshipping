@@ -39,6 +39,12 @@ class AgentPortalHub:
             if not self._rooms[key]:
                 del self._rooms[key]
 
+    async def has_active_connection(self, tenant_id: int, agent_id: int) -> bool:
+        """True if this agent still has at least one portal WebSocket in the room."""
+        key = self.room_key(tenant_id, agent_id)
+        async with self._lock:
+            return bool(self._rooms.get(key))
+
     async def broadcast_json(self, tenant_id: int, agent_id: int, payload: Dict[str, Any]) -> None:
         key = self.room_key(tenant_id, agent_id)
         async with self._lock:

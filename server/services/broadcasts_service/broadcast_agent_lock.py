@@ -15,6 +15,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from models import Agent, Broadcast
+from services.messaging_service.conversation_offline_release import (
+    release_live_conversations_when_agent_went_offline,
+)
 from services.attendance_session_redis import (
     attendance_redis_available,
     delete_attendance_session_redis,
@@ -69,10 +72,10 @@ def _close_open_attendance_sessions(db: Session, agent: Agent, now: datetime) ->
         db.add(s)
 
 
-def enforce_tenant_agents_offline_for_broadcast(db: Session, tenant_id: int) -> int:
+async def enforce_tenant_agents_offline_for_broadcast_async(db: Session, tenant_id: int) -> int:
     """
-    Set all online/busy agents for the tenant to offline and close attendance.
-    Returns how many agents were changed.
+    Set all online/busy agents for the tenant to offline, close attendance, and return live
+    assigned chats to the bot. Returns how many agents were changed.
     """
     now = utc_now_naive()
     agents = (
@@ -88,6 +91,7 @@ def enforce_tenant_agents_offline_for_broadcast(db: Session, tenant_id: int) -> 
         if attendance_redis_available():
             delete_attendance_session_redis(agent.id)
         _close_open_attendance_sessions(db, agent, now)
+        await release_live_conversations_when_agent_went_offline(db, agent)
         agent.status = "offline"
         db.add(agent)
         changed += 1
@@ -100,7 +104,7 @@ def enforce_tenant_agents_offline_for_broadcast(db: Session, tenant_id: int) -> 
     return changed
 
 
-def run_broadcast_agent_enforcement_tick(db: Session) -> None:
+async def run_broadcast_agent_enforcement_tick_async(db: Session) -> None:
     """Periodic job: for every tenant in an AI broadcast window, force agents offline."""
     now = utc_now_naive()
     tenant_ids = (
@@ -118,7 +122,7 @@ def run_broadcast_agent_enforcement_tick(db: Session) -> None:
     for (tid,) in tenant_ids:
         if tid is None:
             continue
-        enforce_tenant_agents_offline_for_broadcast(db, int(tid))
+        await enforce_tenant_agents_offline_for_broadcast_async(db, int(tid))
     db.commit()
 
 

@@ -62,14 +62,16 @@ logger = logging.getLogger(__name__)
 async def _broadcast_agent_enforcement_loop() -> None:
     """While an AI-targeted broadcast window is active, keep tenant agents offline."""
     from database import SessionLocal
-    from services.broadcasts_service.broadcast_agent_lock import run_broadcast_agent_enforcement_tick
+    from services.broadcasts_service.broadcast_agent_lock import (
+        run_broadcast_agent_enforcement_tick_async,
+    )
 
     await asyncio.sleep(15)
     while True:
         try:
             db = SessionLocal()
             try:
-                run_broadcast_agent_enforcement_tick(db)
+                await run_broadcast_agent_enforcement_tick_async(db)
             finally:
                 db.close()
         except Exception:

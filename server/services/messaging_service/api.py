@@ -1598,12 +1598,15 @@ async def delete_conversation_permanently(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Permanently remove a customer inbox thread (admin only): DB rows, receipts, notifications,
+    Permanently remove a customer inbox thread: DB rows, receipts, notifications,
     read state, and R2 media keys referenced on messages.
+
+    **Admin:** any conversation in the tenant.
+
+    **Agent:** only if the conversation is visible in their inbox (same rules as listing:
+    assigned to them, or last-handler / transfer visibility).
     """
     role = (current_user.role or "").lower()
-    if role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
     if int(current_user.tenant_id) != int(tenant_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant mismatch")
 
@@ -1614,6 +1617,24 @@ async def delete_conversation_permanently(
     )
     if not conv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    if role == "admin":
+        pass
+    elif role == "agent":
+        ag = (
+            db.query(Agent)
+            .filter(Agent.user_id == current_user.id, Agent.tenant_id == tenant_id)
+            .first()
+        )
+        if ag is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not an agent")
+        if not _conversation_visible_to_agent_inbox(conv, int(ag.id), int(ag.id)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot delete this conversation",
+            )
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed")
 
     msgs = db.query(Message).filter(Message.conversation_id == conversation_id).all()
     msg_ids = [m.id for m in msgs]
