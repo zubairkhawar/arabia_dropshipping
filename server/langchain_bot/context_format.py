@@ -577,6 +577,13 @@ def build_customer_identity_summary(
     bf = bot_flow if isinstance(bot_flow, dict) else {}
     kind = bf.get("customer_kind")
     script_verified = bool(bf.get("verified"))
+    sid_bf = bf.get("seller_id")
+    if sid_bf is not None and str(sid_bf).strip() and kind == "existing":
+        lines.append(
+            f"Bot session: seller_id {str(sid_bf).strip()} is on file — for order/invoice follow-ups, use store "
+            "context; do not ask the customer to complete email/mobile verification again unless they are clearly "
+            "on a different account."
+        )
 
     if kind == "existing":
         if script_verified:

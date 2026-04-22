@@ -1691,7 +1691,13 @@ def _looks_like_account_question(text: str) -> bool:
 def _needs_account_verification(flow: Dict[str, Any]) -> bool:
     if _script_verification_bypassed():
         return False
-    return not bool(flow.get("verified"))
+    if bool(flow.get("verified")):
+        return False
+    # Existing-customer path with seller scope already on file (completed verify earlier) —
+    # do not force the script again if the verified flag was lost to a merge bug.
+    if (flow.get("customer_kind") == "existing") and _flow_merchant_seller_id(flow):
+        return False
+    return True
 
 
 def _reset_bot_flow(lang_code: str) -> Dict[str, Any]:
@@ -2461,7 +2467,36 @@ def _looks_like_invoice_for_order(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t:
         return False
-    return any(m in t for m in _ORDER_INVOICE_MARKERS)
+    if any(m in t for m in _ORDER_INVOICE_MARKERS):
+        return True
+    # Roman Urdu / short follow-ups right after order context (not caught by English phrases).
+    ru_invoice_followups = (
+        "against invoice",
+        "iske against",
+        "iskay against",
+        "is kay against",
+        "is order ka invoice",
+        "us order ka invoice",
+        "is ka invoice",
+        "us ka invoice",
+        "order ka invoice bata",
+        "order ki invoice bata",
+        "invoice batao",
+        "invoice btao",
+        "invoice bataye",
+        "invoice detail",
+        "invoice details",
+        "invoice dikha",
+        "invoice dekha",
+        "fatura",
+    )
+    if any(m in t for m in ru_invoice_followups):
+        return True
+    if "invoice" in t and any(
+        w in t for w in ("bata", "btao", "batay", "dekha", "dikha", "against", "ke liye", "keliye")
+    ):
+        return True
+    return False
 
 
 def _looks_like_latest_invoice(text: str) -> bool:
@@ -4410,6 +4445,17 @@ async def process_customer_bot_message(
         if mem_id and merchant_sid:
             ConversationMemory.store_verification(mem_id, merchant_sid)
 
+        resume_q = ""
+        if mem_id:
+            _pinfo = ConversationMemory.get_pending_intent(mem_id)
+            if _pinfo:
+                resume_q = (str(_pinfo.get("original_question") or "")).strip()
+
+        if not oref and resume_q:
+            if mem_id:
+                ConversationMemory.clear_pending_intent(mem_id, promote_from_queue=False)
+            return ai_forward("[Customer question] " + resume_q, base_f, skip_api=False)
+
         # Build a personalised success line that includes the store/customer name.
         cust_name = (
             (customer or {}).get("name")
@@ -4438,6 +4484,8 @@ async def process_customer_bot_message(
         parts: list[str] = [intro_line, welcome_line]
 
         if oref:
+            if mem_id:
+                ConversationMemory.clear_pending_intent(mem_id, promote_from_queue=False)
             order, src = await _lookup_order(
                 db, tenant_id, oref, store_client,
                 seller_id=base_f.get("seller_id"),
@@ -4735,7 +4783,9 @@ async def process_customer_bot_message(
 
         # --- Unverified: order/account questions start existing-customer identity (or bypass order-id path) ---
         if _needs_account_verification(flow) and (
-            _looks_like_order_status_question(text) or _looks_like_account_question(text)
+            _looks_like_order_status_question(text)
+            or _looks_like_account_question(text)
+            or _looks_like_invoice_for_order(text)
         ):
             flow = {**flow, "customer_kind": "existing"}
             if mem_id:
@@ -4745,7 +4795,14 @@ async def process_customer_bot_message(
                 pre_ref = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
             else:
                 pre_ref = (_extract_order_id_from_message(text, phone) or "").strip()
-            reason = "order" if _looks_like_order_status_question(text) else "account"
+            if (
+                _looks_like_order_status_question(text)
+                or _is_likely_order_id_only(text)
+                or _looks_like_invoice_for_order(text)
+            ):
+                reason = "order"
+            else:
+                reason = "account"
             if verification_expired_this_turn:
                 intro_key = "verification_expired_reverify"
             else:
@@ -4757,6 +4814,14 @@ async def process_customer_bot_message(
                 pending_order_ref=pre_ref or None,
                 intro_key=intro_key,
             )
+            if mem_id and (text or "").strip():
+                ConversationMemory.store_pending_intent(
+                    mem_id,
+                    "resume_after_verify",
+                    reason,
+                    (text or "").strip(),
+                    queue_previous=False,
+                )
             return save(f_iv, msg_iv)
 
         # --- New customer or existing with general questions: answer from KB directly ---
