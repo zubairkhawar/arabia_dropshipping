@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     memory_min_entity_confidence: float = 0.7
     # When False, ConversationMemory no-ops (useful for local dev without Redis).
     conversation_memory_enabled: bool = True
+    # Agent attendance: Redis key idle TTL (no heartbeat → expire → DB session closed).
+    attendance_redis_enabled: bool = True
+    attendance_idle_ttl_seconds: int = 900  # 15 minutes
     # Background log of Redis INFO/keyspace for ops (0 = disable periodic task).
     memory_stats_log_enabled: bool = True
     memory_stats_log_interval_seconds: int = 86400

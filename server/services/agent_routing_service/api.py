@@ -15,6 +15,14 @@ from models import Agent, Conversation, Customer, Message, Store, StoreAgentMapp
 from services.auth_service.api import get_current_user
 from services.auth_service.models import User as AuthUser
 from services.customer_bot_flow import append_handoff_agent_line, lookup_agent_display_name
+from services.attendance_session_redis import (
+    attendance_redis_available,
+    delete_attendance_session_redis,
+    get_attendance_session_payload,
+    rewrite_attendance_session_ttl,
+    refresh_attendance_session_redis_ttl,
+    set_attendance_session_redis,
+)
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 
 
@@ -109,6 +117,106 @@ class AttendanceResponse(BaseModel):
     days: List[AttendanceDayOut]
 
 
+class CurrentAttendanceSessionOut(BaseModel):
+    """Active attendance session for the agent portal timer (Redis + DB)."""
+
+    session_id: Optional[int] = None
+    started_at: Optional[str] = None
+
+
+def _resolve_agent_for_attendance(db: Session, agent_id: int, user: AuthUser) -> Agent:
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    role = (user.role or "").lower()
+    if role == "admin":
+        if int(user.tenant_id) != int(agent.tenant_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant mismatch")
+        return agent
+    if role != "agent":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if int(agent.user_id) != int(user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return agent
+
+
+def _open_attendance_sessions(db: Session, agent: Agent):
+    return (
+        db.query(AgentAttendanceSession)
+        .filter(
+            AgentAttendanceSession.tenant_id == agent.tenant_id,
+            AgentAttendanceSession.agent_id == agent.id,
+            AgentAttendanceSession.ended_at.is_(None),
+        )
+        .all()
+    )
+
+
+def _on_agent_became_active(db: Session, agent: Agent, now: datetime) -> None:
+    """Start or resume attendance: Redis hit + open DB row → reuse; else close orphans and create new."""
+    if attendance_redis_available():
+        payload = get_attendance_session_payload(agent.id)
+        if payload:
+            sid_raw = payload.get("session_id")
+            try:
+                sid_int = int(sid_raw) if sid_raw is not None else None
+            except (TypeError, ValueError):
+                sid_int = None
+            if sid_int is not None:
+                sess = (
+                    db.query(AgentAttendanceSession)
+                    .filter(
+                        AgentAttendanceSession.id == sid_int,
+                        AgentAttendanceSession.tenant_id == agent.tenant_id,
+                        AgentAttendanceSession.agent_id == agent.id,
+                        AgentAttendanceSession.ended_at.is_(None),
+                    )
+                    .first()
+                )
+                if sess:
+                    rewrite_attendance_session_ttl(agent.id)
+                    return
+        delete_attendance_session_redis(agent.id)
+        for s in _open_attendance_sessions(db, agent):
+            s.ended_at = now
+            db.add(s)
+        new_sess = AgentAttendanceSession(
+            tenant_id=agent.tenant_id,
+            agent_id=agent.id,
+            started_at=now,
+            ended_at=None,
+            created_at=now,
+        )
+        db.add(new_sess)
+        db.flush()
+        set_attendance_session_redis(
+            agent.id, agent.tenant_id, new_sess.id, new_sess.started_at
+        )
+        return
+
+    # No Redis (dev / disabled): keep a single open session; create if none.
+    open_session = (
+        db.query(AgentAttendanceSession)
+        .filter(
+            AgentAttendanceSession.tenant_id == agent.tenant_id,
+            AgentAttendanceSession.agent_id == agent.id,
+            AgentAttendanceSession.ended_at.is_(None),
+        )
+        .order_by(AgentAttendanceSession.started_at.desc())
+        .first()
+    )
+    if not open_session:
+        db.add(
+            AgentAttendanceSession(
+                tenant_id=agent.tenant_id,
+                agent_id=agent.id,
+                started_at=now,
+                ended_at=None,
+                created_at=now,
+            )
+        )
+
+
 @router.get("/agents", response_model=List[AgentOut])
 async def list_agents(tenant_id: int, db: Session = Depends(get_db)):
     """List all agents with their status for a tenant."""
@@ -140,49 +248,12 @@ async def update_agent_status(
     )
 
     if not was_active and is_active:
-        open_session = (
-            db.query(AgentAttendanceSession)
-            .filter(
-                AgentAttendanceSession.tenant_id == agent.tenant_id,
-                AgentAttendanceSession.agent_id == agent.id,
-                AgentAttendanceSession.ended_at.is_(None),
-            )
-            .order_by(AgentAttendanceSession.started_at.desc())
-            .first()
-        )
-        if not open_session:
-            # Check if a session was closed within the last 30 seconds (page refresh
-            # artifact: pagehide fires offline beacon, then onopen fires online again).
-            # Reopen that session instead of creating a new 0-second one.
-            refresh_cutoff = now - timedelta(minutes=3)
-            recent_closed = (
-                db.query(AgentAttendanceSession)
-                .filter(
-                    AgentAttendanceSession.tenant_id == agent.tenant_id,
-                    AgentAttendanceSession.agent_id == agent.id,
-                    AgentAttendanceSession.ended_at >= refresh_cutoff,
-                )
-                .order_by(AgentAttendanceSession.ended_at.desc())
-                .first()
-            )
-            if recent_closed:
-                # Page refresh — reopen the existing session, discard the gap.
-                recent_closed.ended_at = None
-                db.add(recent_closed)
-            else:
-                db.add(
-                    AgentAttendanceSession(
-                        tenant_id=agent.tenant_id,
-                        agent_id=agent.id,
-                        started_at=now,
-                        ended_at=None,
-                        created_at=now,
-                    )
-                )
+        _on_agent_became_active(db, agent, now)
 
     if not is_active:
+        if attendance_redis_available():
+            delete_attendance_session_redis(agent.id)
         # Close ALL open attendance sessions when going offline (or already offline).
-        # This also cleans up dangling sessions from crashes/disconnects.
         open_sessions = (
             db.query(AgentAttendanceSession)
             .filter(
@@ -309,14 +380,12 @@ async def agent_heartbeat(
     db: Session = Depends(get_db),
 ):
     """
-    Lightweight keepalive from the agent portal (sent every ~30 minutes while the tab is
-    visible and the agent is online).  Ensures the open attendance session stays alive so a
-    forgotten-open tab doesn't produce a wildly inflated session once the stale auto-close
-    kicks in — the session is either actively receiving heartbeats (agent is still there) or
-    it will be capped at 8 hours by the stale-session cleanup.
+    Agent portal heartbeat (~5 minutes while online): extends Redis idle TTL for the active
+    attendance session. If Redis expired (no heartbeats for the idle window), open DB
+    sessions are closed and a new session + Redis key are created while the agent remains
+    online.
 
-    Also recovers a missing open session: if the agent's DB status is online/busy but no
-    open session exists (e.g. session was accidentally closed), a new one is created.
+    Without Redis, recreates a missing open session for online/busy agents (legacy dev).
     """
     agent = db.query(Agent).filter(Agent.id == agent_id).first()
     if not agent:
@@ -324,30 +393,123 @@ async def agent_heartbeat(
 
     now = datetime.utcnow()
     is_active = agent.status in (AgentStatus.online.value, AgentStatus.busy.value)
-    if is_active:
-        open_session = (
-            db.query(AgentAttendanceSession)
-            .filter(
-                AgentAttendanceSession.tenant_id == agent.tenant_id,
-                AgentAttendanceSession.agent_id == agent.id,
-                AgentAttendanceSession.ended_at.is_(None),
-            )
-            .first()
+    if not is_active:
+        return {"ok": True}
+
+    if attendance_redis_available():
+        if refresh_attendance_session_redis_ttl(agent_id):
+            return {"ok": True}
+        # Idle timeout: Redis key gone — end DB session segment, start a new one.
+        for s in _open_attendance_sessions(db, agent):
+            s.ended_at = now
+            db.add(s)
+        new_sess = AgentAttendanceSession(
+            tenant_id=agent.tenant_id,
+            agent_id=agent.id,
+            started_at=now,
+            ended_at=None,
+            created_at=now,
         )
-        if not open_session:
-            # Session missing for an active agent — recreate it.
-            db.add(
-                AgentAttendanceSession(
-                    tenant_id=agent.tenant_id,
-                    agent_id=agent.id,
-                    started_at=now,
-                    ended_at=None,
-                    created_at=now,
-                )
+        db.add(new_sess)
+        db.flush()
+        set_attendance_session_redis(
+            agent.id, agent.tenant_id, new_sess.id, new_sess.started_at
+        )
+        db.commit()
+        return {
+            "ok": True,
+            "session_id": new_sess.id,
+            "started_at": _datetime_utc_iso_z(new_sess.started_at),
+        }
+
+    open_session = (
+        db.query(AgentAttendanceSession)
+        .filter(
+            AgentAttendanceSession.tenant_id == agent.tenant_id,
+            AgentAttendanceSession.agent_id == agent.id,
+            AgentAttendanceSession.ended_at.is_(None),
+        )
+        .first()
+    )
+    if not open_session:
+        db.add(
+            AgentAttendanceSession(
+                tenant_id=agent.tenant_id,
+                agent_id=agent.id,
+                started_at=now,
+                ended_at=None,
+                created_at=now,
             )
-            db.commit()
+        )
+        db.commit()
 
     return {"ok": True}
+
+
+@router.get(
+    "/agents/{agent_id}/attendance/current",
+    response_model=CurrentAttendanceSessionOut,
+)
+async def get_current_attendance_session(
+    agent_id: int,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """
+    Active attendance session for the portal timer: same DB row as long as Redis key exists.
+    If Redis expired, any still-open DB rows are closed (idle) and null is returned.
+    """
+    agent = _resolve_agent_for_attendance(db, agent_id, current_user)
+    now = datetime.utcnow()
+
+    if attendance_redis_available():
+        payload = get_attendance_session_payload(agent_id)
+        if payload:
+            sid_raw = payload.get("session_id")
+            try:
+                sid_int = int(sid_raw) if sid_raw is not None else None
+            except (TypeError, ValueError):
+                sid_int = None
+            if sid_int is not None:
+                sess = (
+                    db.query(AgentAttendanceSession)
+                    .filter(
+                        AgentAttendanceSession.id == sid_int,
+                        AgentAttendanceSession.tenant_id == agent.tenant_id,
+                        AgentAttendanceSession.agent_id == agent.id,
+                        AgentAttendanceSession.ended_at.is_(None),
+                    )
+                    .first()
+                )
+                if sess:
+                    return CurrentAttendanceSessionOut(
+                        session_id=sess.id,
+                        started_at=_datetime_utc_iso_z(sess.started_at),
+                    )
+            delete_attendance_session_redis(agent_id)
+
+        for s in _open_attendance_sessions(db, agent):
+            s.ended_at = now
+            db.add(s)
+        db.commit()
+        return CurrentAttendanceSessionOut(session_id=None, started_at=None)
+
+    sess = (
+        db.query(AgentAttendanceSession)
+        .filter(
+            AgentAttendanceSession.tenant_id == agent.tenant_id,
+            AgentAttendanceSession.agent_id == agent.id,
+            AgentAttendanceSession.ended_at.is_(None),
+        )
+        .order_by(AgentAttendanceSession.started_at.desc())
+        .first()
+    )
+    if sess:
+        return CurrentAttendanceSessionOut(
+            session_id=sess.id,
+            started_at=_datetime_utc_iso_z(sess.started_at),
+        )
+    return CurrentAttendanceSessionOut(session_id=None, started_at=None)
 
 
 @router.get("/agents/{agent_id}/attendance", response_model=AttendanceResponse)

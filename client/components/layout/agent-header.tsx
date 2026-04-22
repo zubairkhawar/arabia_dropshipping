@@ -21,8 +21,12 @@ import { useAgentSearch } from '@/contexts/AgentSearchContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
 import { formatCompactActivity } from '@/lib/tenant-time';
 
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  'https://arabia-dropshipping.onrender.com';
+
 type AgentStatus = 'active' | 'offline';
-const ACTIVE_SINCE_PREFIX = 'agent-active-since:';
 
 const statusConfig: Record<AgentStatus, { label: string; dotClass: string }> = {
   active: { label: 'Active', dotClass: 'bg-status-success' },
@@ -170,25 +174,67 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
       setActiveSinceMs(null);
       return;
     }
-    const key = `${ACTIVE_SINCE_PREFIX}${currentAgentId}`;
-    if (agentStatus === 'active') {
-      const raw = typeof window !== 'undefined' ? localStorage.getItem(key) : null;
-      const stored = raw ? Number(raw) : NaN;
-      if (Number.isFinite(stored)) {
-        setActiveSinceMs(stored);
-      } else {
-        const now = Date.now();
-        if (typeof window !== 'undefined') localStorage.setItem(key, String(now));
-        setActiveSinceMs(now);
-      }
-    } else {
-      // While agents are still loading, `currentAgent` is null and status looks "offline" — do not wipe the timer.
-      if (!currentAgent) return;
-      if (typeof window !== 'undefined') localStorage.removeItem(key);
+    if (agentStatus !== 'active') {
       setActiveSinceMs(null);
       setActiveElapsedLabel('00:00');
+      return;
     }
-  }, [agentStatus, currentAgentId, currentAgent, agents.length]);
+
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    if (!token) return;
+
+    let cancelled = false;
+    const loadStart = async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/routing/agents/${currentAgentId}/attendance/current`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { started_at?: string | null };
+        const iso = data?.started_at;
+        if (iso) {
+          const ms = Date.parse(iso);
+          if (Number.isFinite(ms)) {
+            setActiveSinceMs(ms);
+            return;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 900));
+        if (cancelled) return;
+        const res2 = await fetch(
+          `${API_BASE}/api/routing/agents/${currentAgentId}/attendance/current`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!res2.ok || cancelled) return;
+        const data2 = (await res2.json()) as { started_at?: string | null };
+        const iso2 = data2?.started_at;
+        if (iso2) {
+          const ms2 = Date.parse(iso2);
+          if (Number.isFinite(ms2)) setActiveSinceMs(ms2);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void loadStart();
+    return () => {
+      cancelled = true;
+    };
+  }, [agentStatus, currentAgentId, agents.length]);
+
+  useEffect(() => {
+    const onAttendanceRefresh = (e: Event) => {
+      const ce = e as CustomEvent<{ started_at?: string }>;
+      const iso = ce.detail?.started_at;
+      if (iso) {
+        const ms = Date.parse(iso);
+        if (Number.isFinite(ms)) setActiveSinceMs(ms);
+      }
+    };
+    window.addEventListener('attendance-session-started', onAttendanceRefresh);
+    return () => window.removeEventListener('attendance-session-started', onAttendanceRefresh);
+  }, []);
 
   useEffect(() => {
     if (agentStatus !== 'active' || !activeSinceMs) {
