@@ -11,7 +11,6 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
-import calendar
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -24,6 +23,10 @@ from models import Conversation, Message, Order, TenantSchedule
 from services.ai_orchestrator_service.services import (
     AIOrchestrator,
     _extract_order_id_from_message,
+)
+from services.order_date_range import (
+    parse_date_range_from_message as _parse_date_range,
+    looks_like_orders_in_period_message,
 )
 from services.phone_lookup_variants import normalize_mobile_for_flow
 from services.store_integration_service.client import (
@@ -2706,183 +2709,6 @@ def _format_tracking_sentence(lang: str, tr: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Date-range parsing (month / this-or-last-month / this-or-last-week /
-# last N days / today-yesterday / explicit YYYY-MM-DD ranges).
-# Used by "orders-in-period" and "invoices-in-period" intents.
-# ---------------------------------------------------------------------------
-
-_MONTH_NAMES: Dict[str, int] = {
-    # English + abbreviations
-    "january": 1, "jan": 1,
-    "february": 2, "feb": 2,
-    "march": 3, "mar": 3,
-    "april": 4, "apr": 4,
-    "may": 5,
-    "june": 6, "jun": 6,
-    "july": 7, "jul": 7,
-    "august": 8, "aug": 8,
-    "september": 9, "sep": 9, "sept": 9,
-    "october": 10, "oct": 10,
-    "november": 11, "nov": 11,
-    "december": 12, "dec": 12,
-    # Modern Standard Arabic + Levantine variants
-    "يناير": 1, "كانون الثاني": 1,
-    "فبراير": 2, "شباط": 2,
-    "مارس": 3, "آذار": 3, "اذار": 3,
-    "أبريل": 4, "ابريل": 4, "نيسان": 4,
-    "مايو": 5, "أيار": 5, "ايار": 5,
-    "يونيو": 6, "حزيران": 6,
-    "يوليو": 7, "تموز": 7,
-    "أغسطس": 8, "اغسطس": 8, "آب": 8, "اب": 8,
-    "سبتمبر": 9, "أيلول": 9, "ايلول": 9,
-    "أكتوبر": 10, "اكتوبر": 10, "تشرين الأول": 10, "تشرين الاول": 10,
-    "نوفمبر": 11, "تشرين الثاني": 11,
-    "ديسمبر": 12, "كانون الأول": 12, "كانون الاول": 12,
-}
-
-_MONTH_LABEL_EN = {
-    1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
-    7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December",
-}
-
-
-def _month_bounds(year: int, month: int) -> Tuple[date, date]:
-    _, last_day = calendar.monthrange(year, month)
-    return date(year, month, 1), date(year, month, last_day)
-
-
-def _parse_iso_date(s: str) -> Optional[date]:
-    try:
-        return date.fromisoformat(s)
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_date_range(text: str, today: Optional[date] = None) -> Optional[Dict[str, Optional[str]]]:
-    """
-    Extract a date window from free-form text.
-
-    Returns ``None`` when no period is found, otherwise a dict::
-
-        {
-            "label": "April 2026",             # human-readable for replies
-            "date_from": "YYYY-MM-DD",
-            "date_to":   "YYYY-MM-DD",
-            "month":     "YYYY-MM" or None,    # set when the window is a full
-                                               # calendar month (preferred by
-                                               # the /orders/all endpoint)
-        }
-    """
-    if not (text or "").strip():
-        return None
-    t = text.lower()
-    ref = today or datetime.utcnow().date()
-
-    # Explicit YYYY-MM-DD to YYYY-MM-DD
-    m = re.search(
-        r"(\d{4}-\d{2}-\d{2})\s*(?:to|till|until|through|and|-|–|—|:)\s*(\d{4}-\d{2}-\d{2})",
-        t,
-    )
-    if m:
-        d1 = _parse_iso_date(m.group(1))
-        d2 = _parse_iso_date(m.group(2))
-        if d1 and d2:
-            if d1 > d2:
-                d1, d2 = d2, d1
-            return {
-                "label": f"{d1.isoformat()} to {d2.isoformat()}",
-                "date_from": d1.isoformat(),
-                "date_to": d2.isoformat(),
-                "month": None,
-            }
-
-    if "this month" in t or "current month" in t or "is month" in t or "هذا الشهر" in t:
-        df, dt = _month_bounds(ref.year, ref.month)
-        return {
-            "label": f"{_MONTH_LABEL_EN[ref.month]} {ref.year}",
-            "date_from": df.isoformat(),
-            "date_to": dt.isoformat(),
-            "month": f"{ref.year:04d}-{ref.month:02d}",
-        }
-
-    if "last month" in t or "previous month" in t or "pichla mahina" in t or "الشهر الماضي" in t:
-        year, month = (ref.year - 1, 12) if ref.month == 1 else (ref.year, ref.month - 1)
-        df, dt = _month_bounds(year, month)
-        return {
-            "label": f"{_MONTH_LABEL_EN[month]} {year}",
-            "date_from": df.isoformat(),
-            "date_to": dt.isoformat(),
-            "month": f"{year:04d}-{month:02d}",
-        }
-
-    if re.search(r"\btoday\b", t) or "aaj" in t or "اليوم" in t:
-        return {
-            "label": "today",
-            "date_from": ref.isoformat(),
-            "date_to": ref.isoformat(),
-            "month": None,
-        }
-
-    if re.search(r"\byesterday\b", t) or "kal" in t or "أمس" in t or "امس" in t:
-        y = ref - timedelta(days=1)
-        return {
-            "label": "yesterday",
-            "date_from": y.isoformat(),
-            "date_to": y.isoformat(),
-            "month": None,
-        }
-
-    m = re.search(r"\b(?:last|past|previous)\s+(\d{1,3})\s+days?\b", t)
-    if m:
-        n = max(1, min(365, int(m.group(1))))
-        start = ref - timedelta(days=n - 1)
-        return {
-            "label": f"the last {n} days",
-            "date_from": start.isoformat(),
-            "date_to": ref.isoformat(),
-            "month": None,
-        }
-
-    if "this week" in t or "current week" in t or "هذا الأسبوع" in t:
-        start = ref - timedelta(days=ref.weekday())
-        end = start + timedelta(days=6)
-        return {
-            "label": "this week",
-            "date_from": start.isoformat(),
-            "date_to": end.isoformat(),
-            "month": None,
-        }
-
-    if "last week" in t or "previous week" in t or "الأسبوع الماضي" in t:
-        this_week_mon = ref - timedelta(days=ref.weekday())
-        start = this_week_mon - timedelta(days=7)
-        end = start + timedelta(days=6)
-        return {
-            "label": "last week",
-            "date_from": start.isoformat(),
-            "date_to": end.isoformat(),
-            "month": None,
-        }
-
-    # Month name [optional year]. Walk longest names first so "september"
-    # beats "sep" and "كانون الأول" beats "الأول".
-    for name in sorted(_MONTH_NAMES.keys(), key=len, reverse=True):
-        if name in t:
-            num = _MONTH_NAMES[name]
-            yr_m = re.search(r"\b(\d{4})\b", t)
-            year = int(yr_m.group(1)) if yr_m else ref.year
-            df, dt = _month_bounds(year, num)
-            return {
-                "label": f"{_MONTH_LABEL_EN[num]} {year}",
-                "date_from": df.isoformat(),
-                "date_to": dt.isoformat(),
-                "month": f"{year:04d}-{num:02d}",
-            }
-
-    return None
-
-
-# ---------------------------------------------------------------------------
 # invoice-by-id, invoices-in-period, orders-in-period
 # ---------------------------------------------------------------------------
 
@@ -2890,32 +2716,6 @@ _INVOICE_ID_RE = re.compile(
     r"invoice(?:\s+(?:id|number|no\.?))?\s*[:#]?\s*(\d{1,12})\b",
     re.IGNORECASE,
 )
-
-_ORDERS_IN_PERIOD_MARKERS = (
-    "my orders",
-    "all my orders",
-    "orders in",
-    "orders for",
-    "orders from",
-    "orders last",
-    "orders this",
-    "orders of",
-    "orders during",
-    "orders between",
-    "mere orders",
-    "meray orders",
-    "meri orders",
-    "meri sales",
-    "sales in",
-    "sales for",
-    "sales from",
-    "sales last",
-    "sales this",
-    "طلباتي",
-    "مبيعاتي",
-    "الطلبات",
-)
-
 
 def _extract_invoice_id(text: str) -> str:
     m = _INVOICE_ID_RE.search(text or "")
@@ -2994,13 +2794,18 @@ def _wants_cannot_find_order_help(text: str) -> bool:
 
 
 def _looks_like_orders_in_period(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    if any(m in t for m in _ORDERS_IN_PERIOD_MARKERS):
+    return looks_like_orders_in_period_message(text)
+
+
+def _wants_orders_csv_file(text: str) -> bool:
+    t = (text or "").lower()
+    if "csv" in t or "spreadsheet" in t:
         return True
-    # Plural "orders" word combined with any period phrase is enough.
-    if re.search(r"\borders\b", t) and _parse_date_range(text):
+    if "export" in t and "order" in t:
+        return True
+    if "download" in t and "order" in t:
+        return True
+    if "excel" in t and ("file" in t or "sheet" in t):
         return True
     return False
 
@@ -3136,6 +2941,8 @@ class BotFlowResult:
     """False means caller should use legacy behavior (e.g. human agent owns chat)."""
     whatsapp_image_outbound: Optional[List[Dict[str, str]]] = None
     """Each item: {"image_url": str, "caption": str} for Meta image messages (WhatsApp only)."""
+    whatsapp_document_outbound: Optional[List[Dict[str, Any]]] = None
+    """Each item: ``content_bytes`` (preferred, uploaded to Meta) or ``document_url`` + ``filename`` + optional ``caption``."""
     whatsapp_text_after_images: Optional[Union[str, List[str]]] = None
     """Follow-up text(s) after image(s) on WhatsApp. Pass a list to emit each
     string as its own message (e.g. list + footer first, then a separate
@@ -3196,6 +3003,7 @@ async def process_customer_bot_message(
             escalate=await orchestrator.should_escalate(user_message),
             handled=False,
             whatsapp_image_outbound=None,
+            whatsapp_document_outbound=None,
             whatsapp_text_after_images=None,
         )
 
@@ -3210,6 +3018,7 @@ async def process_customer_bot_message(
             escalate=False,
             handled=False,
             whatsapp_image_outbound=None,
+            whatsapp_document_outbound=None,
             whatsapp_text_after_images=None,
         )
 
@@ -3264,6 +3073,7 @@ async def process_customer_bot_message(
         skip_api: Optional[bool] = None,
         wa_images: Optional[List[Dict[str, str]]] = None,
         wa_text_after: Optional[Union[str, List[str]]] = None,
+        wa_documents: Optional[List[Dict[str, Any]]] = None,
     ):
         f["lang"] = flow_lang
         if skip_api is None:
@@ -3278,6 +3088,7 @@ async def process_customer_bot_message(
             escalate=esc,
             handled=True,
             whatsapp_image_outbound=wa_images,
+            whatsapp_document_outbound=wa_documents,
             whatsapp_text_after_images=wa_text_after,
         )
 
@@ -3314,9 +3125,86 @@ async def process_customer_bot_message(
             escalate=escalate_for_ai_turn,
             handled=True,
             whatsapp_image_outbound=None,
+            whatsapp_document_outbound=None,
             whatsapp_text_after_images=None,
             suppress_kb_wrap=suppress_kb_wrap,
         )
+
+    if (
+        channel == "whatsapp"
+        and mem_id
+        and flow.get("verified")
+        and _wants_orders_csv_file(user_message)
+    ):
+        sid_csv = _flow_merchant_seller_id(flow)
+        if sid_csv:
+            win = ConversationMemory.get_orders_export_window(mem_id)
+            if not win:
+                pr = _parse_date_range(user_message)
+                if pr:
+                    win = {
+                        "date_from": pr.get("date_from"),
+                        "date_to": pr.get("date_to"),
+                        "label": pr.get("label"),
+                    }
+            if win and win.get("date_from") and win.get("date_to"):
+                df = str(win["date_from"])[:10]
+                dt = str(win["date_to"])[:10]
+                try:
+                    from services.orders_export_service.exporter import build_orders_csv_export_bytes
+
+                    body, n, trunc = await build_orders_csv_export_bytes(
+                        store_client, str(sid_csv), df, dt
+                    )
+                    if n <= 0:
+                        return save(
+                            {**flow, "step": "conversational"},
+                            "I could not find any orders in that date range to export.",
+                        )
+                    max_wa = 100 * 1024 * 1024
+                    if len(body) > max_wa:
+                        return save(
+                            {**flow, "step": "conversational"},
+                            "The export is too large to send on WhatsApp (over 100 MB). Please ask support for a split export or a shorter date range.",
+                        )
+                    fname = f"orders_{sid_csv}_{df}_to_{dt}.csv".replace(" ", "_")[:200]
+                    cap = f"Orders export ({n} orders)"
+                    if trunc:
+                        cap += " (capped at 5000 rows)"
+                    reply = (
+                        "I have prepared a CSV with your orders. Tap the file below to open it in WhatsApp."
+                    )
+                    if flow_lang == "roman_urdu":
+                        reply = "Main ne CSV file bana di hai. Neeche file par tap kar ke WhatsApp mein khol lein."
+                    elif flow_lang == "arabic":
+                        reply = "جهزت لك ملف CSV. اضغط على الملف أدناه لفتحه في واتساب."
+                    doc_item: Dict[str, Any] = {
+                        "content_bytes": body,
+                        "filename": fname,
+                        "caption": cap,
+                        "mime_type": "text/csv",
+                    }
+                    try:
+                        from services.media_storage.r2 import is_r2_configured, presign_get, put_bytes
+                        from services.orders_export_service.csv_builder import object_key_for_orders_csv
+
+                        if is_r2_configured():
+                            key = object_key_for_orders_csv(str(sid_csv))
+                            put_bytes(key, body, "text/csv")
+                            doc_item["document_url"] = presign_get(key, 86400)
+                    except Exception:
+                        logger.warning("Optional R2 presign for CSV fallback skipped", exc_info=True)
+                    return save(
+                        {**flow, "step": "conversational"},
+                        reply,
+                        wa_documents=[doc_item],
+                    )
+                except Exception:
+                    logger.exception("WhatsApp orders CSV export failed")
+                    return save(
+                        {**flow, "step": "conversational"},
+                        "Sorry, I could not generate the file. Please try again in a moment.",
+                    )
 
     async def submit_existing_email(flow_in: Dict[str, Any], email_in: str) -> BotFlowResult:
         """Send OTP (or jump to mobile) after the customer supplies a registration email."""

@@ -84,6 +84,7 @@ class ConversationMemory:
         "context_window": "mem:{phone}:context_window",
         "last_summary": "mem:{phone}:last_summary",
         "bot_customer_kind": "mem:{phone}:bot_customer_kind",
+        "orders_export_window": "mem:{phone}:orders_export_window",
     }
 
     MAX_CONTEXT_MESSAGES = 5
@@ -525,6 +526,44 @@ class ConversationMemory:
         return None
 
     @classmethod
+    def store_orders_export_window(cls, phone: str, window: Dict[str, Any]) -> None:
+        """Remember last parsed order-list date window for CSV / follow-up turns."""
+        r = cls._r()
+        if not r or not phone or not isinstance(window, dict):
+            return
+        try:
+            r.setex(
+                cls.REDIS_KEYS["orders_export_window"].format(phone=phone),
+                cls._ttl(),
+                json.dumps(window),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory: store_orders_export_window failed: %s", exc)
+
+    @classmethod
+    def get_orders_export_window(cls, phone: str) -> Optional[Dict[str, Any]]:
+        r = cls._r()
+        if not r or not phone:
+            return None
+        try:
+            raw = r.get(cls.REDIS_KEYS["orders_export_window"].format(phone=phone))
+            if raw:
+                return json.loads(raw)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory: get_orders_export_window failed: %s", exc)
+        return None
+
+    @classmethod
+    def clear_orders_export_window(cls, phone: str) -> None:
+        r = cls._r()
+        if not r or not phone:
+            return
+        try:
+            r.delete(cls.REDIS_KEYS["orders_export_window"].format(phone=phone))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory: clear_orders_export_window failed: %s", exc)
+
+    @classmethod
     def get_all_context(cls, phone: str) -> Dict[str, Any]:
         r = cls._r()
         if not r:
@@ -602,6 +641,7 @@ class ConversationMemory:
                 "context_window",
                 "last_summary",
                 "bot_customer_kind",
+                "orders_export_window",
             )
         ]
         try:

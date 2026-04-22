@@ -66,7 +66,47 @@ KB_QUERY_PHRASE_HINTS: Dict[str, List[str]] = {
     "confirmation timing": ["attempt", "times", "screenshot", "proof"],
     "success rate": ["performance", "dispatch", "delivered", "sellers"],
     "active countries": ["market", "coverage", "uae", "saudi", "pakistan", "qatar"],
+    # Roman Urdu / English "what services" style → overlap with English KB chunks
+    "kya services": ["service", "services", "dropshipping", "fulfillment", "sourcing", "marketing"],
+    "services provide": ["service", "offer", "dropshipping", "fulfillment", "sourcing"],
+    "services dete": ["service", "offer", "provide", "dropshipping"],
+    "services offer": ["service", "dropshipping", "fulfillment", "sourcing"],
+    "what services": ["service", "dropshipping", "sourcing", "fulfillment"],
+    "which services": ["service", "dropshipping", "sourcing", "fulfillment"],
+    "company services": ["service", "dropshipping", "fulfillment", "sourcing"],
+    "services do you": ["service", "offer", "dropshipping", "fulfillment"],
+    "list of services": ["service", "dropshipping", "fulfillment", "sourcing"],
 }
+
+# Extra stems merged into the query token set when the user is asking for offerings / catalog.
+_SERVICE_QUERY_STEMS: tuple[str, ...] = (
+    "dropshipping",
+    "sourcing",
+    "fulfillment",
+    "warehouse",
+    "marketing",
+    "agency",
+    "partnership",
+    "invoice",
+    "confirmation",
+    "whatsapp",
+    "profit",
+    "store",
+    "returns",
+    "shipping",
+    "dropship",
+    "services",
+    "service",
+    "offering",
+    "3pl",
+    "bulk",
+    "seller",
+    "commission",
+    "payout",
+    "uae",
+    "saudi",
+    "pakistan",
+)
 
 
 class ArabiaLangChainBot:
@@ -122,6 +162,104 @@ class ArabiaLangChainBot:
             )
         return "\n".join(lines)
 
+    def _service_catalog_question(self, user_message: str) -> bool:
+        """True when the user is asking what services / offerings Arabia provides (not helpline-only)."""
+        t = (user_message or "").lower()
+        if not re.search(r"\bservices?\b", t):
+            return False
+        if re.search(
+            r"\b(customer|care|technical)\s+service\b",
+            t,
+        ) and not re.search(
+            r"\b(offer|provid|what|which|kya|list|deta|dete|mil|kart|krte|krta|kaun|kon)\b",
+            t,
+        ):
+            return False
+        return bool(
+            re.search(
+                r"\b(what|which|how|tell|list|describe|include|offers?|provid|giving|give|"
+                r"kya|kaun|kon|det[ei]|deta|mil|milt|kart[ea]|krte|krty|krta|krti|"
+                r"hai|ho|sab|poor|pura|complete|more|aur|kis)\b",
+                t,
+            )
+            or "arabia" in t
+        )
+
+    def _merge_service_query_tokens(self, tokens: set[str], user_message: str) -> set[str]:
+        out = set(tokens)
+        if not self._service_catalog_question(user_message):
+            return out
+        for stem in _SERVICE_QUERY_STEMS:
+            nt = self._normalize_token(stem)
+            if len(nt) > 2:
+                out.add(nt)
+        return out
+
+    def _keyword_fallback_chunk_lines(
+        self,
+        rows: List[KnowledgeSource],
+        user_message: str,
+        *,
+        max_chunks: int,
+    ) -> List[str]:
+        """Rank KB chunks by domain keyword density when token overlap alone misses Roman Urdu phrasing."""
+        lex = (
+            "dropship",
+            "sourcing",
+            "fulfillment",
+            "warehouse",
+            "marketing",
+            "agency",
+            "partnership",
+            "invoice",
+            "payout",
+            "confirmation",
+            "whatsapp",
+            "profit",
+            "store",
+            "return",
+            "shipping",
+            "service",
+            "seller",
+            "uae",
+            "saudi",
+            "pakistan",
+            "commission",
+            "bulk",
+            "offer",
+        )
+        raw_l = (user_message or "").lower()
+        ranked: List[tuple[int, str]] = []
+        for src in rows:
+            metadata = src.knowledge_metadata or {}
+            chunk_list = metadata.get("chunks")
+            if not isinstance(chunk_list, list):
+                continue
+            for chunk in chunk_list:
+                chunk_text = self._chunk_text_value(chunk)
+                if not chunk_text:
+                    continue
+                low = chunk_text.lower()
+                hits = sum(low.count(k) for k in lex)
+                if "arabia" in raw_l and "arabia" in low:
+                    hits += 2
+                if hits <= 0:
+                    continue
+                cite = self._chunk_citation(chunk)
+                ranked.append((hits, f"[{src.name}{cite}] {chunk_text[:700]}"))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        lines: List[str] = []
+        seen: set[str] = set()
+        for _, line in ranked:
+            key = line[:160]
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(line)
+            if len(lines) >= max_chunks:
+                break
+        return lines
+
     def _build_knowledge_context(
         self,
         tenant_id: int,
@@ -145,6 +283,7 @@ class ArabiaLangChainBot:
             return "No knowledge sources connected."
 
         tokens = self._normalized_query_tokens(user_message)
+        tokens = self._merge_service_query_tokens(tokens, user_message)
         scored_chunks: List[tuple[int, str]] = []
         items: List[str] = []
         for src in rows:
@@ -171,6 +310,10 @@ class ArabiaLangChainBot:
                 items.append(f"- FILE: {filename} (chunks: {src.chunk_count})")
         scored_chunks.sort(key=lambda x: x[0], reverse=True)
         top_chunks = [c for _, c in scored_chunks[:max_chunks]]
+        if not top_chunks and self._service_catalog_question(user_message):
+            top_chunks = self._keyword_fallback_chunk_lines(
+                rows, user_message, max_chunks=max_chunks
+            )
         if top_chunks:
             return "\n".join(
                 [
@@ -215,8 +358,17 @@ class ArabiaLangChainBot:
         except Exception:
             return ""
 
-    def _crawl_configured_urls_context(self, rows: List[KnowledgeSource], user_message: str) -> str:
-        tokens = self._normalized_query_tokens(user_message)
+    def _crawl_configured_urls_context(
+        self,
+        rows: List[KnowledgeSource],
+        user_message: str,
+        *,
+        min_score: int = 2,
+    ) -> str:
+        tokens = self._merge_service_query_tokens(
+            self._normalized_query_tokens(user_message),
+            user_message,
+        )
         urls: List[str] = []
         for src in rows:
             metadata = src.knowledge_metadata or {}
@@ -248,7 +400,7 @@ class ArabiaLangChainBot:
             if not txt:
                 continue
             score = self._score_chunk_overlap(tokens, txt)
-            if score < 2:
+            if score < min_score:
                 continue
             scored.append((score, f"[Crawled {u}] {txt[:700]}"))
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -516,7 +668,10 @@ class ArabiaLangChainBot:
         kb_hit = "Most relevant knowledge excerpts:" in knowledge_context
         self.last_reply_used_kb = kb_hit
         if not kb_hit:
-            crawl_context = self._crawl_configured_urls_context(rows, user_message)
+            crawl_min = 1 if self._service_catalog_question(user_message) else 2
+            crawl_context = self._crawl_configured_urls_context(
+                rows, user_message, min_score=crawl_min
+            )
             if crawl_context:
                 knowledge_context = f"{knowledge_context}\n\n{crawl_context}".strip()
             else:

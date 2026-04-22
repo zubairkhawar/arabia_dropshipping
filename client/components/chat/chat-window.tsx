@@ -3260,6 +3260,62 @@ export function ChatWindow({
                 <>
                   <div className="fixed inset-0 z-10" onClick={closeMenus} aria-hidden />
                   <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-border rounded-lg shadow-xl z-20 py-1">
+                    {isInboxPage &&
+                      !isInternalChat &&
+                      hasSelectedConversation &&
+                      inboxConv?.selectedId != null && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            closeMenus();
+                            const token =
+                              typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+                            if (!token) return;
+                            const end = new Date();
+                            const start = new Date();
+                            start.setMonth(start.getMonth() - 3);
+                            const df = start.toISOString().slice(0, 10);
+                            const dt = end.toISOString().slice(0, 10);
+                            const q = new URLSearchParams({
+                              tenant_id: String(TENANT_ID),
+                              conversation_id: String(inboxConv.selectedId),
+                              date_from: df,
+                              date_to: dt,
+                            });
+                            try {
+                              const res = await fetch(
+                                `${API_BASE}/api/agent-portal/orders/export-csv?${q.toString()}`,
+                                { headers: { Authorization: `Bearer ${token}` } },
+                              );
+                              if (!res.ok) {
+                                const errText = await res.text().catch(() => '');
+                                window.alert(
+                                  errText
+                                    ? `Export failed (${res.status}): ${errText.slice(0, 200)}`
+                                    : `Export failed (${res.status})`,
+                                );
+                                return;
+                              }
+                              const blob = await res.blob();
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = `orders_conv_${inboxConv.selectedId}.csv`;
+                              a.rel = 'noopener';
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                              URL.revokeObjectURL(url);
+                            } catch {
+                              window.alert('Export failed. Check your connection and try again.');
+                            }
+                          }}
+                          className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary"
+                        >
+                          <FileText className="w-4 h-4" />
+                          Export orders (CSV)
+                        </button>
+                      )}
                     {showAdminSendBackAndCloseChat && (
                       <button
                         type="button"

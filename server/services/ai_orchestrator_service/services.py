@@ -4,6 +4,10 @@ from datetime import date, datetime, timedelta
 from typing import Optional, Dict, Any, Set, List, Tuple
 
 from services.human_handoff_intent import wants_human_agent
+from services.order_date_range import (
+    message_suggests_store_date_window,
+    parse_date_range_from_message,
+)
 from services.store_integration_service.client import (
     StoreIntegrationClient,
     merchant_seller_scope_from_row,
@@ -13,6 +17,9 @@ from services.store_integration_service.client import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MAX_STORE_ORDERS_IN_CONTEXT = 5000
+_MAX_CONTEXT_DATE_SPAN_DAYS = 731
 
 
 def _store_context_date_window(days: int = 120) -> Tuple[str, str]:
@@ -540,9 +547,41 @@ class AIOrchestrator:
 
         seller_id = _resolve_merchant_seller_id(flow, customer)
 
+        use_parsed_window = False
+        parsed_msg_range: Optional[Dict[str, Any]] = None
+        orders_truncated = False
+        date_from = ""
+        date_to = ""
+
         # Only use Arabia APIs: orders by id, tracking, faq, invoice by seller_id
         if seller_id:
-            date_from, date_to = _store_context_date_window(365)
+            parsed_msg_range = parse_date_range_from_message(message_text or "")
+            use_parsed_window = bool(
+                parsed_msg_range
+                and message_suggests_store_date_window(message_text or "")
+            )
+            if use_parsed_window and parsed_msg_range:
+                date_from = str(parsed_msg_range.get("date_from") or "").strip()[:10]
+                date_to = str(parsed_msg_range.get("date_to") or "").strip()[:10]
+                try:
+                    d_from = date.fromisoformat(date_from)
+                    d_to = date.fromisoformat(date_to)
+                    if d_to < d_from:
+                        d_from, d_to = d_to, d_from
+                        date_from, date_to = d_from.isoformat(), d_to.isoformat()
+                    if (d_to - d_from).days > _MAX_CONTEXT_DATE_SPAN_DAYS:
+                        d_from = d_to - timedelta(days=_MAX_CONTEXT_DATE_SPAN_DAYS)
+                        date_from = d_from.isoformat()
+                except (TypeError, ValueError):
+                    date_from, date_to = _store_context_date_window(365)
+                    use_parsed_window = False
+                    parsed_msg_range = None
+            else:
+                date_from, date_to = _store_context_date_window(365)
+                parsed_msg_range = None
+                use_parsed_window = False
+
+            orders_truncated = False
             try:
                 inv_payload = await self.store_client.get_invoice_by_seller_id(
                     seller_id,
@@ -574,6 +613,9 @@ class AIOrchestrator:
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("Store API orders/all with window failed")
                         store_context_error = (store_context_error or "") + f" orders_all:{exc!s}"[:220]
+                if orders and len(orders) > _MAX_STORE_ORDERS_IN_CONTEXT:
+                    orders = orders[:_MAX_STORE_ORDERS_IN_CONTEXT]
+                    orders_truncated = True
                 if not orders:
                     try:
                         orders = await self.store_client.get_orders_all(seller_id)
@@ -728,6 +770,24 @@ class AIOrchestrator:
             )
         has_orders = bool(orders_last_365)
 
+        orders_requested_range: Optional[Dict[str, Any]] = None
+        if (
+            use_parsed_window
+            and parsed_msg_range
+            and seller_id
+            and store_linked
+        ):
+            summary_slice = orders[:10] if isinstance(orders, list) else []
+            orders_requested_range = {
+                "label": parsed_msg_range.get("label"),
+                "date_from": date_from,
+                "date_to": date_to,
+                "order_count": len(orders) if isinstance(orders, list) else 0,
+                "summary_orders": summary_slice,
+                "has_more": bool(isinstance(orders, list) and len(orders) > 10),
+                "truncated": orders_truncated,
+            }
+
         return {
             "customer": customer or {},
             "recent_orders": orders,
@@ -744,6 +804,9 @@ class AIOrchestrator:
             "orders_last_90_days": orders_last_90,
             "orders_last_365_days": orders_last_365,
             "has_orders": has_orders,
+            "context_store_date_from": (date_from or None) if seller_id else None,
+            "context_store_date_to": (date_to or None) if seller_id else None,
+            "orders_requested_range": orders_requested_range,
         }
 
     async def should_escalate(self, message: str) -> bool:

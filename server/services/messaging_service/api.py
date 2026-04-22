@@ -2196,6 +2196,18 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
             message_text=text,
             bot_flow=flow_state,
         )
+        if mem_id and isinstance(customer_context, dict):
+            oreq = customer_context.get("orders_requested_range")
+            if isinstance(oreq, dict) and oreq.get("date_from") and oreq.get("date_to"):
+                ConversationMemory.store_orders_export_window(
+                    mem_id,
+                    {
+                        "label": oreq.get("label"),
+                        "date_from": oreq["date_from"],
+                        "date_to": oreq["date_to"],
+                        "order_count": oreq.get("order_count"),
+                    },
+                )
         recent_orders = customer_context.get("recent_orders") or []
         customer_ctx = customer_context.get("customer") or {}
         _meta = (
@@ -2235,6 +2247,18 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 message_text=text,
                 bot_flow=flow_state,
             )
+            if mem_id and isinstance(customer_context, dict):
+                oreq = customer_context.get("orders_requested_range")
+                if isinstance(oreq, dict) and oreq.get("date_from") and oreq.get("date_to"):
+                    ConversationMemory.store_orders_export_window(
+                        mem_id,
+                        {
+                            "label": oreq.get("label"),
+                            "date_from": oreq["date_from"],
+                            "date_to": oreq["date_to"],
+                            "order_count": oreq.get("order_count"),
+                        },
+                    )
             recent_orders = customer_context.get("recent_orders") or []
             customer_ctx = customer_context.get("customer") or {}
         _meta2 = (
@@ -2363,6 +2387,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     customer_msg.language = detected_language
     ai_messages: list[Message] = []
     wa_images = getattr(flow, "whatsapp_image_outbound", None) or []
+    wa_docs = getattr(flow, "whatsapp_document_outbound", None) or []
     if isinstance(wa_images, list):
         for item in wa_images:
             if not isinstance(item, dict):
@@ -2380,6 +2405,33 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                     language=detected_language,
                     created_at=datetime.utcnow(),
                     message_metadata={"type": "image", "media_url": img_url},
+                )
+            )
+    if isinstance(wa_docs, list):
+        for item in wa_docs:
+            if not isinstance(item, dict):
+                continue
+            cb = item.get("content_bytes")
+            has_bytes = isinstance(cb, (bytes, bytearray)) and len(cb) > 0
+            doc_url = str(item.get("document_url") or "").strip()
+            if not has_bytes and not doc_url:
+                continue
+            fn = str(item.get("filename") or "orders.csv").strip() or "orders.csv"
+            cap = str(item.get("caption") or "").strip() or "Document"
+            meta: Dict[str, Any] = {"type": "document", "filename": fn}
+            if doc_url:
+                meta["media_url"] = doc_url
+            if has_bytes:
+                meta["whatsapp_media_upload"] = True
+            ai_messages.append(
+                Message(
+                    conversation_id=conversation.id,
+                    content=cap,
+                    sender_type="ai",
+                    sender_id=None,
+                    language=detected_language,
+                    created_at=datetime.utcnow(),
+                    message_metadata=meta,
                 )
             )
     ai_msg = Message(
@@ -2431,6 +2483,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     wa_response: Dict[str, Any] | None = None
     client = MetaWhatsAppClient()
     wa_images = getattr(flow, "whatsapp_image_outbound", None) or []
+    wa_docs = getattr(flow, "whatsapp_document_outbound", None) or []
     _wa_tail_raw = getattr(flow, "whatsapp_text_after_images", None)
     wa_tail_parts: List[str] = []
     if isinstance(_wa_tail_raw, list):
@@ -2443,7 +2496,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         if s:
             wa_tail_parts.append(s)
 
-    if reply_text or wa_images:
+    if reply_text or wa_images or wa_docs:
         if not client.is_configured():
             logger.warning(
                 "WhatsApp reply not sent: Meta Cloud API env missing. "
@@ -2513,6 +2566,77 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                                 pass
                         wa_response = await client.send_text_message(
                             to_phone=from_phone, text=_part[:4096]
+                        )
+                elif isinstance(wa_docs, list) and wa_docs:
+                    doc_sends_succeeded = 0
+                    for idx, item in enumerate(wa_docs):
+                        if not isinstance(item, dict):
+                            continue
+                        raw_b = item.get("content_bytes")
+                        has_bytes = isinstance(raw_b, (bytes, bytearray)) and len(raw_b) > 0
+                        doc_url = str(item.get("document_url") or "").strip()
+                        fn = str(item.get("filename") or "orders.csv").strip() or "orders.csv"
+                        if not fn.lower().endswith(".csv"):
+                            fn = f"{fn.rstrip('.')}.csv"
+                        cap = str(item.get("caption") or "").strip() or None
+                        if not has_bytes and not doc_url:
+                            continue
+                        if idx > 0:
+                            try:
+                                await asyncio.sleep(0.25)
+                            except Exception:
+                                pass
+                        try:
+                            if has_bytes:
+                                _mime = (
+                                    str(item.get("mime_type") or "text/csv").split(";")[0].strip()
+                                    or "text/csv"
+                                )
+                                wa_response = await client.send_document_from_bytes(
+                                    to_phone=from_phone,
+                                    file_bytes=bytes(raw_b),
+                                    filename=fn[:240],
+                                    caption=cap,
+                                    mime_type=_mime,
+                                )
+                            else:
+                                wa_response = await client.send_document_message(
+                                    to_phone=from_phone,
+                                    document_url=doc_url,
+                                    filename=fn[:240],
+                                    caption=cap,
+                                )
+                            doc_sends_succeeded += 1
+                        except Exception:
+                            logger.exception(
+                                "WhatsApp document send failed (conversation_id=%s link_fallback=%s)",
+                                conversation.id,
+                                bool(doc_url) and has_bytes,
+                            )
+                            if has_bytes and doc_url:
+                                try:
+                                    wa_response = await client.send_document_message(
+                                        to_phone=from_phone,
+                                        document_url=doc_url,
+                                        filename=fn[:240],
+                                        caption=cap,
+                                    )
+                                    doc_sends_succeeded += 1
+                                except Exception:
+                                    logger.exception(
+                                        "WhatsApp document link fallback failed (conversation_id=%s)",
+                                        conversation.id,
+                                    )
+                                    wa_response = {"error": "meta_document_send_failed"}
+                            else:
+                                wa_response = {"error": "meta_document_send_failed"}
+                    if doc_sends_succeeded and (reply_text or "").strip():
+                        try:
+                            await asyncio.sleep(0.35)
+                        except Exception:
+                            pass
+                        wa_response = await client.send_text_message(
+                            to_phone=from_phone, text=reply_text[:4096]
                         )
                 elif (reply_text or "").strip():
                     wa_response = await client.send_text_message(to_phone=from_phone, text=reply_text)

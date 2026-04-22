@@ -46,6 +46,7 @@ from services.broadcasts_service.api import router as broadcasts_router
 from services.knowledge_service.api import router as knowledge_router
 from services.internal_dm_service.api import router as internal_dm_router
 from services.agent_portal_service.api import router as agent_portal_router
+from services.orders_export_service.api import router as orders_export_router
 from services.upload_service.api import router as upload_router
 from services.trending_products_service.api import (
     public_router as trending_public_router,
@@ -203,6 +204,7 @@ app.include_router(broadcasts_router, prefix="/api", tags=["broadcasts"])
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["knowledge"])
 app.include_router(internal_dm_router, prefix="/api/internal-dm", tags=["internal-dm"])
 app.include_router(agent_portal_router, prefix="/api/agent-portal", tags=["agent-portal"])
+app.include_router(orders_export_router, prefix="/api/orders", tags=["orders"])
 app.include_router(upload_router, prefix="/api/upload", tags=["upload"])
 app.include_router(trending_products_admin_router)
 app.include_router(trending_public_router)

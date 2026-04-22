@@ -7,6 +7,9 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+# WhatsApp Cloud API outbound document cap (product limit ~100 MB).
+_MAX_WA_OUTBOUND_DOCUMENT_BYTES = 100 * 1024 * 1024
+
 
 class MetaWhatsAppClient:
     """
@@ -177,6 +180,149 @@ class MetaWhatsAppClient:
             if resp.status_code >= 400:
                 logger.error(
                     "Meta WhatsApp audio API HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def upload_whatsapp_media_file(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        mime_type: str,
+    ) -> str:
+        """
+        POST multipart to ``/{phone-number-id}/media``. Returns Graph ``id`` for use in messages.
+        """
+        if not self.is_configured():
+            raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
+        if not file_bytes:
+            raise ValueError("file_bytes is empty")
+        if len(file_bytes) > _MAX_WA_OUTBOUND_DOCUMENT_BYTES:
+            raise ValueError("file_bytes exceeds WhatsApp document size limit")
+        fn = (filename or "file").strip() or "file"
+        ct = (mime_type or "application/octet-stream").split(";")[0].strip()
+        files = {
+            "file": (fn, file_bytes, ct),
+            "messaging_product": (None, "whatsapp"),
+            "type": (None, ct),
+        }
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            upload = await client.post(
+                self._media_upload_url(),
+                files=files,
+                headers=self._auth_headers(),
+            )
+            if upload.status_code >= 400:
+                logger.error(
+                    "Meta media upload API HTTP %s: %s",
+                    upload.status_code,
+                    (upload.text or "")[:800],
+                )
+            upload.raise_for_status()
+            upload_json = upload.json()
+            media_id = str(upload_json.get("id") or "").strip()
+            if not media_id:
+                raise RuntimeError("Meta media upload response missing id")
+            return media_id
+
+    async def send_document_by_media_id(
+        self,
+        to_phone: str,
+        media_id: str,
+        filename: str,
+        caption: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self.is_configured():
+            raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
+        if not to_phone or not media_id or not filename:
+            raise ValueError("to_phone, media_id, and filename are required")
+        doc: Dict[str, Any] = {
+            "id": media_id.strip(),
+            "filename": filename.strip()[:240],
+        }
+        if caption and caption.strip():
+            doc["caption"] = caption.strip()[:1024]
+        payload: Dict[str, Any] = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "document",
+            "document": doc,
+        }
+        url = self._messages_url()
+        headers = self._headers()
+        logger.info(
+            "Sending WhatsApp document by media id PHONE_NUMBER_ID=%s TO=%s filename=%s",
+            self.phone_number_id,
+            to_phone,
+            doc.get("filename"),
+        )
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta WhatsApp document (id) API HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def send_document_from_bytes(
+        self,
+        to_phone: str,
+        file_bytes: bytes,
+        filename: str,
+        caption: Optional[str] = None,
+        mime_type: str = "text/csv",
+    ) -> Dict[str, Any]:
+        """
+        Upload CSV (or other document) to Meta then send by ``id`` — avoids public HTTPS on ``link``.
+        """
+        media_id = await self.upload_whatsapp_media_file(file_bytes, filename, mime_type)
+        return await self.send_document_by_media_id(to_phone, media_id, filename, caption)
+
+    async def send_document_message(
+        self,
+        to_phone: str,
+        document_url: str,
+        filename: str,
+        caption: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Outbound document via public ``link`` (HTTPS URL must be reachable by Meta servers).
+        Prefer :meth:`send_document_from_bytes` for CSV when you already have the file bytes.
+        """
+        if not self.is_configured():
+            raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
+        if not to_phone or not document_url or not filename:
+            raise ValueError("to_phone, document_url, and filename are required")
+        url = self._messages_url()
+        doc: Dict[str, Any] = {
+            "link": document_url.strip(),
+            "filename": filename.strip()[:240],
+        }
+        if caption and caption.strip():
+            doc["caption"] = caption.strip()[:1024]
+        payload: Dict[str, Any] = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "document",
+            "document": doc,
+        }
+        headers = self._headers()
+        logger.info(
+            "Sending WhatsApp document PHONE_NUMBER_ID=%s TO=%s filename=%s",
+            self.phone_number_id,
+            to_phone,
+            doc.get("filename"),
+        )
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta WhatsApp document API HTTP %s: %s",
                     resp.status_code,
                     (resp.text or "")[:800],
                 )

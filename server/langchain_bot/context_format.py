@@ -333,6 +333,21 @@ def format_order_discovery_for_llm(fetch_ctx: Dict[str, Any]) -> str:
         "For user-facing lists without an order number: follow ORDER DISCOVERY RULES — at most 5 orders, "
         "newest first, exact line format from the rules; pick rows from the appropriate non-empty bucket."
     )
+    oreq = fetch_ctx.get("orders_requested_range")
+    if isinstance(oreq, dict) and oreq.get("date_from") and oreq.get("date_to"):
+        cnt = int(oreq.get("order_count") or 0)
+        lines.append(
+            f"**Requested range (from customer wording):** {oreq.get('label') or ''} "
+            f"({oreq.get('date_from')} … {oreq.get('date_to')}), order_count={cnt}, "
+            f"has_more={bool(oreq.get('has_more'))}, truncated={bool(oreq.get('truncated'))}."
+        )
+        lines.append(
+            "For this turn, prefer **HANDLING LARGE ORDER REQUESTS** rules: state the total count, "
+            "then up to 10 one-line samples from **summary rows** below (newest first), then offer CSV or next batch."
+        )
+        for o in (oreq.get("summary_orders") or [])[:12]:
+            if isinstance(o, dict):
+                lines.append(f"  {format_order_discovery_one_liner(o)}")
     return "\n".join(lines)
 
 
