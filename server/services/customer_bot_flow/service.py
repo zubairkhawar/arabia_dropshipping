@@ -235,6 +235,8 @@ def _get_flow(meta: Dict[str, Any]) -> Dict[str, Any]:
 
 def _merge_flow(meta: Dict[str, Any], flow: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(meta)
+    # One-shot flag: first customer turn after agent closed chat (LLM handover context).
+    out.pop("awaiting_first_customer_after_agent_close", None)
     out[BOT_FLOW_KEY] = flow
     return out
 
@@ -3147,6 +3149,9 @@ async def process_customer_bot_message(
         )
 
     meta = _normalize_meta(conversation)
+    suppress_escalation_after_agent_close = bool(
+        meta.get("awaiting_first_customer_after_agent_close")
+    )
     flow = _get_flow(meta)
     meta, flow = _apply_inactivity_bot_reset(db, conversation, meta, flow)
     flow = _migrate_legacy_bot_flow(flow)
@@ -3180,7 +3185,11 @@ async def process_customer_bot_message(
         _memory_apply_entities(mem_id, _um_early)
 
     store_client = StoreIntegrationClient()
-    escalate_for_ai_turn = await orchestrator.should_escalate(user_message)
+    escalate_for_ai_turn = (
+        False
+        if suppress_escalation_after_agent_close
+        else await orchestrator.should_escalate(user_message)
+    )
 
     def save(
         f: Dict[str, Any],
@@ -3598,12 +3607,13 @@ async def process_customer_bot_message(
                 wa_imgs = wa_l
                 wa_after = [reply_text, followup_text] if followup_text else [reply_text]
 
-        team = TEAM_NEW_CUSTOMER if llm_result.escalate else None
+        esc_llm = bool(llm_result.escalate) and not suppress_escalation_after_agent_close
+        team = TEAM_NEW_CUSTOMER if esc_llm else None
         return save(
             nf,
             full_reply,
             team=team,
-            esc=bool(llm_result.escalate),
+            esc=esc_llm,
             wa_images=wa_imgs,
             wa_text_after=wa_after,
         )

@@ -793,10 +793,10 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           : c,
       ),
     );
-    void fetch(`${API_BASE}/api/messaging/conversations/${convId}/status`, {
-      method: 'PATCH',
+    void fetch(`${API_BASE}/api/messaging/conversations/${convId}/close`, {
+      method: 'POST',
       headers: authJsonHeaders(),
-      body: JSON.stringify({ status: 'closed' }),
+      body: JSON.stringify({}),
     });
   },
     [timeZone],

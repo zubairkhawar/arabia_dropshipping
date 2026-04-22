@@ -81,6 +81,25 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             .first()
         )
 
+    if conversation and conversation.agent_id is None:
+        st = (conversation.status or "").lower()
+        if st in ("closed", "resolved"):
+            meta = (
+                conversation.conversation_metadata
+                if isinstance(conversation.conversation_metadata, dict)
+                else {}
+            )
+            meta = {
+                **meta,
+                "reopened_after_close_at": datetime.utcnow().isoformat(),
+            }
+            conversation.conversation_metadata = meta
+            conversation.status = "active"
+            conversation.updated_at = datetime.utcnow()
+            db.add(conversation)
+            db.commit()
+            db.refresh(conversation)
+
     if conversation and conversation.agent_id:
         detected_language = message.language or await orchestrator.detect_language(
             message.message
@@ -315,26 +334,48 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
                 if isinstance(bf_lang, str) and bf_lang.strip()
                 else detected_language
             )
-            extra = resolve_bot_template(lang, "handoff_unavailable")
-            if extra:
-                schedule_line = ""
-                sched = (
-                    db.query(TenantSchedule)
-                    .filter(TenantSchedule.tenant_id == message.tenant_id)
-                    .first()
-                )
-                if sched and sched.working_days and sched.start_time and sched.end_time:
-                    schedule_line = format_tenant_schedule_line_for_handoff(
-                        lang,
-                        sched.working_days,
-                        sched.start_time,
-                        sched.end_time,
+            _hint_meta_h = (
+                conversation.conversation_metadata
+                if conversation and isinstance(conversation.conversation_metadata, dict)
+                else {}
+            )
+            _rh_h = format_recent_context_hint_for_prompt(_hint_meta_h)
+            extra = await bot.generate_handoff_unavailable_addon(
+                tenant_id=message.tenant_id,
+                language=lang,
+                channel=(message.channel or "web").strip().lower(),
+                customer_message=message.message,
+                conversation_id=conversation.id if conversation else None,
+                recent_context_hint=_rh_h,
+                memory_context=memory_block,
+                customer_context=customer,
+                bot_flow=flow.merge_metadata.get("bot_flow")
+                if isinstance(flow.merge_metadata, dict)
+                else None,
+            )
+            if (extra or "").strip():
+                reply_text = f"{(reply_text or '').strip()}\n\n{extra.strip()}".strip()
+            else:
+                fb = resolve_bot_template(lang, "handoff_unavailable")
+                if fb:
+                    schedule_line = ""
+                    sched = (
+                        db.query(TenantSchedule)
+                        .filter(TenantSchedule.tenant_id == message.tenant_id)
+                        .first()
                     )
-                try:
-                    extra = extra.format(schedule=schedule_line)
-                except (KeyError, IndexError):
-                    extra = extra.replace("{schedule}", schedule_line)
-                reply_text = f"{(reply_text or '').strip()}\n\n{extra}".strip()
+                    if sched and sched.working_days and sched.start_time and sched.end_time:
+                        schedule_line = format_tenant_schedule_line_for_handoff(
+                            lang,
+                            sched.working_days,
+                            sched.start_time,
+                            sched.end_time,
+                        )
+                    try:
+                        fb = fb.format(schedule=schedule_line)
+                    except (KeyError, IndexError):
+                        fb = fb.replace("{schedule}", schedule_line)
+                    reply_text = f"{(reply_text or '').strip()}\n\n{fb}".strip()
 
     if conversation:
         db.add(

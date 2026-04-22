@@ -161,3 +161,19 @@ def format_recent_context_hint_for_prompt(metadata: Optional[Dict[str, Any]]) ->
         return "The customer was recently discussing account verification (email, OTP, or expiry)."
 
     return "None"
+
+
+def format_post_agent_close_context_for_prompt(metadata: Optional[Dict[str, Any]]) -> str:
+    """
+    When an agent just closed the chat, the next customer message should get a natural LLM reply
+    (e.g. brief thanks acknowledgment). Not a state machine — one line of grounding for the model.
+    """
+    if not isinstance(metadata, dict):
+        return "None"
+    if not metadata.get("awaiting_first_customer_after_agent_close"):
+        return "None"
+    return (
+        "A human agent closed this chat moments ago; Dropbot is resuming. The thread may show a "
+        "short system line about that. If the customer is brief (e.g. okay/thanks), reply warmly "
+        "and invite further help — do not repeat the closure notice verbatim unless needed."
+    )

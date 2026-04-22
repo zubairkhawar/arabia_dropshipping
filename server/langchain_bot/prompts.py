@@ -97,6 +97,34 @@ RULES:
   from **Agent schedule context**. Do **not** claim "24/7" unless that schedule clearly means
   all days with full-day coverage; never contradict the schedule text.
 - Do **not** invent escalation menus; the backend may append fixed handoff lines when routing applies.
+- When an agent **closes** a chat, the server sends a short deterministic handover line (not your wording).
+  Your job is the **next** customer turns: use **Post human-support handover** context when present.
+
+=== Handling agent availability (real-time JSON) ===
+When a customer asks to speak with a human agent, asks if anyone is online, or when **Agent availability (JSON)**
+shows assignment failed or you must explain unavailability:
+
+**Step 1 — Online agents**
+- Use `agents_online` and `agents_online_count` from **Agent availability (JSON)**.
+- If `agents_online` is true and the server is connecting them, confirm briefly (e.g. connecting / please wait a moment).
+
+**Step 2 — Offline + broadcasts**
+- If `active_broadcasts` is non-empty, base your wording on `agent_availability_message` for the broadcast that covers
+  today (match `starts_at` / `ends_at` to current UTC date when present). Prefer that text verbatim or a natural paraphrase;
+  do not invent different holiday or closure dates.
+
+**Step 3 — Offline, no broadcast**
+- Use `current_schedule` from the same JSON (and **Agent schedule context** should align). Do **not** say "24/7" unless
+  `current_schedule` clearly states round-the-clock coverage.
+
+**Step 4 — Always offer an alternative**
+- After explaining unavailability, offer help from you (Dropbot) and/or leaving a message for the team.
+
+**Language**: Match **Detected language** (English / Arabic / Roman Urdu).
+
+**Follow-up format exception**: If the user message starts with `[HANDOFF_UNAVAILABILITY_REPLY]` (server-injected), reply with
+**only** the availability explanation and alternative offers (2–6 sentences). Do **not** add the "You might also want to ask"
+section or three bullet suggestions.
 
 === Missing info ===
 - No orders in context + no store link: say you do not see linked store data; ask for an order number or **support**.
@@ -386,24 +414,28 @@ Runtime context (trust these over assumptions):
 - Invoices (payable, pay_status, order_ids per row, penalties when present): {invoices_context}
 - Agent schedule context: {schedule_context}
 - Active broadcast context: {broadcast_context}
+- Agent availability (JSON — live online counts + schedule + broadcasts; trust for handoff questions): {agent_availability_context}
+- Post human-support handover (None unless an agent just closed the chat): {post_close_handover_context}
 - Knowledge context: {knowledge_context}
 - Recent conversation (oldest first in this block): {conversation_history}
 """.strip()
 
 
-def build_system_prompt_template() -> str:
+def build_system_prompt_template(*, omit_followup_suggestions: bool = False) -> str:
     """Full system message including optional follow-up instructions (see settings.llm_followup_suggestions)."""
     parts = [ARABIA_CORE_BEHAVIOR, ARABIA_ORDER_DISCOVERY_AND_FLOWS, ARABIA_SERVICE_FACTS_FOR_FOLLOWUPS]
-    if bool(getattr(settings, "llm_followup_suggestions", True)):
+    if not omit_followup_suggestions and bool(
+        getattr(settings, "llm_followup_suggestions", True)
+    ):
         parts.append(FOLLOWUP_OUTPUT_INSTRUCTIONS)
     parts.append(RUNTIME_CONTEXT_TEMPLATE)
     return "\n\n".join(parts).strip()
 
 
-def build_prompt() -> ChatPromptTemplate:
+def build_prompt(*, omit_followup_suggestions: bool = False) -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
-            ("system", build_system_prompt_template()),
+            ("system", build_system_prompt_template(omit_followup_suggestions=omit_followup_suggestions)),
             ("human", "{user_message}"),
         ]
     )
@@ -451,6 +483,15 @@ def _followup_block_lines(lang_key: str) -> Tuple[str, str, str]:
         items = _DEFAULT_FOLLOWUPS_EN
     bullets = "\n".join(f"• {q}" for q in items)
     return title, closing, bullets
+
+
+def strip_followup_suggestions_block(text: str) -> str:
+    """Remove the three-bullet follow-up section if the model emitted it."""
+    body = (text or "").strip()
+    m = _FOLLOWUP_SECTION_HEADER.search(body)
+    if m:
+        return body[: m.start()].rstrip()
+    return body
 
 
 def strip_followup_block_when_disabled(text: str) -> str:

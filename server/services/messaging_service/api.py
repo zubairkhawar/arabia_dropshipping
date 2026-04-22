@@ -1474,6 +1474,7 @@ async def update_conversation_status(
                     "agent_name": label,
                     "at": datetime.utcnow().isoformat(),
                 },
+                "awaiting_first_customer_after_agent_close": True,
             }
             conversation.conversation_metadata = meta
         conversation.agent_id = None
@@ -1503,54 +1504,65 @@ async def update_conversation_status(
                 conversation.id,
             )
 
+    close_notice_text = (
+        "The agent has closed this chat. Arabia Dropbot will continue helping you from here."
+    )
+    close_notice_row: Message | None = None
+    if is_closing and assigned_agent_id_before is not None:
+        close_notice_row = Message(
+            conversation_id=conversation.id,
+            content=close_notice_text,
+            sender_type="ai",
+            sender_id=None,
+            created_at=datetime.utcnow(),
+            message_metadata={"system_event": "agent_closed_chat"},
+        )
+        db.add(close_notice_row)
+        conversation.updated_at = datetime.utcnow()
+        db.add(conversation)
+        db.commit()
+        db.refresh(close_notice_row)
+        db.refresh(conversation)
+        try:
+            await push_inbox_message(
+                db,
+                conversation.tenant_id,
+                assigned_agent_id_before,
+                conversation.id,
+                _message_dict_for_ws(db, close_notice_row),
+            )
+        except Exception:
+            logger.exception(
+                "status patch: push close-notify message failed (conversation_id=%s)",
+                conversation.id,
+            )
+
     if (
-        is_closing
+        close_notice_row is not None
         and is_assigned_agent_closer
-        and assigned_agent_id_before is not None
         and (conversation.channel or "").lower() == "whatsapp"
     ):
         customer = db.query(Customer).filter(Customer.id == conversation.customer_id).first()
         phone = customer.phone if customer else None
         wa = MetaWhatsAppClient()
-        body_text = (
-            "The agent has closed this chat. Arabia Dropbot will continue helping you from here."
-        )
         if phone and wa.is_configured():
             try:
-                wa_resp = await wa.send_text_message(to_phone=str(phone), text=body_text)
-                out_row = Message(
-                    conversation_id=conversation.id,
-                    content=body_text,
-                    sender_type="ai",
-                    sender_id=None,
-                    created_at=datetime.utcnow(),
+                wa_resp = await wa.send_text_message(
+                    to_phone=str(phone), text=close_notice_text
                 )
+                row_meta = dict(close_notice_row.message_metadata or {})
                 msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None
                 if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict):
                     out_wa_id = str(msgs[0].get("id") or "").strip()
                     if out_wa_id:
-                        out_row.message_metadata = {"wa_message_id": out_wa_id}
-                out_row.wa_delivered_at = datetime.utcnow()
-                db.add(out_row)
+                        row_meta["wa_message_id"] = out_wa_id
+                close_notice_row.message_metadata = row_meta
+                close_notice_row.wa_delivered_at = datetime.utcnow()
+                db.add(close_notice_row)
                 conversation.updated_at = datetime.utcnow()
                 db.add(conversation)
                 db.commit()
-                db.refresh(out_row)
-                db.refresh(conversation)
-                if assigned_agent_id_before is not None:
-                    try:
-                        await push_inbox_message(
-                            db,
-                            conversation.tenant_id,
-                            assigned_agent_id_before,
-                            conversation.id,
-                            _message_dict_for_ws(db, out_row),
-                        )
-                    except Exception:
-                        logger.exception(
-                            "status patch: push close-notify message failed (conversation_id=%s)",
-                            conversation.id,
-                        )
+                db.refresh(close_notice_row)
             except Exception:
                 logger.exception(
                     "WhatsApp agent-close notify failed (conversation_id=%s)",
@@ -1558,6 +1570,24 @@ async def update_conversation_status(
                 )
 
     return _build_conversation_summary(conversation)
+
+
+@router.post("/conversations/{conversation_id}/close", response_model=ConversationSummary)
+async def close_conversation_explicit(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    """
+    Deterministic close when an agent finishes a chat: same behavior as PATCH status → closed.
+    Updates conversation state and persists the standard handover line — not LLM-generated.
+    """
+    return await update_conversation_status(
+        conversation_id,
+        ConversationStatusUpdate(status="closed"),
+        db,
+        current_user,
+    )
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -2158,6 +2188,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
         else None
     )
 
+    customer_ctx: Dict[str, Any] = {}
     if not flow.handled:
         flow_state = flow.merge_metadata.get("bot_flow") if isinstance(flow.merge_metadata, dict) else None
         customer_context = await orchestrator.fetch_customer_context(
@@ -2277,29 +2308,49 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
                 store.id,
             )
         elif assign_result.agent_id is None and assign_result.reason == "no_available_agent":
-            extra = resolve_bot_template(
-                bf_lang or detected_language, "handoff_unavailable"
+            _meta_h = (
+                conversation.conversation_metadata
+                if isinstance(conversation.conversation_metadata, dict)
+                else {}
             )
-            if extra:
-                schedule_line = ""
-                sched = (
-                    db.query(TenantSchedule)
-                    .filter(TenantSchedule.tenant_id == tenant_id)
-                    .first()
-                )
-                if sched and sched.working_days and sched.start_time and sched.end_time:
-                    _lang = bf_lang or detected_language
-                    schedule_line = format_tenant_schedule_line_for_handoff(
-                        _lang,
-                        sched.working_days,
-                        sched.start_time,
-                        sched.end_time,
+            _rh_h = format_recent_context_hint_for_prompt(_meta_h)
+            extra = await bot.generate_handoff_unavailable_addon(
+                tenant_id=tenant_id,
+                language=bf_lang or detected_language,
+                channel="whatsapp",
+                customer_message=text,
+                conversation_id=conversation.id,
+                exclude_history_message_id=customer_msg.id,
+                recent_context_hint=_rh_h,
+                memory_context=memory_block,
+                customer_context=customer_ctx,
+                bot_flow=flow.merge_metadata.get("bot_flow")
+                if isinstance(flow.merge_metadata, dict)
+                else None,
+            )
+            if (extra or "").strip():
+                reply_text = f"{(reply_text or '').strip()}\n\n{extra.strip()}".strip()
+            else:
+                fb = resolve_bot_template(bf_lang or detected_language, "handoff_unavailable")
+                if fb:
+                    schedule_line = ""
+                    sched = (
+                        db.query(TenantSchedule)
+                        .filter(TenantSchedule.tenant_id == tenant_id)
+                        .first()
                     )
-                try:
-                    extra = extra.format(schedule=schedule_line)
-                except (KeyError, IndexError):
-                    extra = extra.replace("{schedule}", schedule_line)
-                reply_text = f"{(reply_text or '').strip()}\n\n{extra}".strip()
+                    if sched and sched.working_days and sched.start_time and sched.end_time:
+                        schedule_line = format_tenant_schedule_line_for_handoff(
+                            bf_lang or detected_language,
+                            sched.working_days,
+                            sched.start_time,
+                            sched.end_time,
+                        )
+                    try:
+                        fb = fb.format(schedule=schedule_line)
+                    except (KeyError, IndexError):
+                        fb = fb.replace("{schedule}", schedule_line)
+                    reply_text = f"{(reply_text or '').strip()}\n\n{fb}".strip()
 
     if not (reply_text or "").strip():
         reply_text = resolve_bot_template(bf_lang or detected_language, "fallback")

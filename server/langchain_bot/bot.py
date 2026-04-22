@@ -11,7 +11,8 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from config import get_openai_api_key, settings
-from models import Broadcast, KnowledgeSource, Message, TenantSchedule
+from models import Broadcast, Conversation, KnowledgeSource, Message, TenantSchedule
+from langchain_bot.conversation_hints import format_post_agent_close_context_for_prompt
 from langchain_bot.context_format import (
     build_customer_identity_summary,
     format_invoices_summary_for_llm,
@@ -26,7 +27,9 @@ from langchain_bot.prompts import (
     normalize_context_text,
     now_utc_iso,
     strip_followup_block_when_disabled,
+    strip_followup_suggestions_block,
 )
+from services.agent_availability_context import format_agent_availability_json_for_prompt
 from services.tenant_schedule_text import format_tenant_schedule_for_customer
 
 logger = logging.getLogger(__name__)
@@ -391,6 +394,18 @@ class ArabiaLangChainBot:
             min_score=max(0, int(getattr(settings, "kb_min_score", 1) or 0)),
         )
 
+    def _post_close_handover_line(self, conversation_id: Optional[int]) -> str:
+        if not conversation_id:
+            return "None"
+        row = (
+            self.db.query(Conversation)
+            .filter(Conversation.id == conversation_id)
+            .first()
+        )
+        if not row:
+            return "None"
+        return format_post_agent_close_context_for_prompt(row.conversation_metadata)
+
     def _conversation_history_block(
         self,
         conversation_id: Optional[int],
@@ -518,6 +533,16 @@ class ArabiaLangChainBot:
             memory_context,
             "None (no Redis memory for this scope).",
         )
+        agent_availability_context = format_agent_availability_json_for_prompt(
+            self.db,
+            tenant_id,
+            language=language,
+            customer_message=user_message,
+        )
+        post_close_handover_context = normalize_context_text(
+            self._post_close_handover_line(conversation_id),
+            "None",
+        )
         messages = build_prompt().format_messages(
             current_time=now_utc_iso(),
             channel=normalize_context_text(channel, "unknown"),
@@ -530,6 +555,8 @@ class ArabiaLangChainBot:
             invoices_context=invoices_block,
             schedule_context=schedule_context,
             broadcast_context=broadcast_context,
+            agent_availability_context=agent_availability_context,
+            post_close_handover_context=post_close_handover_context,
             knowledge_context=knowledge_context,
             conversation_history=history_block,
             user_message=user_message,
@@ -544,3 +571,100 @@ class ArabiaLangChainBot:
         if out:
             return strip_followup_block_when_disabled(out)
         return knowledge_gap_reply(language)
+
+    async def generate_handoff_unavailable_addon(
+        self,
+        *,
+        tenant_id: int,
+        language: str,
+        channel: str,
+        customer_message: str,
+        conversation_id: Optional[int] = None,
+        exclude_history_message_id: Optional[int] = None,
+        recent_context_hint: Optional[str] = None,
+        memory_context: Optional[str] = None,
+        customer_context: Optional[Dict[str, Any]] = None,
+        bot_flow: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Short reply when routing failed with no_available_agent; appended after the main bot answer.
+        """
+        key = get_openai_api_key()
+        if not key:
+            return ""
+
+        fc: Dict[str, Any] = {
+            "customer": customer_context or {},
+            "recent_orders": [],
+            "is_store_customer": bool((customer_context or {}).get("id")),
+            "verification_method": "none",
+            "store_context_error": None,
+            "orders_last_30_days": [],
+            "orders_last_90_days": [],
+            "orders_last_365_days": [],
+            "has_orders": False,
+        }
+        identity_block = build_customer_identity_summary(fc, bot_flow)
+        discovery_block = format_order_discovery_for_llm(fc)
+        orders_block = format_orders_summary_for_llm([])
+        invoices_block = format_invoices_summary_for_llm([], customer=fc.get("customer") if isinstance(fc.get("customer"), dict) else None)
+        history_block = self._conversation_history_block(
+            conversation_id,
+            exclude_message_id=exclude_history_message_id,
+        )
+        schedule_context = self._build_schedule_context(tenant_id, language)
+        broadcast_context = self._build_active_broadcast_context(tenant_id)
+        knowledge_context = "(Not required for this administrative reply.)"
+        agent_availability_context = format_agent_availability_json_for_prompt(
+            self.db,
+            tenant_id,
+            language=language,
+            customer_message=customer_message,
+        )
+        post_close_handover_context = normalize_context_text(
+            self._post_close_handover_line(conversation_id),
+            "None",
+        )
+        hint_line = normalize_context_text(recent_context_hint, "None")
+        memory_line = normalize_context_text(
+            memory_context,
+            "None (no Redis memory for this scope).",
+        )
+        user_message = (
+            "[HANDOFF_UNAVAILABILITY_REPLY]\n\n"
+            "A live human agent was requested but none could be assigned right now.\n\n"
+            f"Customer message:\n{customer_message.strip()}"
+        )
+        llm = ChatOpenAI(
+            model_name=self.model_name,
+            temperature=self.temperature,
+            openai_api_key=key,
+        )
+        messages = build_prompt(omit_followup_suggestions=True).format_messages(
+            current_time=now_utc_iso(),
+            channel=normalize_context_text(channel, "unknown"),
+            language=normalize_context_text(language, "english"),
+            recent_context_hint=hint_line,
+            memory_context=memory_line,
+            customer_context=identity_block,
+            order_discovery_context=discovery_block,
+            orders_context=orders_block,
+            invoices_context=invoices_block,
+            schedule_context=schedule_context,
+            broadcast_context=broadcast_context,
+            agent_availability_context=agent_availability_context,
+            post_close_handover_context=post_close_handover_context,
+            knowledge_context=knowledge_context,
+            conversation_history=history_block,
+            user_message=user_message,
+        )
+        try:
+            response = await llm.ainvoke(messages)
+        except Exception:
+            logger.exception("Handoff-unavailable LLM call failed")
+            return ""
+        content = getattr(response, "content", None)
+        out = content.strip() if isinstance(content, str) else str(response).strip()
+        if not out:
+            return ""
+        return strip_followup_suggestions_block(out)
