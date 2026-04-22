@@ -716,9 +716,11 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
 
       try {
         const [rowsRaw, detailData] = await Promise.all([
-          fetch(listUrl.toString(), { headers: authJsonHeaders() }).then(async (r) =>
-            r.ok ? r.json() : [],
-          ),
+          fetch(listUrl.toString(), { headers: authJsonHeaders() }).then(async (r) => {
+            if (!r.ok) return null;
+            const j = await r.json();
+            return Array.isArray(j) ? (j as ConversationSummaryApi[]) : null;
+          }),
           lastId != null
             ? fetch(`${API_BASE}/api/messaging/conversations/${lastId}?limit=50`, {
                 headers: authJsonHeaders(),
@@ -728,8 +730,13 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
 
         if (cancelled) return;
 
-        const rows = (Array.isArray(rowsRaw) ? rowsRaw : []) as ConversationSummaryApi[];
-        const mapped = applyPhoneDuplicateNewLeadRule(rows.map(mapConversation));
+        // Do not replace the inbox with [] when the API fails (502 during deploy, cold start,
+        // auth blip) — that made the conversation list look "wiped" until a manual refresh.
+        if (rowsRaw === null) {
+          return;
+        }
+
+        const mapped = applyPhoneDuplicateNewLeadRule(rowsRaw.map(mapConversation));
         setConversations(mapped);
 
         if (detailData && typeof detailData === 'object' && 'messages' in detailData) {
