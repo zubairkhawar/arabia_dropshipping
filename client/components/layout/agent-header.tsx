@@ -150,7 +150,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   }, [pathname, inboxQuery, setInboxQuery]);
 
   const applyStatusChange = useCallback(
-    (status: AgentStatus) => {
+    async (status: AgentStatus) => {
       const targetBackendStatus = status === 'active' ? 'online' : 'offline';
       if (typeof window !== 'undefined') {
         if (status === 'offline') {
@@ -161,12 +161,17 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
         }
       }
       if (currentAgentId) {
-        void setAgentStatus(currentAgentId, targetBackendStatus);
+        const r = await setAgentStatus(currentAgentId, targetBackendStatus);
+        if (!r.ok) {
+          if (r.message) toast(r.message);
+          setShowStatusMenu(false);
+          return;
+        }
       }
       if (slug) setPresence(slug, status);
       setShowStatusMenu(false);
     },
-    [currentAgentId, setAgentStatus, setPresence, slug],
+    [currentAgentId, setAgentStatus, setPresence, slug, toast],
   );
 
   useEffect(() => {
@@ -381,7 +386,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                           setShowOfflineConfirm(true);
                           return;
                         }
-                        applyStatusChange(status);
+                        void applyStatusChange(status);
                       }}
                       title={
                         status === 'active' && !isWithinSchedule()
@@ -797,7 +802,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
                   <button
                     type="button"
                     onClick={() => {
-                      applyStatusChange('offline');
+                      void applyStatusChange('offline');
                       setShowOfflineConfirm(false);
                     }}
                     className="px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary-dark text-sm"

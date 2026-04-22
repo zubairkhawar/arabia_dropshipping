@@ -13,7 +13,7 @@ import {
   ArchiveRestore,
 } from 'lucide-react';
 import { formatDistanceToNow, intervalToDuration } from 'date-fns';
-import { parseBackendUtcDate } from '@/lib/tenant-time';
+import { formatBroadcastInstantPkt, parseBackendUtcDate } from '@/lib/tenant-time';
 
 export interface AdminBroadcast {
   id: string;
@@ -38,7 +38,8 @@ const C = {
 };
 
 function parseMs(s: string): number {
-  const t = new Date(s).getTime();
+  const d = parseBackendUtcDate(s) ?? new Date(s);
+  const t = d.getTime();
   return Number.isNaN(t) ? NaN : t;
 }
 
@@ -174,7 +175,6 @@ function BroadcastCard({
   b,
   status,
   now,
-  timeZone,
   agentCount,
   archived,
   deleting,
@@ -191,7 +191,6 @@ function BroadcastCard({
   b: AdminBroadcast;
   status: 'active' | 'scheduled' | 'expired';
   now: number;
-  timeZone: string;
   agentCount: number;
   archived: boolean;
   deleting: boolean;
@@ -261,7 +260,9 @@ function BroadcastCard({
     ) : status === 'expired' && !Number.isNaN(end) ? (
       <p className="text-xs text-slate-600">
         <span className="font-medium text-slate-800">Ended:</span>{' '}
-        {formatDistanceToNow(new Date(b.endsAt), { addSuffix: true })}
+        {formatDistanceToNow(parseBackendUtcDate(b.endsAt) ?? new Date(b.endsAt), {
+          addSuffix: true,
+        })}
       </p>
     ) : null;
 
@@ -274,14 +275,14 @@ function BroadcastCard({
       : 'AI bot: not included';
 
   const agentsLine = b.deliveryNotifyAgents
-    ? `Agents: notified at creation (${agentCount})`
+    ? `Agents Notified: all (${agentCount})`
     : 'Agents: not notified';
 
   const custLine = b.deliveryNotifyCustomersWhatsapp
     ? b.whatsappTemplateName
       ? `Customers (WhatsApp): template “${b.whatsappTemplateName}” (${b.whatsappTemplateLanguage || '—'}) at creation`
       : 'Customers (WhatsApp): session text at creation (no template name stored)'
-    : 'Customers (WhatsApp): not sent';
+    : null;
 
   return (
     <article
@@ -397,8 +398,12 @@ function BroadcastCard({
         <span>{aiLine}</span>
         <span className="text-slate-300">·</span>
         <span>{agentsLine}</span>
-        <span className="text-slate-300">·</span>
-        <span>{custLine}</span>
+        {custLine ? (
+          <>
+            <span className="text-slate-300">·</span>
+            <span>{custLine}</span>
+          </>
+        ) : null}
       </div>
 
       <div className="mt-3 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
@@ -485,20 +490,7 @@ export function BroadcastsPanel({
     return () => clearInterval(t);
   }, []);
 
-  const formatDt = (s: string) => {
-    if (!s) return '—';
-    const d = parseBackendUtcDate(s) ?? new Date(s);
-    if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleString('en-US', {
-      timeZone,
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  };
+  const formatDt = (s: string) => formatBroadcastInstantPkt(s);
 
   const { active, upcoming, endedVisible, endedArchived } = useMemo(() => {
     const active: AdminBroadcast[] = [];
@@ -571,7 +563,6 @@ export function BroadcastsPanel({
       b={b}
       status={status}
       now={now}
-      timeZone={timeZone}
       agentCount={agentCount}
       archived={archivedIds.has(b.id)}
       deleting={deletingId === b.id}

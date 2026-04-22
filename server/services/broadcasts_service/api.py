@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +15,10 @@ from services.broadcasts_service.whatsapp_delivery import (
     count_named_body_placeholders,
     customer_in_whatsapp_session_window,
     expand_whatsapp_template_tokens,
+)
+from services.broadcasts_service.broadcast_agent_lock import (
+    broadcast_covers_now,
+    enforce_tenant_agents_offline_for_broadcast,
 )
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 
@@ -124,6 +128,20 @@ class BroadcastCreate(BaseModel):
             object.__setattr__(self, "whatsapp_template_body_parameters", None)
         return self
 
+    @model_validator(mode="after")
+    def broadcast_datetimes_to_naive_utc(self):
+        for field in ("starts_at", "ends_at"):
+            dt = getattr(self, field, None)
+            if dt is None:
+                continue
+            if dt.tzinfo is not None:
+                object.__setattr__(
+                    self,
+                    field,
+                    dt.astimezone(timezone.utc).replace(tzinfo=None),
+                )
+        return self
+
 
 class BroadcastUpdate(BaseModel):
     title: Optional[str] = None
@@ -165,6 +183,20 @@ class BroadcastUpdate(BaseModel):
         if isinstance(v, list):
             return ["" if x is None else str(x) for x in v]
         return v
+
+    @model_validator(mode="after")
+    def broadcast_datetimes_to_naive_utc(self):
+        for field in ("starts_at", "ends_at"):
+            dt = getattr(self, field, None)
+            if dt is None:
+                continue
+            if dt.tzinfo is not None:
+                object.__setattr__(
+                    self,
+                    field,
+                    dt.astimezone(timezone.utc).replace(tzinfo=None),
+                )
+        return self
 
 
 class WhatsAppRecipientCountOut(BaseModel):
@@ -345,6 +377,11 @@ async def create_broadcast(
     db.commit()
     db.refresh(b)
 
+    if payload.target_ai and broadcast_covers_now(b, datetime.utcnow()):
+        if enforce_tenant_agents_offline_for_broadcast(db, payload.tenant_id):
+            db.commit()
+            db.refresh(b)
+
     if payload.delivery_notify_agents:
         agents = (
             db.query(Agent).filter(Agent.tenant_id == payload.tenant_id).all()
@@ -484,6 +521,11 @@ async def update_broadcast(
     db.add(row)
     db.commit()
     db.refresh(row)
+
+    if bool(getattr(row, "target_ai", True)) and broadcast_covers_now(row, datetime.utcnow()):
+        if enforce_tenant_agents_offline_for_broadcast(db, int(row.tenant_id)):
+            db.commit()
+            db.refresh(row)
 
     return broadcast_payload_from_model(row)
 

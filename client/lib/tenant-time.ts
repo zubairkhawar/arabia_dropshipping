@@ -2,6 +2,11 @@
 
 export const DEFAULT_TENANT_TIMEZONE = 'Asia/Karachi';
 
+/** Broadcast schedule pickers and labels use Pakistan time (no DST). */
+export const BROADCAST_SCHEDULE_TIMEZONE = 'Asia/Karachi';
+
+const KARACHI_UTC_OFFSET_MS = 5 * 60 * 60 * 1000;
+
 /**
  * Parse API datetime strings stored as naive UTC in Postgres.
  * JSON often serializes without `Z`; ECMAScript then treats that as *local* wall time, which
@@ -217,4 +222,71 @@ export function clockMinutesInTimeZone(d: Date, timeZone: string): number {
     if (p.type === 'minute') m = Number(p.value);
   }
   return h * 60 + m;
+}
+
+/**
+ * Build ``datetime-local`` value (no timezone suffix) for a UTC instant shown in ``timeZone``
+ * (e.g. Asia/Karachi for admin broadcast windows).
+ */
+export function utcInstantToDatetimeLocalInZone(
+  isoUtc: string | null | undefined,
+  timeZone: string,
+): string {
+  const d = parseBackendUtcDate(isoUtc);
+  if (!d) return '';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  const y = g('year');
+  const mo = g('month');
+  const da = g('day');
+  const h = g('hour');
+  const mi = g('minute');
+  if (!y || !mo || !da) return '';
+  return `${y}-${mo}-${da}T${h}:${mi}`;
+}
+
+/**
+ * Interpret ``YYYY-MM-DDTHH:mm`` as **Asia/Karachi wall time** and return UTC ISO with ``Z``.
+ * Used when saving broadcast windows from the admin form.
+ */
+export function datetimeLocalKarachiWallToUtcIsoZ(datetimeLocal: string): string | null {
+  const t = datetimeLocal.trim();
+  if (!t) return null;
+  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const da = Number(m[3]);
+  const h = Number(m[4]);
+  const min = Number(m[5]);
+  const utcMs = Date.UTC(y, mo, da, h, min, 0, 0) - KARACHI_UTC_OFFSET_MS;
+  const d = new Date(utcMs);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** Display a stored UTC instant as dd/mm/yyyy, 12h clock in Pakistan time (broadcast cards). */
+export function formatBroadcastInstantPkt(
+  isoUtc: string | null | undefined,
+  timeZone: string = BROADCAST_SCHEDULE_TIMEZONE,
+): string {
+  const d = parseBackendUtcDate(isoUtc);
+  if (!d) return '—';
+  return d.toLocaleString('en-GB', {
+    timeZone,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
 }

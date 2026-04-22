@@ -12,6 +12,7 @@ from sqlalchemy import func, desc
 
 from database import get_db
 from models import Agent, Conversation, Customer, Message, Store, StoreAgentMapping, AgentAttendanceSession, Tenant
+from services.broadcasts_service.broadcast_agent_lock import active_agent_locking_broadcast
 from services.auth_service.api import get_current_user
 from services.auth_service.models import User as AuthUser
 from services.customer_bot_flow import append_handoff_agent_line, lookup_agent_display_name
@@ -246,6 +247,22 @@ async def update_agent_status(
         AgentStatus.online.value,
         AgentStatus.busy.value,
     )
+
+    if not was_active and is_active:
+        lock = active_agent_locking_broadcast(db, agent.tenant_id)
+        if lock is not None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "broadcast_agent_lock",
+                    "message": (
+                        f"Agents are unavailable during the scheduled broadcast "
+                        f"(reason: {lock.title})."
+                    ),
+                    "broadcast_title": lock.title,
+                    "broadcast_ends_at": _datetime_utc_iso_z(lock.ends_at),
+                },
+            )
 
     if not was_active and is_active:
         _on_agent_became_active(db, agent, now)

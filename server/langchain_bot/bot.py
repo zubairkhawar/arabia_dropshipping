@@ -69,11 +69,16 @@ KB_QUERY_PHRASE_HINTS: Dict[str, List[str]] = {
     "active countries": ["market", "coverage", "uae", "saudi", "pakistan", "qatar"],
     # Roman Urdu / English "what services" style → overlap with English KB chunks
     "kya services": ["service", "services", "dropshipping", "fulfillment", "sourcing", "marketing"],
+    "kya kya services": ["service", "services", "dropshipping", "fulfillment", "agency", "3pl", "payout"],
+    "sari services": ["service", "services", "dropshipping", "fulfillment", "agency", "calculator"],
+    "saari services": ["service", "services", "dropshipping", "fulfillment", "agency", "calculator"],
     "services provide": ["service", "offer", "dropshipping", "fulfillment", "sourcing"],
     "services dete": ["service", "offer", "provide", "dropshipping"],
     "services offer": ["service", "dropshipping", "fulfillment", "sourcing"],
     "what services": ["service", "dropshipping", "sourcing", "fulfillment"],
     "which services": ["service", "dropshipping", "sourcing", "fulfillment"],
+    "all services": ["service", "services", "dropshipping", "fulfillment", "agency", "3pl"],
+    "services list": ["service", "services", "dropshipping", "fulfillment", "sourcing", "marketing"],
     "company services": ["service", "dropshipping", "fulfillment", "sourcing"],
     "services do you": ["service", "offer", "dropshipping", "fulfillment"],
     "list of services": ["service", "dropshipping", "fulfillment", "sourcing"],
@@ -127,6 +132,8 @@ _SERVICE_QUERY_STEMS: tuple[str, ...] = (
     "seller",
     "commission",
     "payout",
+    "payments",
+    "calculator",
     "uae",
     "saudi",
     "pakistan",
@@ -203,9 +210,11 @@ class ArabiaLangChainBot:
             re.search(
                 r"\b(what|which|how|tell|list|describe|include|offers?|provid|giving|give|"
                 r"kya|kaun|kon|det[ei]|deta|mil|milt|kart[ea]|krte|krty|krta|krti|"
-                r"hai|ho|sab|poor|pura|complete|more|aur|kis)\b",
+                r"hai|ho|sab|poor|pura|complete|more|aur|kis|all|everything|entire|full|total|"
+                r"batao|btao|bataye|batain|bataen|bta)\b",
                 t,
             )
+            or re.search(r"\b(sari|saari|saare|tamam|poori|puri)\s+services?\b", t)
             or "arabia" in t
         )
 

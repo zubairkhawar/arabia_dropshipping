@@ -58,6 +58,24 @@ from services.trending_products_service.api import (
 logger = logging.getLogger(__name__)
 
 
+async def _broadcast_agent_enforcement_loop() -> None:
+    """While an AI-targeted broadcast window is active, keep tenant agents offline."""
+    from database import SessionLocal
+    from services.broadcasts_service.broadcast_agent_lock import run_broadcast_agent_enforcement_tick
+
+    await asyncio.sleep(15)
+    while True:
+        try:
+            db = SessionLocal()
+            try:
+                run_broadcast_agent_enforcement_tick(db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("broadcast_agent_enforcement_loop tick failed")
+        await asyncio.sleep(60)
+
+
 async def _memory_stats_background_loop() -> None:
     """Periodic Redis INFO logging for ops (non-blocking; failures are logged only)."""
     if not bool(getattr(settings, "memory_stats_log_enabled", True)):
@@ -131,6 +149,7 @@ def ensure_admin_user() -> None:
 async def lifespan(app: FastAPI):
     # Startup
     memory_stats_task: Optional[asyncio.Task] = None
+    broadcast_agent_task: Optional[asyncio.Task] = None
     Base.metadata.create_all(bind=engine)
     ensure_broadcast_delivery_columns()
     ensure_broadcast_whatsapp_template_columns()
@@ -156,8 +175,15 @@ async def lifespan(app: FastAPI):
         intv = int(getattr(settings, "memory_stats_log_interval_seconds", 86400) or 0)
         if intv > 0:
             memory_stats_task = asyncio.create_task(_memory_stats_background_loop())
+    broadcast_agent_task = asyncio.create_task(_broadcast_agent_enforcement_loop())
     yield
     # Shutdown
+    if broadcast_agent_task is not None:
+        broadcast_agent_task.cancel()
+        try:
+            await broadcast_agent_task
+        except asyncio.CancelledError:
+            pass
     if memory_stats_task is not None:
         memory_stats_task.cancel()
         try:

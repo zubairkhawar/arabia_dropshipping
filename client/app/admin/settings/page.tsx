@@ -11,7 +11,14 @@ import { buildAllAgentsPdf } from '@/lib/attendance-pdf';
 import type { OnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useSoundAlerts } from '@/contexts/SoundAlertsContext';
 import { AgentScheduleSettings } from '@/components/admin/agent-schedule-settings';
-import { dateKeyInTimeZone, clockMinutesInTimeZone, parseBackendUtcDate } from '@/lib/tenant-time';
+import {
+  BROADCAST_SCHEDULE_TIMEZONE,
+  clockMinutesInTimeZone,
+  dateKeyInTimeZone,
+  datetimeLocalKarachiWallToUtcIsoZ,
+  parseBackendUtcDate,
+  utcInstantToDatetimeLocalInZone,
+} from '@/lib/tenant-time';
 import {
   BroadcastsPanel,
   BroadcastDeleteModal,
@@ -21,19 +28,9 @@ import {
 
 const BROADCAST_ARCHIVE_KEY = 'arabia-broadcast-archived-v1';
 
-function toDatetimeLocalValue(iso: string): string {
-  const d = parseBackendUtcDate(iso) ?? new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** Normalize ``datetime-local`` for API (seconds) and avoid sending ``""`` for datetimes (422). */
+/** Convert Pakistan wall time from ``datetime-local`` to UTC ``Z`` for the API. */
 function broadcastDateTimeToApi(s: string): string | null {
-  const t = (s || '').trim();
-  if (!t) return null;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(t)) return `${t}:00`;
-  return t;
+  return datetimeLocalKarachiWallToUtcIsoZ(s);
 }
 
 const MONTHS = [
@@ -328,8 +325,12 @@ export default function AdminSettings() {
   const fillFormFromBroadcast = useCallback((b: AdminBroadcast, duplicate: boolean) => {
     setTitle(duplicate ? `${b.title} (copy)` : b.title);
     setOccasion(b.occasion);
-    setStartsAt(b.startsAt ? toDatetimeLocalValue(b.startsAt) : '');
-    setEndsAt(b.endsAt ? toDatetimeLocalValue(b.endsAt) : '');
+    setStartsAt(
+      b.startsAt ? utcInstantToDatetimeLocalInZone(b.startsAt, BROADCAST_SCHEDULE_TIMEZONE) : '',
+    );
+    setEndsAt(
+      b.endsAt ? utcInstantToDatetimeLocalInZone(b.endsAt, BROADCAST_SCHEDULE_TIMEZONE) : '',
+    );
     setMessage(b.message);
     setTargetAi(b.targetAi);
     setDeliveryNotifyAgents(b.deliveryNotifyAgents);
@@ -897,7 +898,7 @@ export default function AdminSettings() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-text-primary mb-1">
-                  Starts at
+                  Starts at <span className="font-normal text-text-muted">(Pakistan time)</span>
                 </label>
                 <input
                   type="datetime-local"
@@ -908,7 +909,7 @@ export default function AdminSettings() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-text-primary mb-1">
-                  Ends at
+                  Ends at <span className="font-normal text-text-muted">(Pakistan time)</span>
                 </label>
                 <input
                   type="datetime-local"

@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import { readAuthAgentId, writeAuthAgentId } from '@/lib/agent-session-storage';
+import { formatBroadcastInstantPkt } from '@/lib/tenant-time';
 
 /** Agent unique ID is set by the backend when the admin creates a new agent. */
 export interface AgentRecord {
@@ -30,12 +31,14 @@ interface AgentsContextType {
   addAgent: (email: string, name: string, password: string) => Promise<boolean>;
   updateAgent: (id: string, updates: Partial<Pick<AgentRecord, 'name' | 'password' | 'avatarUrl'>>) => Promise<boolean>;
   removeAgent: (id: string) => Promise<boolean>;
-  setAgentStatus: (id: string, status: 'online' | 'busy' | 'offline') => Promise<boolean>;
+  setAgentStatus: (id: string, status: 'online' | 'busy' | 'offline') => Promise<SetAgentStatusResult>;
 }
 
 const AgentsContext = createContext<AgentsContextType | undefined>(undefined);
 const AGENT_PASSWORDS_STORAGE_KEY = 'agent-passwords';
 const AUTH_EMAIL_STORAGE_KEY = 'auth_email';
+
+export type SetAgentStatusResult = { ok: true } | { ok: false; message?: string };
 
 // Keep consistent with the rest of the frontend config.
 const API_BASE_URL =
@@ -429,9 +432,9 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
   );
 
   const setAgentStatus = useCallback(
-    async (id: string, status: 'online' | 'busy' | 'offline') => {
+    async (id: string, status: 'online' | 'busy' | 'offline'): Promise<SetAgentStatusResult> => {
       const numericId = Number(id);
-      if (!Number.isFinite(numericId)) return false;
+      if (!Number.isFinite(numericId)) return { ok: false, message: 'Invalid agent id' };
       try {
         const res = await fetch(`${API_BASE_URL}/api/routing/agents/${numericId}/status`, {
           method: 'POST',
@@ -441,13 +444,38 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify({ status }),
         });
-        if (!res.ok) return false;
+        if (!res.ok) {
+          let message: string | undefined;
+          try {
+            const body = (await res.json()) as { detail?: unknown };
+            const d = body.detail;
+            if (typeof d === 'string') {
+              message = d;
+            } else if (d && typeof d === 'object') {
+              const o = d as {
+                message?: string;
+                broadcast_title?: string;
+                broadcast_ends_at?: string;
+                code?: string;
+              };
+              if (o.code === 'broadcast_agent_lock' && o.broadcast_title && o.broadcast_ends_at) {
+                const endFmt = formatBroadcastInstantPkt(o.broadcast_ends_at);
+                message = `Agents are unavailable due to an active broadcast: ${o.broadcast_title}. Please try again after ${endFmt}.`;
+              } else if (o.message) {
+                message = o.message;
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+          return { ok: false, message };
+        }
         setAgents((prev) =>
           prev.map((a) => (a.id === id ? { ...a, status: normalizeAgentStatus(status) } : a)),
         );
-        return true;
+        return { ok: true };
       } catch {
-        return false;
+        return { ok: false, message: 'Network error' };
       }
     },
     [],
@@ -484,7 +512,7 @@ export function useAgents() {
       addAgent: async () => false,
       updateAgent: async () => false,
       removeAgent: async () => false,
-      setAgentStatus: async () => false,
+      setAgentStatus: async () => ({ ok: false }),
     };
   }
   return context;
