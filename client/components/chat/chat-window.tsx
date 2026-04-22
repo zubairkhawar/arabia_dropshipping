@@ -15,7 +15,6 @@ import { useDmConversationRealtime, type DmWsEvent } from '@/hooks/useDmConversa
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  Bot,
   AlertCircle,
   Users,
   User,
@@ -3255,26 +3254,6 @@ export function ChatWindow({
                 <>
                   <div className="fixed inset-0 z-10" onClick={closeMenus} aria-hidden />
                   <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-border rounded-lg shadow-xl z-20 py-1">
-                    {showAdminSendBackAndCloseChat && (
-                      <button
-                        type="button"
-                        disabled={inboxConversationClosed}
-                        onClick={() => {
-                          if (inboxConversationClosed) {
-                            closeMenus();
-                            return;
-                          }
-                          if (inboxConv?.selectedId != null) {
-                            inboxConv.sendConversationToAI(inboxConv.selectedId);
-                          }
-                          closeMenus();
-                        }}
-                        className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-panel text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <Bot className="w-4 h-4" />
-                        Send back to AI
-                      </button>
-                    )}
                     {showAdminSendBackAndCloseChat && (
                       <button
                         type="button"

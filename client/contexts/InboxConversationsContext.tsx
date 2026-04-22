@@ -78,7 +78,6 @@ interface InboxConversationsContextType {
   isLoading: boolean;
   markAgentReplied: (convId: number) => void;
   closeConversation: (convId: number) => void;
-  sendConversationToAI: (convId: number) => void;
   /** Admin-only: permanent server delete; updates local state on success. */
   deleteConversation: (convId: number) => Promise<void>;
   getMessages: (convId: number) => InboxMessage[];
@@ -334,7 +333,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
     if (isAgentPortal && aid) {
       url.searchParams.set('agent_id', String(Number(aid)));
     }
-    const res = await fetch(url.toString());
+    const res = await fetch(url.toString(), { headers: authJsonHeaders() });
     if (!res.ok) return [];
     const rows = (await res.json()) as ConversationSummaryApi[];
     if (isAgentPortal) return rows;
@@ -701,7 +700,9 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
 
       try {
         const [rowsRaw, detailData] = await Promise.all([
-          fetch(listUrl.toString()).then(async (r) => (r.ok ? r.json() : [])),
+          fetch(listUrl.toString(), { headers: authJsonHeaders() }).then(async (r) =>
+            r.ok ? r.json() : [],
+          ),
           lastId != null
             ? fetch(`${API_BASE}/api/messaging/conversations/${lastId}?limit=50`, {
                 headers: authJsonHeaders(),
@@ -778,7 +779,19 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       year: 'numeric',
     })}`;
     setConversations((prev) =>
-      prev.map((c) => (c.id === convId ? { ...c, status: 'resolved', closedAt, unread: 0 } : c)),
+      prev.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              status: 'resolved',
+              closedAt,
+              unread: 0,
+              handlerType: 'ai',
+              handlerName: undefined,
+              handlerAgentId: undefined,
+            }
+          : c,
+      ),
     );
     void fetch(`${API_BASE}/api/messaging/conversations/${convId}/status`, {
       method: 'PATCH',
@@ -818,53 +831,6 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
       return n;
     });
   }, []);
-
-  const sendConversationToAI = useCallback((convId: number) => {
-    const now = new Date();
-    const closedAt = `${formatTime12hInZone(now, timeZone)}, ${now.toLocaleDateString('en-US', {
-      timeZone,
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })}`;
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === convId
-          ? {
-              ...c,
-              handlerType: 'ai',
-              handlerName: undefined,
-              handlerAgentId: undefined,
-              status: 'resolved',
-              closedAt,
-              unread: 0,
-              lastMessage: 'Conversation transferred to Arabia Dropbot.',
-              lastActivityAt: 'Just now',
-            }
-          : c,
-      ),
-    );
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    void (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/messaging/conversations/${convId}/send-to-ai`, {
-          method: 'POST',
-          headers,
-        });
-        if (!res.ok) {
-          // Backend didn't accept the handoff — re-sync so the UI matches truth
-          // (otherwise the agent thinks it's with the bot but messages keep going to them).
-          console.error('send-to-ai failed', res.status, await res.text().catch(() => ''));
-        }
-      } catch (err) {
-        console.error('send-to-ai request error', err);
-      } finally {
-        void upsertConversationFromSummary(convId);
-      }
-    })();
-  }, [timeZone, upsertConversationFromSummary]);
 
   const getMessages = useCallback((convId: number) => messagesByConvId[convId] ?? [], [messagesByConvId]);
 
@@ -983,7 +949,6 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         isLoading,
         markAgentReplied,
         closeConversation,
-        sendConversationToAI,
         deleteConversation,
         getMessages,
         setMessages,

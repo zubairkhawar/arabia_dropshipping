@@ -20,6 +20,89 @@ def is_slash_reset_command(text: str) -> bool:
     return bool(re.match(r"^/reset\s*$", (text or "").strip(), re.IGNORECASE))
 
 
+def is_conversational_acknowledgment(text: str) -> bool:
+    """
+    Short replies that should not count as asking for a human (okay, thanks, etc.).
+    Used to avoid re-handoff after an agent closes the chat or while awaiting_agent is stale.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return True
+
+    s = _nfkc(raw).lower()
+    s = re.sub(r"[^\w\s]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        return True
+
+    exact = {
+        "ok",
+        "okay",
+        "k",
+        "kk",
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "no",
+        "nope",
+        "nah",
+        "sure",
+        "fine",
+        "alright",
+        "cool",
+        "nice",
+        "great",
+        "good",
+        "thanks",
+        "thank you",
+        "thx",
+        "ty",
+        "np",
+        "noted",
+        "understood",
+        "got it",
+        "gotcha",
+        "sounds good",
+        "appreciate it",
+        "thank u",
+        "tysm",
+    }
+    if s in exact:
+        return True
+
+    tokens = s.split()
+    if len(tokens) > 4:
+        return False
+
+    ack_tokens = {
+        "ok",
+        "okay",
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "no",
+        "nope",
+        "nah",
+        "thanks",
+        "thank",
+        "you",
+        "thx",
+        "ty",
+        "sure",
+        "fine",
+        "cool",
+        "great",
+        "good",
+        "very",
+        "much",
+        "so",
+        "noted",
+    }
+    return all(t in ack_tokens for t in tokens)
+
+
 def wants_human_agent(text: str) -> bool:
     """
     True if the message clearly asks to speak with a person / agent / support human.
@@ -28,6 +111,9 @@ def wants_human_agent(text: str) -> bool:
     """
     raw = (text or "").strip()
     if not raw:
+        return False
+
+    if is_conversational_acknowledgment(raw):
         return False
 
     s = _nfkc(raw)

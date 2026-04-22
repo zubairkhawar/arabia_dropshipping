@@ -14,3 +14,21 @@ def release_agent_and_clear_bot_flow(conversation: Conversation) -> None:
     md: Dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
     md[BOT_FLOW_KEY] = {}
     conversation.conversation_metadata = md
+
+
+def normalize_bot_flow_after_human_handoff_end(conversation: Conversation) -> None:
+    """
+    When a human agent releases or closes a thread, reset scripted flow to normal bot chat.
+    Clears handoff retry (awaiting_agent) and forces step 'conversational' so the next
+    customer message is handled by the bot unless they explicitly ask for an agent again.
+    """
+    raw = conversation.conversation_metadata
+    md: Dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
+    bf = md.get(BOT_FLOW_KEY)
+    if not isinstance(bf, dict) or not bf:
+        return
+    new_bf = dict(bf)
+    new_bf["step"] = "conversational"
+    new_bf.pop("pending_handoff_team", None)
+    md[BOT_FLOW_KEY] = new_bf
+    conversation.conversation_metadata = md

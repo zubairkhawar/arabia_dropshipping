@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, WebSocket, Request, Depends, HTTPException, status, Query, Body
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -39,7 +39,10 @@ from services.customer_bot_flow import (
     process_customer_bot_message,
     resolve_bot_template,
 )
-from services.customer_bot_flow.session_reset import release_agent_and_clear_bot_flow
+from services.customer_bot_flow.session_reset import (
+    normalize_bot_flow_after_human_handoff_end,
+    release_agent_and_clear_bot_flow,
+)
 from services.tenant_schedule_text import format_tenant_schedule_line_for_handoff
 from services.human_handoff_intent import is_slash_reset_command
 from services.agent_routing_service.api import assign_from_bot_flow
@@ -676,6 +679,7 @@ def _get_or_create_active_whatsapp_conversation(
         meta = closed.conversation_metadata if isinstance(closed.conversation_metadata, dict) else {}
         meta["reopened_after_close_at"] = datetime.utcnow().isoformat()
         closed.conversation_metadata = meta
+        normalize_bot_flow_after_human_handoff_end(closed)
         closed.updated_at = datetime.utcnow()
         db.add(closed)
         db.commit()
@@ -720,10 +724,36 @@ async def list_conversations(
 
     conversations: List[Conversation] = []
     if agent_id is not None:
-        # Always include currently assigned conversations for this agent.
+        # Always include conversations assigned to this agent (active + closed). Capacity and
+        # WhatsApp routing use status + reopen logic; agent_id may remain set after close so
+        # the inbox can still list Closed threads after refresh.
         assigned_query = query.filter(Conversation.agent_id == agent_id)
         assigned = assigned_query.offset(offset).limit(limit).all()
         conversations.extend(assigned)
+        # Legacy / edge: closed threads where agent_id was cleared but last_handler names this agent.
+        if status_param is None:
+            status_l = func.lower(func.coalesce(Conversation.status, ""))
+            closed_orphans = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.tenant_id == tenant_id,
+                    status_l.in_(["closed", "resolved"]),
+                    Conversation.agent_id.is_(None),
+                )
+                .order_by(desc(Conversation.updated_at))
+                .limit(min(limit * 4, 400))
+                .all()
+            )
+            aid_int = int(agent_id)
+            for c in closed_orphans:
+                meta = c.conversation_metadata if isinstance(c.conversation_metadata, dict) else {}
+                lh = meta.get("last_handler") if isinstance(meta.get("last_handler"), dict) else {}
+                rid = lh.get("agent_id")
+                try:
+                    if rid is not None and int(rid) == aid_int:
+                        conversations.append(c)
+                except (TypeError, ValueError):
+                    continue
         # Optionally include conversations this agent transferred out most recently.
         if include_transferred_out_for_agent_id is not None:
             transferred = (
@@ -782,6 +812,13 @@ def _conversation_visible_to_agent_inbox(
         from_id = tx.get("from_agent_id")
         if isinstance(from_id, int) and from_id == agent_id:
             return True
+    meta2 = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
+    lh = meta2.get("last_handler") if isinstance(meta2.get("last_handler"), dict) else {}
+    try:
+        if lh.get("agent_id") is not None and int(lh["agent_id"]) == int(agent_id):
+            return True
+    except (TypeError, ValueError):
+        pass
     return False
 
 
@@ -1410,6 +1447,37 @@ async def update_conversation_status(
             if ag is not None and int(ag.id) == int(assigned_agent_id_before):
                 is_assigned_agent_closer = True
 
+    if is_closing:
+        normalize_bot_flow_after_human_handoff_end(conversation)
+        # Single "Close" action: unassign so the customer goes back to the bot; persist last_handler
+        # so this thread still appears under the agent's Closed list after refresh.
+        if assigned_agent_id_before is not None:
+            meta = (
+                conversation.conversation_metadata
+                if isinstance(conversation.conversation_metadata, dict)
+                else {}
+            )
+            prev_agent = (
+                db.query(Agent)
+                .filter(Agent.id == assigned_agent_id_before)
+                .first()
+            )
+            label = (
+                lookup_agent_display_name(db, int(assigned_agent_id_before))
+                if prev_agent
+                else None
+            ) or "Agent"
+            meta = {
+                **meta,
+                "last_handler": {
+                    "agent_id": int(assigned_agent_id_before),
+                    "agent_name": label,
+                    "at": datetime.utcnow().isoformat(),
+                },
+            }
+            conversation.conversation_metadata = meta
+        conversation.agent_id = None
+
     conversation.status = payload.status
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)
@@ -1417,12 +1485,12 @@ async def update_conversation_status(
     db.refresh(conversation)
     _ = conversation.customer
     _ = conversation.messages
-    if conversation.agent_id is not None:
+    if assigned_agent_id_before is not None:
         try:
             await push_inbox_sync_event(
                 db,
                 conversation.tenant_id,
-                conversation.agent_id,
+                assigned_agent_id_before,
                 {
                     "type": "inbox_conversation_refresh",
                     "conversation_id": conversation.id,
@@ -1469,12 +1537,12 @@ async def update_conversation_status(
                 db.commit()
                 db.refresh(out_row)
                 db.refresh(conversation)
-                if conversation.agent_id is not None:
+                if assigned_agent_id_before is not None:
                     try:
                         await push_inbox_message(
                             db,
                             conversation.tenant_id,
-                            conversation.agent_id,
+                            assigned_agent_id_before,
                             conversation.id,
                             _message_dict_for_ws(db, out_row),
                         )
@@ -1489,141 +1557,6 @@ async def update_conversation_status(
                     conversation.id,
                 )
 
-    return _build_conversation_summary(conversation)
-
-
-@router.post("/conversations/{conversation_id}/send-to-ai", response_model=ConversationSummary)
-async def send_conversation_to_ai(
-    conversation_id: int,
-    db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
-):
-    """
-    Return ownership of a conversation to AI by clearing assigned agent.
-    """
-    conversation: Conversation | None = (
-        db.query(Conversation).filter(Conversation.id == conversation_id).first()
-    )
-    if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
-        )
-    transfer_by_name = "Agent"
-    if current_user is not None:
-        ag = (
-            db.query(Agent)
-            .filter(Agent.user_id == current_user.id, Agent.tenant_id == conversation.tenant_id)
-            .first()
-        )
-        if ag is not None:
-            an = lookup_agent_display_name(db, ag.id)
-            if an:
-                transfer_by_name = an
-
-    handoff_note = f"{transfer_by_name} transferred this chat to Arabia Dropbot."
-    dropbot_greeting = "How may I help further?"
-
-    handoff_msg = Message(
-        conversation_id=conversation.id,
-        content=handoff_note,
-        sender_type="ai",
-        sender_id=None,
-        created_at=datetime.utcnow(),
-    )
-    greeting_msg = Message(
-        conversation_id=conversation.id,
-        content=dropbot_greeting,
-        sender_type="ai",
-        sender_id=None,
-        created_at=datetime.utcnow(),
-    )
-    db.add(handoff_msg)
-    db.add(greeting_msg)
-
-    # Preserve the last handler info in metadata before clearing agent_id,
-    # so the admin panel can still show who handled this conversation.
-    released_from_agent_id: Optional[int] = None
-    if conversation.agent_id is not None:
-        released_from_agent_id = conversation.agent_id
-        prev_agent = db.query(Agent).filter(Agent.id == conversation.agent_id).first()
-        meta = conversation.conversation_metadata if isinstance(conversation.conversation_metadata, dict) else {}
-        prev_label = (
-            lookup_agent_display_name(db, prev_agent.id)
-            if prev_agent
-            else None
-        ) or transfer_by_name
-        meta["last_handler"] = {
-            "agent_id": conversation.agent_id,
-            "agent_name": prev_label,
-            "at": datetime.utcnow().isoformat(),
-        }
-        # Flag so downstream routing (_get_previous_agent_for_customer) and
-        # audits can recognise this was an explicit "send back to bot" action.
-        meta["released_to_ai_at"] = datetime.utcnow().isoformat()
-        conversation.conversation_metadata = meta
-
-    conversation.agent_id = None
-    # Back on the bot: must be active so admin "AI Bot" bucket shows this thread
-    # (not "Closed"). Closed is only after an agent resolves the chat.
-    conversation.status = "active"
-    conversation.updated_at = datetime.utcnow()
-    db.add(conversation)
-    db.commit()
-    db.refresh(conversation)
-
-    # Tell the previous agent (and any other tab viewing this thread) to
-    # refresh so the UI stops showing them as the assignee / active handler.
-    if released_from_agent_id is not None:
-        try:
-            await push_inbox_sync_event(
-                db,
-                conversation.tenant_id,
-                released_from_agent_id,
-                {
-                    "type": "inbox_conversation_refresh",
-                    "conversation_id": conversation.id,
-                    "reason": "released_to_ai",
-                },
-            )
-        except Exception:
-            logger.exception(
-                "send-to-ai: failed to broadcast refresh (conversation_id=%s, agent_id=%s)",
-                conversation.id,
-                released_from_agent_id,
-            )
-
-    if (conversation.channel or "").lower() == "whatsapp":
-        customer = db.query(Customer).filter(Customer.id == conversation.customer_id).first()
-        phone = customer.phone if customer else None
-        wa = MetaWhatsAppClient()
-        if phone and wa.is_configured():
-            try:
-                wa_resp_1 = await wa.send_text_message(to_phone=str(phone), text=handoff_note)
-                handoff_msg.wa_delivered_at = datetime.utcnow()
-                msgs1 = wa_resp_1.get("messages") if isinstance(wa_resp_1, dict) else None
-                if isinstance(msgs1, list) and msgs1 and isinstance(msgs1[0], dict):
-                    out_wa_id_1 = str(msgs1[0].get("id") or "").strip()
-                    if out_wa_id_1:
-                        handoff_msg.message_metadata = {"wa_message_id": out_wa_id_1}
-
-                wa_resp_2 = await wa.send_text_message(to_phone=str(phone), text=dropbot_greeting)
-                greeting_msg.wa_delivered_at = datetime.utcnow()
-                msgs2 = wa_resp_2.get("messages") if isinstance(wa_resp_2, dict) else None
-                if isinstance(msgs2, list) and msgs2 and isinstance(msgs2[0], dict):
-                    out_wa_id_2 = str(msgs2[0].get("id") or "").strip()
-                    if out_wa_id_2:
-                        greeting_msg.message_metadata = {"wa_message_id": out_wa_id_2}
-                db.add(handoff_msg)
-                db.add(greeting_msg)
-                db.commit()
-            except Exception:
-                logger.exception(
-                    "WhatsApp send-to-ai handoff failed (conversation_id=%s)",
-                    conversation.id,
-                )
-
-    _ = conversation.customer
-    _ = conversation.messages
     return _build_conversation_summary(conversation)
 
 

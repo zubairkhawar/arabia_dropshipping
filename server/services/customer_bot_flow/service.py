@@ -38,6 +38,7 @@ from services.trending_products_service.bot_query import (
     list_active_trending_for_country,
 )
 from services.human_handoff_intent import (
+    is_conversational_acknowledgment,
     is_slash_reset_command,
     solo_menu_digit,
     wants_bot_flow_reset,
@@ -4720,6 +4721,13 @@ async def process_customer_bot_message(
         )
 
     if step == "awaiting_agent":
+        if not wants_human_agent(text) and is_conversational_acknowledgment(text):
+            skip = not flow.get("verified")
+            return ai_forward(
+                text,
+                {**flow, "step": "conversational", "intro_shown": True},
+                skip_api=skip,
+            )
         if flow.get("verified"):
             team = (
                 flow.get("pending_handoff_team")

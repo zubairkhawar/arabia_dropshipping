@@ -98,10 +98,10 @@ This document lists every frontend feature, button, and flow that requires backe
 | **Conversation list** | `GET /api/conversations` filtered by assigned agent (current user’s agent_id), or by team. Include status (active/resolved), last_message, last_activity_at, unread count, channel, is_new_lead, reopened_at, handler info. |
 | **Select conversation** | Load messages for conversation: `GET /api/messaging/conversations/:id` with messages (paginated if needed). |
 | **Send message** | `POST /api/messaging/messages` with conversation_id, content, sender_type=agent. Persist message; optionally push to customer (WhatsApp) and to real-time for other clients. |
-| **Send back to AI** | Update conversation: set handler to AI (clear agent_id or set status), add system message "Conversation sent back to AI bot." Backend: `POST /api/conversations/:id/send-to-ai` or PATCH conversation. |
+| **Return chat to bot (no separate action)** | Agents use **Close conversation** only. The dedicated “Send back to AI” UI and `POST …/send-to-ai` were removed. |
 | **Transfer to team member** | Update conversation’s agent_id to target agent; add system message "Conversation transferred to X by Y"; create notification for target agent. Backend: `POST /api/conversations/:id/transfer` with target_agent_id, optional note. Persist message and notification. |
-| **Close conversation** | Set conversation status to resolved, set closed_at; add system message "Conversation closed by agent." Backend: `PATCH /api/conversations/:id` (status=resolved) and append system message. |
-| **Reopen (customer messaged again)** | When new inbound message arrives for a resolved conversation: set status=active, set reopened_at, keep same agent_id, add soft message "Customer messaged again." Backend: in WhatsApp webhook or message ingestion, detect existing resolved conversation by customer/phone, reopen and append message; notify frontend (WebSocket or poll). |
+| **Close conversation** | `PATCH /api/messaging/conversations/:id/status` with `status: closed` (or resolved). Clears `agent_id`, normalizes `bot_flow` to conversational, sets `last_handler` so the thread stays in the agent’s **Closed** list after refresh; on WhatsApp, sends the customer: “The agent has closed this chat. Arabia Dropbot will continue helping you from here.” Inbox refresh via WebSocket. |
+| **Reopen (customer messaged again)** | When a new inbound message arrives for a closed WhatsApp thread: reactivate the conversation (`status=active`), clear `agent_id`, set `reopened_after_close_at` in metadata; customer is handled by the bot until they ask for an agent again. Backend: `_get_or_create_active_whatsapp_conversation` in the messaging service. |
 | **Context panel** | Customer info, store details, internal notes. Backend: conversation detail includes customer, store; `GET/POST /api/conversations/:id/notes` for internal notes. |
 | **Save internal note** | `POST /api/conversations/:id/notes` or PATCH. Persist and return. |
 
@@ -204,7 +204,7 @@ This document lists every frontend feature, button, and flow that requires backe
 - `GET/PUT /api/tenants/:id/schedule`
 - `GET /api/agents`, `POST /api/agents`, `PATCH /api/agents/:id`, `DELETE /api/agents/:id`, `GET /api/agents/me`, `GET /api/agents/:id/attendance`
 - `GET /api/teams`, `POST /api/teams`, `DELETE /api/teams/:id`, `POST /api/teams/:id/members`, `DELETE /api/teams/:id/members/:agent_id`, `POST /api/teams/transfer`, `GET /api/teams/:id/events`
-- `GET /api/messaging/conversations`, `GET /api/messaging/conversations/:id`, `POST /api/messaging/conversations/:id/messages` (or `/messages` global with conversation_id), `POST /api/conversations/:id/transfer`, `POST /api/conversations/:id/send-to-ai`, `PATCH /api/conversations/:id` (close/reopen), `GET/POST /api/conversations/:id/notes`
+- `GET /api/messaging/conversations`, `GET /api/messaging/conversations/:id`, `POST /api/messaging/messages` (with `conversation_id`), `POST /api/routing/transfer`, `PATCH /api/messaging/conversations/:id/status` (close / status updates), internal-note routes as implemented, `DELETE /api/messaging/conversations/:id` (admin permanent delete)
 - `GET /api/notifications`, `PATCH /api/notifications/:id`, `POST /api/notifications/read-all`
 - `GET /api/broadcasts`, `POST /api/broadcasts`, `DELETE /api/broadcasts/:id`
 - `GET /api/analytics/dashboard`, `GET /api/analytics/agent-activity`, `GET /api/analytics/language-distribution`
