@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Clock, Download, Volume2, Users } from 'lucide-react';
 import { useOnlineSchedule } from '@/contexts/OnlineScheduleContext';
 import { useTenantTimezone } from '@/contexts/TenantTimezoneContext';
@@ -81,6 +81,19 @@ export default function AdminSettings() {
   const [targetAi, setTargetAi] = useState(true);
   const [deliveryNotifyAgents, setDeliveryNotifyAgents] = useState(true);
   const [deliveryNotifyCustomersWhatsapp, setDeliveryNotifyCustomersWhatsapp] = useState(false);
+  const [waTemplates, setWaTemplates] = useState<
+    {
+      name: string;
+      language: string;
+      body_placeholder_count: number;
+      status?: string | null;
+      category?: string | null;
+    }[]
+  >([]);
+  const [waTemplatesLoading, setWaTemplatesLoading] = useState(false);
+  const [whatsappTemplateName, setWhatsappTemplateName] = useState('');
+  const [whatsappTemplateLanguage, setWhatsappTemplateLanguage] = useState('');
+  const [waBodyParams, setWaBodyParams] = useState<string[]>([]);
   const [scheduleDraft, setScheduleDraft] = useState<OnlineSchedule>(schedule);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [maxConcurrentDraft, setMaxConcurrentDraft] = useState(5);
@@ -151,6 +164,103 @@ export default function AdminSettings() {
     void loadWaCount();
   }, [effectiveTenantId]);
 
+  useEffect(() => {
+    if (!deliveryNotifyCustomersWhatsapp) return;
+    let cancelled = false;
+    (async () => {
+      setWaTemplatesLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/broadcasts/whatsapp-templates`);
+        if (!res.ok) {
+          if (!cancelled) setWaTemplates([]);
+          return;
+        }
+        const data = (await res.json()) as {
+          name: string;
+          language: string;
+          body_placeholder_count?: number;
+          status?: string | null;
+          category?: string | null;
+        }[];
+        if (!cancelled) {
+          setWaTemplates(
+            (Array.isArray(data) ? data : []).map((t) => ({
+              name: t.name,
+              language: t.language,
+              body_placeholder_count:
+                typeof t.body_placeholder_count === 'number' ? t.body_placeholder_count : 0,
+              status: t.status,
+              category: t.category,
+            })),
+          );
+        }
+      } catch {
+        if (!cancelled) setWaTemplates([]);
+      } finally {
+        if (!cancelled) setWaTemplatesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deliveryNotifyCustomersWhatsapp]);
+
+  const waTemplateNameOptions = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of waTemplates) s.add(t.name);
+    return [...s].sort((a, b) => a.localeCompare(b));
+  }, [waTemplates]);
+
+  const waLanguagesForSelectedName = useMemo(() => {
+    if (!whatsappTemplateName) return [];
+    const langs = [
+      ...new Set(
+        waTemplates.filter((t) => t.name === whatsappTemplateName).map((t) => t.language),
+      ),
+    ];
+    langs.sort((a, b) => a.localeCompare(b));
+    return langs;
+  }, [waTemplates, whatsappTemplateName]);
+
+  useEffect(() => {
+    if (!whatsappTemplateName) return;
+    const langs = waLanguagesForSelectedName;
+    if (!langs.length) return;
+    if (!whatsappTemplateLanguage || !langs.includes(whatsappTemplateLanguage)) {
+      setWhatsappTemplateLanguage(langs[0]);
+    }
+  }, [whatsappTemplateName, waLanguagesForSelectedName, whatsappTemplateLanguage]);
+
+  const selectedWaTemplateMeta = useMemo(
+    () =>
+      waTemplates.find(
+        (t) => t.name === whatsappTemplateName && t.language === whatsappTemplateLanguage,
+      ),
+    [waTemplates, whatsappTemplateName, whatsappTemplateLanguage],
+  );
+
+  useEffect(() => {
+    if (waTemplatesLoading) return;
+    if (!deliveryNotifyCustomersWhatsapp || !whatsappTemplateName.trim() || !whatsappTemplateLanguage.trim()) {
+      return;
+    }
+    const n = selectedWaTemplateMeta?.body_placeholder_count ?? 0;
+    setWaBodyParams((prev) => {
+      const next = [...prev];
+      if (next.length < n) {
+        while (next.length < n) next.push('');
+      }
+      if (next.length > n) next.length = n;
+      return next;
+    });
+  }, [
+    waTemplatesLoading,
+    deliveryNotifyCustomersWhatsapp,
+    whatsappTemplateName,
+    whatsappTemplateLanguage,
+    selectedWaTemplateMeta?.body_placeholder_count,
+  ]);
+
   const loadBroadcastsList = useCallback(async () => {
     setBroadcastsLoading(true);
     try {
@@ -167,6 +277,9 @@ export default function AdminSettings() {
         target_ai?: boolean | null;
         delivery_notify_agents?: boolean | null;
         delivery_notify_customers_whatsapp?: boolean | null;
+        whatsapp_template_name?: string | null;
+        whatsapp_template_language?: string | null;
+        whatsapp_template_body_parameters?: string[] | null;
       }[];
       setBroadcasts(
         data.map((b) => ({
@@ -179,6 +292,11 @@ export default function AdminSettings() {
           targetAi: b.target_ai !== false,
           deliveryNotifyAgents: !!b.delivery_notify_agents,
           deliveryNotifyCustomersWhatsapp: !!b.delivery_notify_customers_whatsapp,
+          whatsappTemplateName: b.whatsapp_template_name ?? undefined,
+          whatsappTemplateLanguage: b.whatsapp_template_language ?? undefined,
+          whatsappTemplateBodyParameters: Array.isArray(b.whatsapp_template_body_parameters)
+            ? b.whatsapp_template_body_parameters.map((x) => String(x))
+            : undefined,
         })),
       );
     } catch {
@@ -201,6 +319,9 @@ export default function AdminSettings() {
     setTargetAi(true);
     setDeliveryNotifyAgents(true);
     setDeliveryNotifyCustomersWhatsapp(false);
+    setWhatsappTemplateName('');
+    setWhatsappTemplateLanguage('');
+    setWaBodyParams([]);
     setEditingBroadcastId(null);
   }, []);
 
@@ -213,6 +334,15 @@ export default function AdminSettings() {
     setTargetAi(b.targetAi);
     setDeliveryNotifyAgents(b.deliveryNotifyAgents);
     setDeliveryNotifyCustomersWhatsapp(duplicate ? false : b.deliveryNotifyCustomersWhatsapp);
+    if (duplicate || !b.deliveryNotifyCustomersWhatsapp) {
+      setWhatsappTemplateName('');
+      setWhatsappTemplateLanguage('');
+      setWaBodyParams([]);
+    } else {
+      setWhatsappTemplateName(b.whatsappTemplateName || '');
+      setWhatsappTemplateLanguage(b.whatsappTemplateLanguage || '');
+      setWaBodyParams([...(b.whatsappTemplateBodyParameters || [])]);
+    }
     setEditingBroadcastId(duplicate ? null : b.id);
   }, []);
 
@@ -228,13 +358,22 @@ export default function AdminSettings() {
       body: JSON.stringify({
         tenant_id: effectiveTenantId,
         title: title.trim(),
-        message: message.trim(),
+        message: (message.trim() || title.trim() || '.').slice(0, 50000),
         occasion: occasion.trim() || null,
         starts_at: startsPayload,
         ends_at: endsPayload,
         target_ai: targetAi,
         delivery_notify_agents: deliveryNotifyAgents,
         delivery_notify_customers_whatsapp: deliveryNotifyCustomersWhatsapp,
+        whatsapp_template_name: deliveryNotifyCustomersWhatsapp
+          ? whatsappTemplateName.trim() || null
+          : null,
+        whatsapp_template_language:
+          deliveryNotifyCustomersWhatsapp && whatsappTemplateName.trim()
+            ? whatsappTemplateLanguage.trim() || 'en_US'
+            : null,
+        whatsapp_template_body_parameters:
+          deliveryNotifyCustomersWhatsapp && whatsappTemplateName.trim() ? waBodyParams : null,
       }),
     });
     if (!res.ok) {
@@ -257,8 +396,12 @@ export default function AdminSettings() {
 
   const addBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !message.trim() || !startsAt || !endsAt) {
+    if (!title.trim() || !startsAt || !endsAt) {
       toast('Fill all required broadcast fields');
+      return;
+    }
+    if (targetAi && !message.trim()) {
+      toast('When AI bot is selected, fill the agent availability message.');
       return;
     }
     if (!targetAi && !deliveryNotifyAgents && !deliveryNotifyCustomersWhatsapp) {
@@ -278,13 +421,22 @@ export default function AdminSettings() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             title: title.trim(),
-            message: message.trim(),
+            message: (message.trim() || title.trim() || '.').slice(0, 50000),
             occasion: occasion.trim() || null,
             starts_at: broadcastDateTimeToApi(startsAt),
             ends_at: broadcastDateTimeToApi(endsAt),
             target_ai: targetAi,
             delivery_notify_agents: deliveryNotifyAgents,
             delivery_notify_customers_whatsapp: deliveryNotifyCustomersWhatsapp,
+            whatsapp_template_name: deliveryNotifyCustomersWhatsapp
+              ? whatsappTemplateName.trim() || null
+              : null,
+            whatsapp_template_language:
+              deliveryNotifyCustomersWhatsapp && whatsappTemplateName.trim()
+                ? whatsappTemplateLanguage.trim() || 'en_US'
+                : null,
+            whatsapp_template_body_parameters:
+              deliveryNotifyCustomersWhatsapp && whatsappTemplateName.trim() ? waBodyParams : null,
           }),
         });
         if (!res.ok) {
@@ -307,6 +459,9 @@ export default function AdminSettings() {
           target_ai?: boolean | null;
           delivery_notify_agents?: boolean | null;
           delivery_notify_customers_whatsapp?: boolean | null;
+          whatsapp_template_name?: string | null;
+          whatsapp_template_language?: string | null;
+          whatsapp_template_body_parameters?: string[] | null;
         };
         const updated: AdminBroadcast = {
           id: String(row.id),
@@ -318,6 +473,11 @@ export default function AdminSettings() {
           targetAi: row.target_ai !== false,
           deliveryNotifyAgents: !!row.delivery_notify_agents,
           deliveryNotifyCustomersWhatsapp: !!row.delivery_notify_customers_whatsapp,
+          whatsappTemplateName: row.whatsapp_template_name ?? undefined,
+          whatsappTemplateLanguage: row.whatsapp_template_language ?? undefined,
+          whatsappTemplateBodyParameters: Array.isArray(row.whatsapp_template_body_parameters)
+            ? row.whatsapp_template_body_parameters.map((x) => String(x))
+            : undefined,
         };
         setBroadcasts((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
         clearBroadcastForm();
@@ -357,8 +517,12 @@ export default function AdminSettings() {
   };
 
   const confirmWhatsAppAndCreate = async () => {
-    if (!title.trim() || !message.trim() || !startsAt || !endsAt) {
+    if (!title.trim() || !startsAt || !endsAt) {
       toast('Fill all required broadcast fields');
+      return;
+    }
+    if (targetAi && !message.trim()) {
+      toast('When AI bot is selected, fill the agent availability message.');
       return;
     }
     if (!targetAi && !deliveryNotifyAgents && !deliveryNotifyCustomersWhatsapp) {
@@ -763,12 +927,19 @@ export default function AdminSettings() {
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 rows={4}
+                disabled={!targetAi}
                 placeholder="Example: Due to Ramadan timings, live agents are only available from 4pm–10pm Gulf Standard Time. I can still help you with most questions right now."
-                className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <p className="mt-1 text-[11px] text-text-muted">
-                When &quot;AI bot&quot; is selected below, this text is used when a customer asks
-                for a real agent while the broadcast window is active.
+                Only used when &quot;AI bot&quot; is checked: shown when a customer asks for a human
+                during the broadcast window. It is not sent as a WhatsApp template body.
+                {!targetAi ? (
+                  <span className="block mt-1 text-amber-800/90">
+                    AI bot is off — you can leave this empty; the server stores your title as a short
+                    summary for lists.
+                  </span>
+                ) : null}
               </p>
             </div>
 
@@ -814,7 +985,15 @@ export default function AdminSettings() {
                 <input
                   type="checkbox"
                   checked={deliveryNotifyCustomersWhatsapp}
-                  onChange={(e) => setDeliveryNotifyCustomersWhatsapp(e.target.checked)}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setDeliveryNotifyCustomersWhatsapp(on);
+                    if (!on) {
+                      setWhatsappTemplateName('');
+                      setWhatsappTemplateLanguage('');
+                      setWaBodyParams([]);
+                    }
+                  }}
                   className="mt-0.5 rounded border-border"
                 />
                 <span>
@@ -842,6 +1021,110 @@ export default function AdminSettings() {
                 </span>
               </label>
             </fieldset>
+
+            {deliveryNotifyCustomersWhatsapp && (
+              <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/40 p-4 space-y-3">
+                <p className="text-xs font-semibold text-text-primary">WhatsApp customer broadcast</p>
+                <p className="text-[11px] text-text-secondary leading-relaxed">
+                  Recipients who messaged you within Meta&apos;s 24-hour window get a normal text built
+                  from the title and summary above. Everyone else is sent the approved template you
+                  pick here. In each body slot you can type static text or variables:{' '}
+                  <code className="text-[10px] bg-white/80 px-1 rounded">{`{customer_name}`}</code>,{' '}
+                  <code className="text-[10px] bg-white/80 px-1 rounded">{`{order_id}`}</code> /{' '}
+                  <code className="text-[10px] bg-white/80 px-1 rounded">{`{order_number}`}</code>{' '}
+                  (filled per customer from your data).
+                </p>
+                {waTemplatesLoading ? (
+                  <p className="text-xs text-text-muted">Loading templates from Meta…</p>
+                ) : waTemplates.length === 0 ? (
+                  <p className="text-xs text-amber-900 bg-amber-50/90 border border-amber-200/80 rounded-md px-2 py-2">
+                    No approved templates returned. Set{' '}
+                    <code className="text-[10px]">META_WHATSAPP_WABA_ID</code> and token on the server
+                    and ensure templates are approved in Meta Business Suite.
+                  </p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-text-primary mb-1">
+                          Template name
+                        </label>
+                        <select
+                          value={whatsappTemplateName}
+                          onChange={(e) => setWhatsappTemplateName(e.target.value)}
+                          className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                          <option value="">— Optional (session-only text if empty) —</option>
+                          {waTemplateNameOptions.map((n) => (
+                            <option key={n} value={n}>
+                              {n}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-text-primary mb-1">
+                          Template language
+                        </label>
+                        <select
+                          value={whatsappTemplateLanguage}
+                          onChange={(e) => setWhatsappTemplateLanguage(e.target.value)}
+                          disabled={!whatsappTemplateName}
+                          className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                        >
+                          <option value="">—</option>
+                          {waLanguagesForSelectedName.map((lang) => (
+                            <option key={lang} value={lang}>
+                              {lang}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    {whatsappTemplateName && selectedWaTemplateMeta ? (
+                      <div className="space-y-2">
+                        <p className="text-[11px] font-medium text-text-primary">
+                          Body placeholders (order matches Meta{' '}
+                          <code className="text-[10px]">{`{{1}}`}</code>,{' '}
+                          <code className="text-[10px]">{`{{2}}`}</code>, …)
+                        </p>
+                        {Array.from(
+                          { length: selectedWaTemplateMeta.body_placeholder_count || 0 },
+                          (_, i) => (
+                            <div key={i}>
+                              <label className="block text-[10px] font-medium text-text-muted mb-0.5">
+                                Slot {i + 1}
+                              </label>
+                              <input
+                                type="text"
+                                value={waBodyParams[i] ?? ''}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setWaBodyParams((prev) => {
+                                    const next = [...prev];
+                                    next[i] = v;
+                                    return next;
+                                  });
+                                }}
+                                placeholder={`e.g. {customer_name} or static text`}
+                                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                              />
+                            </div>
+                          ),
+                        )}
+                        {(selectedWaTemplateMeta.body_placeholder_count || 0) === 0 ? (
+                          <p className="text-[11px] text-text-muted">
+                            This template has no named body variables in Meta&apos;s definition, or
+                            Meta did not return component text. You can still send it (no body
+                            parameters).
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            )}
 
             <div className="flex justify-end">
               <button

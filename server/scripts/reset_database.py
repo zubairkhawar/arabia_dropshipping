@@ -104,6 +104,7 @@ def main() -> int:
         engine,
         ensure_agent_read_state_tables,
         ensure_broadcast_delivery_columns,
+        ensure_broadcast_whatsapp_template_columns,
         ensure_dm_team_message_metadata_json,
         ensure_message_enhancements,
         ensure_pgvector_extension,
@@ -132,6 +133,7 @@ def main() -> int:
 
     print("Running startup schema ensures …")
     ensure_broadcast_delivery_columns()
+    ensure_broadcast_whatsapp_template_columns()
     ensure_team_channel_admin_sender_columns()
     ensure_team_channel_read_states_table()
     ensure_agent_read_state_tables()

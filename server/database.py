@@ -73,6 +73,44 @@ def ensure_broadcast_delivery_columns() -> None:
         pass
 
 
+def ensure_broadcast_whatsapp_template_columns() -> None:
+    """Optional Meta template fields for customer WhatsApp broadcasts."""
+    try:
+        insp = inspect(engine)
+        if "broadcasts" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("broadcasts")}
+    except Exception:
+        return
+    stmts: list[str] = []
+    if "whatsapp_template_name" not in cols:
+        stmts.append(
+            "ALTER TABLE broadcasts ADD COLUMN whatsapp_template_name VARCHAR(255)"
+        )
+    if "whatsapp_template_language" not in cols:
+        stmts.append(
+            "ALTER TABLE broadcasts ADD COLUMN whatsapp_template_language VARCHAR(32)"
+        )
+    if "whatsapp_template_body_parameters" not in cols:
+        dialect = engine.dialect.name
+        if dialect == "postgresql":
+            stmts.append(
+                "ALTER TABLE broadcasts ADD COLUMN whatsapp_template_body_parameters JSONB"
+            )
+        else:
+            stmts.append(
+                "ALTER TABLE broadcasts ADD COLUMN whatsapp_template_body_parameters JSON"
+            )
+    if not stmts:
+        return
+    try:
+        with engine.begin() as conn:
+            for s in stmts:
+                conn.execute(text(s))
+    except Exception:
+        pass
+
+
 def ensure_team_channel_admin_sender_columns() -> None:
     """
     Allow admin-originated team channel messages (nullable sender_agent_id, posted_by_admin).

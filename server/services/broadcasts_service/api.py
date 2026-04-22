@@ -5,11 +5,17 @@ from datetime import datetime
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Agent, Broadcast, Conversation, Customer, Notification
+from services.broadcasts_service.whatsapp_delivery import (
+    count_named_body_placeholders,
+    customer_in_whatsapp_session_window,
+    expand_whatsapp_template_tokens,
+)
 from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 
 logger = logging.getLogger(__name__)
@@ -37,6 +43,9 @@ class BroadcastPayload(BaseModel):
     target_ai: bool = True
     delivery_notify_agents: bool = False
     delivery_notify_customers_whatsapp: bool = False
+    whatsapp_template_name: Optional[str] = None
+    whatsapp_template_language: Optional[str] = None
+    whatsapp_template_body_parameters: Optional[List[str]] = None
 
 
 def _coerce_broadcast_datetime(v: Any) -> Any:
@@ -68,6 +77,9 @@ class BroadcastCreate(BaseModel):
     target_ai: bool = True
     delivery_notify_agents: bool = False
     delivery_notify_customers_whatsapp: bool = False
+    whatsapp_template_name: Optional[str] = None
+    whatsapp_template_language: Optional[str] = None
+    whatsapp_template_body_parameters: Optional[List[str]] = None
 
     @field_validator("tenant_id", mode="before")
     @classmethod
@@ -88,6 +100,30 @@ class BroadcastCreate(BaseModel):
             return None
         return v
 
+    @field_validator("whatsapp_template_name", "whatsapp_template_language", mode="before")
+    @classmethod
+    def whatsapp_blank_strings(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("whatsapp_template_body_parameters", mode="before")
+    @classmethod
+    def whatsapp_body_params(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return ["" if x is None else str(x) for x in v]
+        return v
+
+    @model_validator(mode="after")
+    def clear_whatsapp_template_if_no_name(self):
+        if not (self.whatsapp_template_name or "").strip():
+            object.__setattr__(self, "whatsapp_template_name", None)
+            object.__setattr__(self, "whatsapp_template_language", None)
+            object.__setattr__(self, "whatsapp_template_body_parameters", None)
+        return self
+
 
 class BroadcastUpdate(BaseModel):
     title: Optional[str] = None
@@ -98,6 +134,9 @@ class BroadcastUpdate(BaseModel):
     target_ai: Optional[bool] = None
     delivery_notify_agents: Optional[bool] = None
     delivery_notify_customers_whatsapp: Optional[bool] = None
+    whatsapp_template_name: Optional[str] = None
+    whatsapp_template_language: Optional[str] = None
+    whatsapp_template_body_parameters: Optional[List[str]] = None
 
     @field_validator("starts_at", "ends_at", mode="before")
     @classmethod
@@ -109,6 +148,22 @@ class BroadcastUpdate(BaseModel):
     def occasion_blank(cls, v: Any) -> Any:
         if isinstance(v, str) and not v.strip():
             return None
+        return v
+
+    @field_validator("whatsapp_template_name", "whatsapp_template_language", mode="before")
+    @classmethod
+    def whatsapp_blank_strings(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("whatsapp_template_body_parameters", mode="before")
+    @classmethod
+    def whatsapp_body_params(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return ["" if x is None else str(x) for x in v]
         return v
 
 
@@ -141,6 +196,85 @@ async def whatsapp_recipient_count(tenant_id: int, db: Session = Depends(get_db)
     return WhatsAppRecipientCountOut(count=len(phones))
 
 
+class WhatsAppTemplateOut(BaseModel):
+    name: str
+    language: str
+    status: Optional[str] = None
+    category: Optional[str] = None
+    body_placeholder_count: int = 0
+
+
+def _meta_template_row_language(row: dict) -> str:
+    lang = row.get("language")
+    if isinstance(lang, str) and lang.strip():
+        return lang.strip()
+    if isinstance(lang, dict):
+        c = lang.get("code") or lang.get("locale")
+        if isinstance(c, str) and c.strip():
+            return c.strip()
+    return ""
+
+
+def _stored_whatsapp_body_params(b: Any) -> Optional[List[str]]:
+    raw = getattr(b, "whatsapp_template_body_parameters", None)
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        return ["" if x is None else str(x) for x in raw]
+    return None
+
+
+def broadcast_payload_from_model(b: Broadcast) -> BroadcastPayload:
+    return BroadcastPayload(
+        id=b.id,
+        tenant_id=b.tenant_id,
+        title=b.title,
+        message=b.message,
+        occasion=b.occasion,
+        starts_at=b.starts_at,
+        ends_at=b.ends_at,
+        target_ai=bool(getattr(b, "target_ai", True)),
+        delivery_notify_agents=bool(getattr(b, "delivery_notify_agents", False)),
+        delivery_notify_customers_whatsapp=bool(
+            getattr(b, "delivery_notify_customers_whatsapp", False)
+        ),
+        whatsapp_template_name=getattr(b, "whatsapp_template_name", None),
+        whatsapp_template_language=getattr(b, "whatsapp_template_language", None),
+        whatsapp_template_body_parameters=_stored_whatsapp_body_params(b),
+    )
+
+
+@router.get("/broadcasts/whatsapp-templates", response_model=List[WhatsAppTemplateOut])
+async def list_whatsapp_broadcast_templates():
+    """Approved WhatsApp message templates from Meta (WABA) for customer broadcasts."""
+    client = MetaWhatsAppClient()
+    if not client.waba_templates_configured():
+        return []
+    raw = await client.list_message_templates()
+    out: List[WhatsAppTemplateOut] = []
+    for row in raw:
+        st = str(row.get("status") or "").upper()
+        if st and st != "APPROVED":
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        lang = _meta_template_row_language(row)
+        if not lang:
+            lang = "en_US"
+        out.append(
+            WhatsAppTemplateOut(
+                name=name,
+                language=lang,
+                status=row.get("status") if isinstance(row.get("status"), str) else None,
+                category=row.get("category") if isinstance(row.get("category"), str) else None,
+                body_placeholder_count=count_named_body_placeholders(row.get("components")),
+            )
+        )
+    out.sort(key=lambda x: (x.name.lower(), x.language.lower()))
+    return out
+
+
 @router.get("/broadcasts", response_model=List[BroadcastPayload])
 async def list_broadcasts(tenant_id: int, db: Session = Depends(get_db)):
     """
@@ -152,23 +286,7 @@ async def list_broadcasts(tenant_id: int, db: Session = Depends(get_db)):
         .order_by(Broadcast.starts_at.desc().nullslast())
         .all()
     )
-    return [
-        BroadcastPayload(
-            id=b.id,
-            tenant_id=b.tenant_id,
-            title=b.title,
-            message=b.message,
-            occasion=b.occasion,
-            starts_at=b.starts_at,
-            ends_at=b.ends_at,
-            target_ai=bool(getattr(b, "target_ai", True)),
-            delivery_notify_agents=bool(getattr(b, "delivery_notify_agents", False)),
-            delivery_notify_customers_whatsapp=bool(
-                getattr(b, "delivery_notify_customers_whatsapp", False)
-            ),
-        )
-        for b in rows
-    ]
+    return [broadcast_payload_from_model(b) for b in rows]
 
 
 @router.post(
@@ -194,10 +312,24 @@ async def create_broadcast(
             detail="Select at least one target: AI bot, agents, and/or customers (WhatsApp).",
         )
 
+    if payload.target_ai and not (payload.message or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent availability message is required when AI bot is selected.",
+        )
+
+    eff_message = (payload.message or "").strip()
+    if not eff_message:
+        eff_message = (payload.title or "").strip() or "."
+
+    tpl_lang = (payload.whatsapp_template_language or "").strip() or None
+    if (payload.whatsapp_template_name or "").strip() and not tpl_lang:
+        tpl_lang = "en_US"
+
     b = Broadcast(
         tenant_id=payload.tenant_id,
         title=payload.title,
-        message=payload.message,
+        message=eff_message,
         occasion=payload.occasion,
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
@@ -205,6 +337,9 @@ async def create_broadcast(
         target_ai=payload.target_ai,
         delivery_notify_agents=payload.delivery_notify_agents,
         delivery_notify_customers_whatsapp=payload.delivery_notify_customers_whatsapp,
+        whatsapp_template_name=payload.whatsapp_template_name,
+        whatsapp_template_language=tpl_lang,
+        whatsapp_template_body_parameters=payload.whatsapp_template_body_parameters,
     )
     db.add(b)
     db.commit()
@@ -215,7 +350,7 @@ async def create_broadcast(
             db.query(Agent).filter(Agent.tenant_id == payload.tenant_id).all()
         )
         msg_line = (payload.title or "").strip() or "Broadcast"
-        desc = (payload.message or "").strip()
+        desc = eff_message
         if len(desc) > 4000:
             desc = desc[:3997] + "..."
         pending_notifs: List[Notification] = []
@@ -252,54 +387,64 @@ async def create_broadcast(
             await push_notification_event(payload.tenant_id, n.agent_id, notif_dict, summary)
 
     if payload.delivery_notify_customers_whatsapp:
-        rows = (
-            db.query(Customer.phone)
+        grouped = (
+            db.query(
+                Customer.id,
+                Customer.phone,
+                func.max(Conversation.id).label("conv_id"),
+            )
             .join(Conversation, Conversation.customer_id == Customer.id)
             .filter(
                 Customer.tenant_id == payload.tenant_id,
                 Conversation.channel == "whatsapp",
                 Customer.phone.isnot(None),
             )
-            .distinct()
+            .group_by(Customer.id, Customer.phone)
             .all()
         )
-        phones: set[str] = set()
-        for (phone,) in rows:
-            n = _normalize_wa_phone(phone)
-            if n:
-                phones.add(n)
 
         client = MetaWhatsAppClient()
+        tpl_name = (payload.whatsapp_template_name or "").strip() or None
+        tpl_lang_send = tpl_lang or "en_US"
+        tpl_params = list(payload.whatsapp_template_body_parameters or [])
+
         if not client.is_configured():
             logger.warning(
                 "Broadcast WhatsApp delivery skipped: Meta Cloud API not configured "
                 "(META_WHATSAPP_ACCESS_TOKEN / META_WHATSAPP_PHONE_NUMBER_ID)."
             )
-        elif phones:
-            wa_body = f"*{payload.title.strip()}*\n\n{payload.message.strip()}"
+        elif grouped:
+            wa_body = f"*{payload.title.strip()}*\n\n{eff_message}"
             if len(wa_body) > 4096:
                 wa_body = wa_body[:4093] + "..."
-            for to_phone in sorted(phones):
+            for customer_id, phone_raw, conv_id in grouped:
+                to_phone = _normalize_wa_phone(phone_raw)
+                if not to_phone or conv_id is None:
+                    continue
+                cust = db.query(Customer).filter(Customer.id == customer_id).first()
+                if not cust:
+                    continue
+                in_win = customer_in_whatsapp_session_window(db, int(conv_id))
                 try:
-                    await client.send_text_message(to_phone=to_phone, text=wa_body)
+                    if in_win or not tpl_name:
+                        await client.send_text_message(to_phone=to_phone, text=wa_body)
+                    else:
+                        expanded = expand_whatsapp_template_tokens(
+                            db, payload.tenant_id, cust, tpl_params
+                        )
+                        await client.send_template_message(
+                            to_phone=to_phone,
+                            template_name=tpl_name,
+                            language_code=tpl_lang_send,
+                            body_parameters=expanded,
+                        )
                 except Exception:
                     logger.exception(
                         "WhatsApp broadcast send failed to=%s", to_phone[-8:]
                     )
                 await asyncio.sleep(0.12)
 
-    return BroadcastPayload(
-        id=b.id,
-        tenant_id=b.tenant_id,
-        title=b.title,
-        message=b.message,
-        occasion=b.occasion,
-        starts_at=b.starts_at,
-        ends_at=b.ends_at,
-        target_ai=bool(b.target_ai),
-        delivery_notify_agents=bool(b.delivery_notify_agents),
-        delivery_notify_customers_whatsapp=bool(b.delivery_notify_customers_whatsapp),
-    )
+    return broadcast_payload_from_model(b)
 
 
 @router.patch("/broadcasts/{broadcast_id}", response_model=BroadcastPayload)
@@ -316,25 +461,31 @@ async def update_broadcast(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Broadcast not found")
 
     data = payload.model_dump(exclude_unset=True)
+    merged_target_ai = data["target_ai"] if "target_ai" in data else bool(row.target_ai)
+    merged_message = (data["message"] if "message" in data else (row.message or "")) or ""
+    if merged_target_ai and not merged_message.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent availability message is required when AI bot is selected.",
+        )
+
     for key, val in data.items():
         setattr(row, key, val)
+
+    if getattr(row, "whatsapp_template_name", None) in (None, ""):
+        row.whatsapp_template_name = None
+        row.whatsapp_template_language = None
+        row.whatsapp_template_body_parameters = None
+    elif getattr(row, "whatsapp_template_name", None) and not (
+        getattr(row, "whatsapp_template_language", None) or ""
+    ).strip():
+        row.whatsapp_template_language = "en_US"
 
     db.add(row)
     db.commit()
     db.refresh(row)
 
-    return BroadcastPayload(
-        id=row.id,
-        tenant_id=row.tenant_id,
-        title=row.title,
-        message=row.message,
-        occasion=row.occasion,
-        starts_at=row.starts_at,
-        ends_at=row.ends_at,
-        target_ai=bool(row.target_ai),
-        delivery_notify_agents=bool(row.delivery_notify_agents),
-        delivery_notify_customers_whatsapp=bool(row.delivery_notify_customers_whatsapp),
-    )
+    return broadcast_payload_from_model(row)
 
 
 @router.delete("/broadcasts/{broadcast_id}", status_code=status.HTTP_204_NO_CONTENT)

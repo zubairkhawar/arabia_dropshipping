@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -28,6 +28,14 @@ class MetaWhatsAppClient:
 
     def is_configured(self) -> bool:
         return bool(self.access_token and self.phone_number_id and self.graph_version)
+
+    def waba_templates_configured(self) -> bool:
+        """List templates requires WABA id + token (not phone number id)."""
+        return bool(
+            self.access_token
+            and (settings.meta_whatsapp_waba_id or "").strip()
+            and self.graph_version
+        )
 
     def _messages_url(self) -> str:
         return (
@@ -387,3 +395,81 @@ class MetaWhatsAppClient:
             binary = await client.get(url, headers=headers)
             binary.raise_for_status()
             return binary.content, mime if isinstance(mime, str) else None
+
+    async def list_message_templates(self, *, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        GET ``/{waba-id}/message_templates`` — approved and pending templates for admin UI.
+        """
+        if not self.waba_templates_configured():
+            return []
+        waba = (settings.meta_whatsapp_waba_id or "").strip()
+        url = f"https://graph.facebook.com/{self.graph_version}/{waba}/message_templates"
+        params = {
+            "fields": "name,language,status,category,components",
+            "limit": str(min(max(1, limit), 200)),
+        }
+        headers = self._auth_headers()
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta list message_templates HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+                return []
+            data = resp.json()
+            rows = data.get("data")
+            if not isinstance(rows, list):
+                return []
+            return [x for x in rows if isinstance(x, dict)]
+
+    async def send_template_message(
+        self,
+        to_phone: str,
+        template_name: str,
+        language_code: str,
+        body_parameters: List[str],
+    ) -> Dict[str, Any]:
+        """
+        Send a WhatsApp ``template`` message with BODY parameters (text slots in order).
+        """
+        if not self.is_configured():
+            raise RuntimeError("Meta WhatsApp Cloud API is not configured.")
+        url = self._messages_url()
+        params_out: List[Dict[str, str]] = []
+        for p in body_parameters:
+            txt = (p or "")[:900]
+            params_out.append({"type": "text", "text": txt})
+        components: List[Dict[str, Any]] = []
+        if params_out:
+            components.append({"type": "body", "parameters": params_out})
+        payload: Dict[str, Any] = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": template_name.strip(),
+                "language": {"code": (language_code or "en_US").strip()},
+            },
+        }
+        if components:
+            payload["template"]["components"] = components
+        headers = self._headers()
+        logger.info(
+            "Sending WhatsApp template name=%s lang=%s to=%s slots=%s",
+            template_name,
+            language_code,
+            to_phone,
+            len(params_out),
+        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta WhatsApp template API HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+            resp.raise_for_status()
+            return resp.json()

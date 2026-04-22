@@ -25,6 +25,9 @@ export interface AdminBroadcast {
   targetAi: boolean;
   deliveryNotifyAgents: boolean;
   deliveryNotifyCustomersWhatsapp: boolean;
+  whatsappTemplateName?: string | null;
+  whatsappTemplateLanguage?: string | null;
+  whatsappTemplateBodyParameters?: string[] | null;
 }
 
 const C = {
@@ -140,7 +143,9 @@ export function BroadcastWhatsAppModal({
           WhatsApp.
         </p>
         <p className="mt-3 rounded-lg bg-amber-50 border border-amber-200/80 px-3 py-2 text-sm text-amber-900">
-          Messages will be sent immediately. This cannot be undone.
+          Messages send immediately. Customers inside Meta&apos;s 24-hour session get your title and
+          summary as a normal text; everyone else needs an approved template (configured in the form).
+          This cannot be undone.
         </p>
         <div className="mt-6 flex justify-end gap-2">
           <button
@@ -273,7 +278,9 @@ function BroadcastCard({
     : 'Agents: not notified';
 
   const custLine = b.deliveryNotifyCustomersWhatsapp
-    ? 'Customers (WhatsApp): sent at creation'
+    ? b.whatsappTemplateName
+      ? `Customers (WhatsApp): template “${b.whatsappTemplateName}” (${b.whatsappTemplateLanguage || '—'}) at creation`
+      : 'Customers (WhatsApp): session text at creation (no template name stored)'
     : 'Customers (WhatsApp): not sent';
 
   return (
@@ -396,9 +403,17 @@ function BroadcastCard({
 
       <div className="mt-3 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
-          Message preview
+          {b.targetAi ? 'AI availability preview' : 'Stored text / summary'}
         </p>
         <p className="text-xs text-slate-700 leading-relaxed">&quot;{previewText(b.message)}&quot;</p>
+        {b.deliveryNotifyCustomersWhatsapp && b.whatsappTemplateName ? (
+          <p className="mt-1.5 text-[10px] text-slate-500">
+            WhatsApp template slots:{' '}
+            {(b.whatsappTemplateBodyParameters || []).length > 0
+              ? (b.whatsappTemplateBodyParameters || []).map((p, i) => `{{${i + 1}}}→${previewText(p, 40)}`).join(' · ')
+              : 'none saved'}
+          </p>
+        ) : null}
       </div>
 
       {status === 'expired' && !archived && (

@@ -14,6 +14,7 @@ from database import (
     engine,
     Base,
     ensure_broadcast_delivery_columns,
+    ensure_broadcast_whatsapp_template_columns,
     ensure_team_channel_admin_sender_columns,
     ensure_team_channel_read_states_table,
     ensure_agent_read_state_tables,
@@ -132,6 +133,7 @@ async def lifespan(app: FastAPI):
     memory_stats_task: Optional[asyncio.Task] = None
     Base.metadata.create_all(bind=engine)
     ensure_broadcast_delivery_columns()
+    ensure_broadcast_whatsapp_template_columns()
     ensure_team_channel_admin_sender_columns()
     ensure_team_channel_read_states_table()
     ensure_agent_read_state_tables()

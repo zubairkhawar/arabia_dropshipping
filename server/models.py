@@ -306,6 +306,10 @@ class Broadcast(Base):
     target_ai = Column(Boolean, nullable=False, default=True)
     delivery_notify_agents = Column(Boolean, nullable=False, default=False)
     delivery_notify_customers_whatsapp = Column(Boolean, nullable=False, default=False)
+    # WhatsApp Cloud API template (used when session is outside 24h; optional when in session).
+    whatsapp_template_name = Column(String, nullable=True)
+    whatsapp_template_language = Column(String, nullable=True)
+    whatsapp_template_body_parameters = Column(JSON, nullable=True)
 
 
 class KnowledgeSource(Base):
