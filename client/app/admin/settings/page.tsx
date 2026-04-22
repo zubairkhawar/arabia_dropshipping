@@ -28,6 +28,14 @@ function toDatetimeLocalValue(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** Normalize ``datetime-local`` for API (seconds) and avoid sending ``""`` for datetimes (422). */
+function broadcastDateTimeToApi(s: string): string | null {
+  const t = (s || '').trim();
+  if (!t) return null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(t)) return `${t}:00`;
+  return t;
+}
+
 const MONTHS = [
   "January",
   "February",
@@ -209,6 +217,11 @@ export default function AdminSettings() {
   }, []);
 
   const performCreateBroadcast = async () => {
+    const startsPayload = broadcastDateTimeToApi(startsAt);
+    const endsPayload = broadcastDateTimeToApi(endsAt);
+    if (!startsPayload || !endsPayload) {
+      throw new Error('Broadcast start and end times are required');
+    }
     const res = await fetch(`${API_BASE}/api/broadcasts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -217,14 +230,25 @@ export default function AdminSettings() {
         title: title.trim(),
         message: message.trim(),
         occasion: occasion.trim() || null,
-        starts_at: startsAt,
-        ends_at: endsAt,
+        starts_at: startsPayload,
+        ends_at: endsPayload,
         target_ai: targetAi,
         delivery_notify_agents: deliveryNotifyAgents,
         delivery_notify_customers_whatsapp: deliveryNotifyCustomersWhatsapp,
       }),
     });
-    if (!res.ok) throw new Error('Failed to create broadcast');
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const errBody = (await res.json()) as { detail?: unknown };
+        if (typeof errBody.detail === 'string') detail = errBody.detail;
+        else if (Array.isArray(errBody.detail))
+          detail = errBody.detail.map((x: { msg?: string }) => x.msg || '').filter(Boolean).join('; ');
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
     await res.json();
     clearBroadcastForm();
     toast('Broadcast added');
@@ -256,14 +280,23 @@ export default function AdminSettings() {
             title: title.trim(),
             message: message.trim(),
             occasion: occasion.trim() || null,
-            starts_at: startsAt,
-            ends_at: endsAt,
+            starts_at: broadcastDateTimeToApi(startsAt),
+            ends_at: broadcastDateTimeToApi(endsAt),
             target_ai: targetAi,
             delivery_notify_agents: deliveryNotifyAgents,
             delivery_notify_customers_whatsapp: deliveryNotifyCustomersWhatsapp,
           }),
         });
-        if (!res.ok) throw new Error('Failed to update');
+        if (!res.ok) {
+          let detail = 'Failed to update';
+          try {
+            const errBody = (await res.json()) as { detail?: unknown };
+            if (typeof errBody.detail === 'string') detail = errBody.detail;
+          } catch {
+            /* ignore */
+          }
+          throw new Error(detail);
+        }
         const row = (await res.json()) as {
           id: number;
           title: string;
@@ -316,20 +349,32 @@ export default function AdminSettings() {
     setBroadcastSubmitting(true);
     try {
       await performCreateBroadcast();
-    } catch {
-      toast('Failed to add broadcast');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to add broadcast');
     } finally {
       setBroadcastSubmitting(false);
     }
   };
 
   const confirmWhatsAppAndCreate = async () => {
+    if (!title.trim() || !message.trim() || !startsAt || !endsAt) {
+      toast('Fill all required broadcast fields');
+      return;
+    }
+    if (!targetAi && !deliveryNotifyAgents && !deliveryNotifyCustomersWhatsapp) {
+      toast('Choose at least one target: AI bot, agents, and/or customers (WhatsApp)');
+      return;
+    }
+    if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+      toast('Broadcast end time must be after start time');
+      return;
+    }
     setWaModalSubmitting(true);
     try {
       await performCreateBroadcast();
       setWaModalOpen(false);
-    } catch {
-      toast('Failed to add broadcast');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to add broadcast');
     } finally {
       setWaModalSubmitting(false);
     }

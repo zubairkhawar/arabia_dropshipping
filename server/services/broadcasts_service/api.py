@@ -2,10 +2,10 @@ import asyncio
 import logging
 import re
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -39,6 +39,25 @@ class BroadcastPayload(BaseModel):
     delivery_notify_customers_whatsapp: bool = False
 
 
+def _coerce_broadcast_datetime(v: Any) -> Any:
+    """
+    Accept HTML ``datetime-local`` (no seconds), empty strings, and ISO strings for JSON bodies.
+    """
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        # "YYYY-MM-DDTHH:mm" from <input type="datetime-local" /> — add seconds for strict parsers
+        if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$", s):
+            return f"{s}:00"
+        return s
+    return v
+
+
 class BroadcastCreate(BaseModel):
     tenant_id: int
     title: str
@@ -50,6 +69,25 @@ class BroadcastCreate(BaseModel):
     delivery_notify_agents: bool = False
     delivery_notify_customers_whatsapp: bool = False
 
+    @field_validator("tenant_id", mode="before")
+    @classmethod
+    def coerce_tenant_id(cls, v: Any) -> Any:
+        if isinstance(v, str) and v.strip().isdigit():
+            return int(v.strip())
+        return v
+
+    @field_validator("starts_at", "ends_at", mode="before")
+    @classmethod
+    def coerce_datetimes(cls, v: Any) -> Any:
+        return _coerce_broadcast_datetime(v)
+
+    @field_validator("occasion", mode="before")
+    @classmethod
+    def occasion_blank(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
 
 class BroadcastUpdate(BaseModel):
     title: Optional[str] = None
@@ -60,6 +98,18 @@ class BroadcastUpdate(BaseModel):
     target_ai: Optional[bool] = None
     delivery_notify_agents: Optional[bool] = None
     delivery_notify_customers_whatsapp: Optional[bool] = None
+
+    @field_validator("starts_at", "ends_at", mode="before")
+    @classmethod
+    def coerce_datetimes(cls, v: Any) -> Any:
+        return _coerce_broadcast_datetime(v)
+
+    @field_validator("occasion", mode="before")
+    @classmethod
+    def occasion_blank(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 
 class WhatsAppRecipientCountOut(BaseModel):
