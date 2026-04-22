@@ -170,15 +170,13 @@ export function ChatList() {
   const selectedId = inboxConv ? inboxConv.selectedId : localSelectedId;
   const setSelectedId = inboxConv ? inboxConv.setSelectedId : setLocalSelectedId;
 
-  const view: 'bot' | 'live' | 'closed' = useMemo(() => {
-    if (pathname?.startsWith('/admin/inbox/live')) return 'live';
+  const view: 'live' | 'closed' = useMemo(() => {
     if (pathname?.startsWith('/admin/inbox/closed')) return 'closed';
-    return 'bot';
+    return 'live';
   }, [pathname]);
   const isAdminInbox = pathname?.startsWith('/admin/inbox');
   const isAdminLivePage = pathname?.startsWith('/admin/inbox/live');
   const isAdminClosedPage = pathname?.startsWith('/admin/inbox/closed');
-  const isAdminBotPage = Boolean(isAdminInbox && !isAdminLivePage && !isAdminClosedPage);
 
   const sourceConversations = useMemo(() => {
     if (isAgentInbox) return conversations;
@@ -189,16 +187,12 @@ export function ChatList() {
   const filteredConversations = useMemo(() => {
     let list = sourceConversations;
 
-    // Admin: one bucket per conversation (backend is source of truth).
-    // AI Bot = active + bot-owned (agent_id null). Live = active + assigned agent.
-    // Closed = resolved/closed. Reopen after close is handled server-side (same thread → active + bot).
+    // Admin: one bucket per route (DB-backed). Live = active + assigned agent. Closed = resolved/closed.
     // sourceConversations is deduped by phone so legacy duplicate rows do not appear in two buckets.
     if (!isAgentInbox) {
-      if (view === 'bot') {
-        list = list.filter((c) => c.handlerType === 'ai' && c.status === 'active');
-      } else if (view === 'live') {
+      if (view === 'live') {
         list = list.filter((c) => c.handlerType === 'agent' && c.status === 'active');
-      } else if (view === 'closed') {
+      } else {
         list = list.filter((c) => c.status === 'resolved');
       }
     }
@@ -536,45 +530,6 @@ export function ChatList() {
               </div>
             )}
 
-            {/* ── Admin: AI Bot conversations (default /admin/inbox) ── */}
-            {!isAgentInbox && isAdminBotPage && (
-              <div className="space-y-1">
-                <p className="px-1 py-1 text-[11px] font-semibold text-text-muted uppercase tracking-wide">
-                  AI Bot Conversations — {filteredConversations.length} active
-                </p>
-                {filteredConversations.map((conv) => {
-                  const isSelected = selectedId === conv.id;
-                  return (
-                    <button
-                      key={conv.id}
-                      type="button"
-                      onClick={() => setSelectedId(conv.id)}
-                      className={`w-full text-left p-3 rounded-lg cursor-pointer transition-colors ${
-                        isSelected ? 'bg-primary text-white' : 'bg-white hover:bg-panel border border-border'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2 mb-1">
-                        <span className={`text-sm font-medium truncate flex-1 min-w-0 ${isSelected ? 'text-white' : 'text-text-primary'}`}>
-                          {conv.customerName}
-                        </span>
-                        <span className={`text-xs flex-shrink-0 ${isSelected ? 'text-white/80' : 'text-text-muted'}`}>
-                          {conv.lastActivityAt}
-                        </span>
-                      </div>
-                      {conv.customerPhone && (
-                        <p className={`text-[11px] truncate mb-0.5 ${isSelected ? 'text-white/85' : 'text-text-muted'}`}>
-                          {conv.customerPhone}
-                        </p>
-                      )}
-                      <p className={`text-xs truncate ${isSelected ? 'text-white/90' : 'text-text-secondary'}`}>
-                        {conv.lastMessage}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
             {/* ── Admin: Live Now (agent-handled active conversations) ── */}
             {!isAgentInbox && isAdminLivePage && (
               <div className="space-y-1">
@@ -659,13 +614,11 @@ export function ChatList() {
             {/* ── Empty state ── */}
             {!(isAgentInbox && inboxConv?.isLoading) && filteredConversations.length === 0 && (
               <div className="px-2 py-4 text-[12px] text-text-muted">
-                {isAdminBotPage
-                  ? 'No active AI bot conversations right now.'
-                  : isAdminLivePage
-                    ? 'No live agent conversations right now.'
-                    : isAdminClosedPage
-                      ? 'No closed conversations found.'
-                      : 'No conversations match this view yet.'}
+                {isAdminLivePage
+                  ? 'No live agent conversations right now.'
+                  : isAdminClosedPage
+                    ? 'No closed conversations found.'
+                    : 'No conversations match this view yet.'}
               </div>
             )}
               </>

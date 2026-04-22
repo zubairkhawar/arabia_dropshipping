@@ -115,62 +115,6 @@ export function BroadcastDeleteModal({
   );
 }
 
-export function BroadcastWhatsAppModal({
-  open,
-  count,
-  onCancel,
-  onConfirm,
-  busy,
-}: {
-  open: boolean;
-  count: number;
-  onCancel: () => void;
-  onConfirm: () => void;
-  busy: boolean;
-}) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-      <div
-        role="dialog"
-        aria-modal="true"
-        className="w-full max-w-md rounded-2xl border bg-white p-6 shadow-xl"
-        style={{ borderColor: C.border }}
-      >
-        <h2 className="text-lg font-semibold text-slate-900">Send WhatsApp messages?</h2>
-        <p className="mt-3 text-sm text-slate-600">
-          You&apos;re about to send this broadcast to{' '}
-          <span className="font-semibold text-slate-900">{count.toLocaleString()}</span> customers via
-          WhatsApp.
-        </p>
-        <p className="mt-3 rounded-lg bg-amber-50 border border-amber-200/80 px-3 py-2 text-sm text-amber-900">
-          Messages send immediately. Customers inside Meta&apos;s 24-hour session get your title and
-          summary as a normal text; everyone else needs an approved template (configured in the form).
-          This cannot be undone.
-        </p>
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={busy}
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-          >
-            {busy ? 'Sending…' : 'Send now'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function BroadcastCard({
   b,
   status,

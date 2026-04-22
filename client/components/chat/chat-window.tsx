@@ -399,11 +399,8 @@ export function ChatWindow({
   const dmSlug = isDmPage ? (pathname.replace('/agent/dm/', '').split('/')[0] || null) : null;
   const isInboxPage = pathname?.startsWith('/agent/inbox') || pathname?.startsWith('/admin/inbox');
   const isAdminInbox = pathname?.startsWith('/admin/inbox');
-  /** Default /admin/inbox = AI Bot monitoring; live/closed are separate routes with agent-facing actions. */
-  const isAdminAiBotInboxView =
-    isAdminInbox &&
-    !pathname?.startsWith('/admin/inbox/live') &&
-    !pathname?.startsWith('/admin/inbox/closed');
+  /** Admin inbox is only `/admin/inbox/live` or `/closed` (bot-only monitor route removed). */
+  const isAdminAiBotInboxView = false;
   const showAdminSendBackAndCloseChat = !isAdminInbox || !isAdminAiBotInboxView;
   /** Admin broadcast composer: require a team id (API target). Do not depend on teamName — empty names would hide the input while readOnly is true. */
   const showBroadcastInput =
