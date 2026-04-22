@@ -452,6 +452,21 @@ def _looks_like_free_text_question(text: str) -> bool:
         return False
     if "?" in s:
         return True
+    # Topic keywords the customer can ask about without needing new/existing selection.
+    # Includes Arabia service topics and common FAQ entry points.
+    topic_keywords = (
+        "dropshipping", "dropship", "fulfillment", "fulfilment",
+        "3pl", "courier", "whatsapp order", "agency", "partnership",
+        "profit", "payment", "commission", "sourcing", "china sourcing",
+        "store creation", "store setup", "marketing", "shipping",
+        "return", "refund", "policy", "policies", "price", "pricing",
+        "services", "service", "how", "help", "support",
+        "register", "sign up", "start", "begin",
+        # Urdu/Roman Urdu topic starters
+        "kya hai", "kya hota", "service", "charges", "fee", "cost",
+    )
+    if any(s == kw or s.startswith(kw) for kw in topic_keywords):
+        return True
     faq_markers = (
         "tell me",
         "about",
@@ -4347,8 +4362,32 @@ async def process_customer_bot_message(
         if mem_id and merchant_sid:
             ConversationMemory.store_verification(mem_id, merchant_sid)
 
-        intro_line = _t(flow_lang, MSGS["verification_success"])
-        parts: list[str] = [intro_line]
+        # Build a personalised success line that includes the store/customer name.
+        cust_name = (
+            (customer or {}).get("name")
+            or (customer or {}).get("store_name")
+            or (customer or {}).get("full_name")
+            or (customer or {}).get("first_name")
+        )
+        if cust_name and str(cust_name).strip():
+            cust_name = str(cust_name).strip()
+            if flow_lang == "arabic":
+                intro_line = f"✅ تم التحقق! أهلاً بعودتك {cust_name}."
+            elif flow_lang == "roman_urdu":
+                intro_line = f"✅ Verified! Khush Amdeed {cust_name}."
+            else:
+                intro_line = f"✅ Verified! Welcome back {cust_name}."
+        else:
+            intro_line = _t(flow_lang, MSGS["verification_success"])
+
+        if flow_lang == "arabic":
+            welcome_line = "كيف يمكنني مساعدتك اليوم؟ يمكنك السؤال عن طلباتك أو فواتيرك أو تتبع الشحنة."
+        elif flow_lang == "roman_urdu":
+            welcome_line = "Aaj kaise madad karoon? Aap apne orders, invoices, ya tracking ke baare mein pooch sakte hain."
+        else:
+            welcome_line = "How can I help you today? You can ask about your orders, invoices, or tracking."
+
+        parts: list[str] = [intro_line, welcome_line]
 
         if oref:
             order, src = await _lookup_order(
@@ -4356,24 +4395,20 @@ async def process_customer_bot_message(
                 seller_id=base_f.get("seller_id"),
             )
             if order:
-                parts.append(_format_order_sentence(flow_lang, order))
-                parts.append(_t(flow_lang, MSGS["verified_followup"]))
+                parts = [intro_line, _format_order_sentence(flow_lang, order), _t(flow_lang, MSGS["verified_followup"])]
                 return save(base_f, "\n\n".join(parts))
             if src == "api_error":
-                parts.append(_t(flow_lang, MSGS["order_lookup_error"]))
-                parts.append(_t(flow_lang, MSGS["verified_followup"]))
+                parts = [intro_line, _t(flow_lang, MSGS["order_lookup_error"]), _t(flow_lang, MSGS["verified_followup"])]
                 return save(base_f, "\n\n".join(parts))
-            parts.append(_t(flow_lang, MSGS["order_not_found"]))
-            parts.append(_t(flow_lang, MSGS["ask_order"]))
+            parts = [intro_line, _t(flow_lang, MSGS["order_not_found"]), _t(flow_lang, MSGS["ask_order"])]
             oid_flow = {**base_f, "step": "existing_awaiting_order_id"}
             return save(oid_flow, "\n\n".join(parts))
 
         if reason == "order":
-            parts.append(_t(flow_lang, MSGS["ask_order"]))
+            parts = [intro_line, _t(flow_lang, MSGS["ask_order"])]
             oid_flow = {**base_f, "step": "existing_awaiting_order_id"}
             return save(oid_flow, "\n\n".join(parts))
 
-        parts.append(_t(flow_lang, MSGS["existing_customer_welcome"]))
         return save(base_f, "\n\n".join(parts))
 
     if step == "existing_awaiting_order_id":
@@ -4592,20 +4627,14 @@ async def process_customer_bot_message(
             nf = {**flow, "step": "conversational", "customer_kind": "new", "lang": flow_lang}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
 
-        # Greeting: if customer_kind not yet set, ask new/existing; otherwise just ack
+        # Greeting: just acknowledge — do NOT re-show the new/existing menu here.
+        # The welcome menu is only shown on fresh entry or /reset; mid-conversation
+        # greetings get a simple acknowledgment so the customer can continue naturally.
         if _looks_like_greeting(text):
-            if kind:
-                return save(
-                    {**flow, "step": "conversational"},
-                    _t(flow_lang, MSGS["hello_ack"]),
-                )
-            nf = {
-                **flow,
-                "step": "awaiting_customer_type",
-                "intro_shown": True,
-                "lang": flow_lang,
-            }
-            return save(nf, _t(flow_lang, MSGS["greeting"]))
+            return save(
+                {**flow, "step": "conversational"},
+                _t(flow_lang, MSGS["hello_ack"]),
+            )
 
         # Simple acknowledgments (okay, good, fine, hmm, etc.) — reply naturally
         _lowered_text = text.strip().lower()
