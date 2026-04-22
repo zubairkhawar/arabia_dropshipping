@@ -900,20 +900,22 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         const serverAtt = inboxMetaToAttachment(saved.message_metadata);
         setMessagesByConvId((prev) => {
           const cur = prev[convId] || [];
-          const idx = cur.findIndex((x) => x.id === message.id);
-          if (idx < 0) return prev;
-          const next = [...cur];
-          next[idx] = {
-            ...next[idx],
+          const original = cur.find((x) => x.id === message.id);
+          if (!original) return prev;
+          // Remove the optimistic (negative-ID) entry AND any duplicate real-ID entry that the
+          // WebSocket may have already appended before this API response arrived (race condition).
+          const withoutPending = cur.filter((x) => x.id !== message.id && x.id !== saved.id);
+          const realMsg: InboxMessage = {
+            ...original,
             id: saved.id,
             sentAt: saved.created_at,
-            replyToMessageId: saved.reply_to_message_id ?? next[idx].replyToMessageId,
-            editedAt: saved.edited_at ?? next[idx].editedAt,
+            replyToMessageId: saved.reply_to_message_id ?? original.replyToMessageId,
+            editedAt: saved.edited_at ?? original.editedAt,
             messageStatus: saved.status ?? { sent: true, delivered: true, read: true },
-            messageMetadata: saved.message_metadata ?? next[idx].messageMetadata,
-            attachment: serverAtt ?? next[idx].attachment,
+            messageMetadata: saved.message_metadata ?? original.messageMetadata,
+            attachment: serverAtt ?? original.attachment,
           };
-          return { ...prev, [convId]: next };
+          return { ...prev, [convId]: [...withoutPending, realMsg].sort(compareInboxMessagesChronological) };
         });
         setConversations((prev) =>
           prev.map((c) =>

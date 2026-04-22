@@ -434,6 +434,12 @@ export function ChatWindow({
     isInboxWithSelection && inboxConv?.selectedId != null
       ? inboxConv.getMessages(inboxConv.selectedId).length
       : 0;
+  // Number of messages still using a temporary negative ID (optimistic, not yet saved).
+  // When this drops to 0, the sync effect below must re-run to replace stale IDs in state.
+  const inboxPendingCount =
+    isInboxWithSelection && !isInternalChat && inboxConv?.selectedId != null
+      ? inboxConv.getMessages(inboxConv.selectedId).filter((m) => m.id < 0).length
+      : 0;
   const hasSelectedConversation = !!selectedConv;
   const inboxNoConversationSelected = Boolean(isInboxPage && !isInternalChat && !hasSelectedConversation);
   const inboxConversationClosed =
@@ -479,7 +485,7 @@ export function ChatWindow({
         }),
       );
     });
-  }, [isInboxWithSelection, isInternalChat, inboxConv?.selectedId, inboxMessageCount]);
+  }, [isInboxWithSelection, isInternalChat, inboxConv?.selectedId, inboxMessageCount, inboxPendingCount]);
 
   useEffect(() => {
     if (!isInboxPage || isInternalChat || inboxConv?.selectedId == null) return;
