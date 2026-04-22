@@ -500,7 +500,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useAgents() {
+export function useAgents(): AgentsContextType {
   const context = useContext(AgentsContext);
   if (context === undefined) {
     return {
@@ -512,7 +512,10 @@ export function useAgents() {
       addAgent: async () => false,
       updateAgent: async () => false,
       removeAgent: async () => false,
-      setAgentStatus: async () => ({ ok: false }),
+      setAgentStatus: async (
+        _id: string,
+        _status: 'online' | 'busy' | 'offline',
+      ): Promise<SetAgentStatusResult> => ({ ok: false }),
     };
   }
   return context;

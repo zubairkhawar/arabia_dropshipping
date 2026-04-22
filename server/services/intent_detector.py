@@ -95,6 +95,27 @@ class IntentDetector:
         ):
             return "products", "product_search"
 
+        # Full Arabia service list (Roman Urdu / English) — pairs with LLM COMPLETE SERVICES LIST in prompts.
+        _svc_cat_markers = (
+            "all services",
+            "list of services",
+            "services list",
+            "what services",
+            "which services",
+            "kya services",
+            "kya kya services",
+            "sari services",
+            "saari services",
+            "poori services",
+            "puri services",
+            "full services",
+            "complete services",
+            "tamam services",
+            "saare services",
+        )
+        if any(m in msg_lower for m in _svc_cat_markers):
+            return "services", "service_catalog"
+
         return None, "general_question"
 
     @staticmethod
