@@ -54,9 +54,10 @@ function AgentInboxContent() {
         <ChatWindow />
       </div>
 
-      {/* Right panel: context or expand strip */}
+      {/* Right panel: context or expand strip — visible at xl (1280px+) only so the
+          chat window has enough room at 1440px laptop with expanded sidebar */}
       {contextCollapsed ? (
-        <div className="hidden lg:flex w-12 shrink-0 flex-col items-center border-l border-border bg-panel pt-4">
+        <div className="hidden xl:flex w-12 shrink-0 flex-col items-center border-l border-border bg-panel pt-4">
           <button
             type="button"
             onClick={() => setContextCollapsed(false)}
@@ -67,7 +68,7 @@ function AgentInboxContent() {
           </button>
         </div>
       ) : (
-        <div className="hidden lg:block w-context-laptop xl:w-context-desktop 2xl:w-context-ultrawide border-l border-border bg-panel shrink-0 min-h-0 overflow-hidden">
+        <div className="hidden xl:block xl:w-context-desktop 2xl:w-context-ultrawide border-l border-border bg-panel shrink-0 min-h-0 overflow-hidden">
           <ContextPanel />
         </div>
       )}

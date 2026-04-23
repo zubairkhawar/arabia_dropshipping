@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/providers';
@@ -11,6 +11,13 @@ export const metadata: Metadata = {
   icons: {
     icon: '/Arabia_thumbnail.png',
   },
+};
+
+/** Prevent accidental browser zoom (e.g. touch pinch / Ctrl+scroll on trackpad). */
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default function RootLayout({

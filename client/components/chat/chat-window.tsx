@@ -4623,7 +4623,7 @@ export function ChatWindow({
                       ? `Reply to ${replyingTo.senderName}...`
                       : 'Type a message...'
                 }
-                className="flex-1 min-w-0 px-4 py-2.5 focus:outline-none text-sm bg-transparent"
+                className="flex-1 min-w-0 px-4 py-2.5 focus:outline-none text-base bg-transparent"
                 onKeyDown={handleInputKeyDown}
                 disabled={inboxNoConversationSelected}
               />
