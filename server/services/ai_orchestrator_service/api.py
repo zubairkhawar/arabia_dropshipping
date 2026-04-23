@@ -80,24 +80,7 @@ async def process_chat_message(message: ChatMessage, db: Session = Depends(get_d
             .first()
         )
 
-    if conversation and conversation.agent_id is None:
-        st = (conversation.status or "").lower()
-        if st in ("closed", "resolved"):
-            meta = (
-                conversation.conversation_metadata
-                if isinstance(conversation.conversation_metadata, dict)
-                else {}
-            )
-            meta = {
-                **meta,
-                "reopened_after_close_at": datetime.utcnow().isoformat(),
-            }
-            conversation.conversation_metadata = meta
-            conversation.status = "active"
-            conversation.updated_at = datetime.utcnow()
-            db.add(conversation)
-            db.commit()
-            db.refresh(conversation)
+    # Closed conversations are intentionally left archived; do not reopen them.
 
     if conversation and conversation.agent_id:
         detected_language = message.language or await orchestrator.detect_language(
