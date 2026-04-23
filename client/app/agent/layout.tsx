@@ -20,6 +20,7 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
   const { isCollapsed } = useSidebar();
   const router = useRouter();
   const [authChecked, setAuthChecked] = useState(false);
+  const sidebarWidth = isCollapsed ? 80 : 256;
 
   useEffect(() => {
     let cancelled = false;
@@ -75,8 +76,11 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-scaffold">
       <AgentSidebar />
       <div
-        className="flex-1 flex flex-col transition-all duration-300"
-        style={{ marginLeft: isCollapsed ? '80px' : '256px' }}
+        className="flex min-w-0 flex-col transition-all duration-300"
+        style={{
+          marginLeft: `${sidebarWidth}px`,
+          width: `calc(100vw - ${sidebarWidth}px)`,
+        }}
       >
         <AgentHeader />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-scaffold">{children}</main>
