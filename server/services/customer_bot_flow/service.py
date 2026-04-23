@@ -4389,15 +4389,30 @@ async def process_customer_bot_message(
         )
 
     if step == "sourcing_collecting_details":
-        # Customer is providing product details for sourcing — collect and hand off
-        # Any message here is treated as additional details; hand off to agent
-        sourcing_info = flow.get("sourcing_product_name") or ""
+        # Customer may switch topics mid-sourcing. If the new message is a normal
+        # business question (orders/services/payments/etc.), abandon sourcing flow
+        # and answer directly instead of forcing repeated handoff replies.
+        has_bulk = bool(re.search(r"\b\d{2,}\s*(?:piece|pieces|pcs|unit|units|qty)\b", text.lower()))
+        if (
+            not wants_human_agent(text)
+            and not has_bulk
+            and not _wants_product_sourcing(text)
+            and _is_natural_language(text)
+        ):
+            nf = {**flow, "step": "conversational", "intro_shown": True, "lang": flow_lang}
+            nf.pop("sourcing_product_name", None)
+            nf.pop("pending_handoff_team", None)
+            return ai_forward(
+                "[User changed topic; cancel sourcing flow] " + text,
+                nf,
+                skip_api=not flow.get("verified"),
+            )
+
+        # Customer is providing sourcing details — collect and hand off.
         team = TEAM_NEW_CUSTOMER
         if flow.get("verified"):
             team = flow.get("experience_team") or TEAM_BEGINNER
 
-        # Check if this is a bulk quantity message
-        has_bulk = bool(re.search(r"\b\d{2,}\s*(?:piece|pieces|pcs|unit|units|qty)\b", text.lower()))
         if has_bulk:
             template_key = "sourcing_bulk_handoff"
         else:
@@ -5015,13 +5030,13 @@ async def process_customer_bot_message(
             nf.pop("pending_handoff_team", None)
             return save(nf, _build_handoff_unavailable_reply(db, tenant_id, flow_lang), skip_api=True)
 
-        if not wants_human_agent(text) and is_conversational_acknowledgment(text):
+        # If customer asks a new non-agent question while waiting, break out of
+        # handoff loop and answer directly.
+        if not wants_human_agent(text):
             skip = not flow.get("verified")
-            return ai_forward(
-                text,
-                {**flow, "step": "conversational", "intro_shown": True},
-                skip_api=skip,
-            )
+            nf = {**flow, "step": "conversational", "intro_shown": True, "lang": flow_lang}
+            nf.pop("pending_handoff_team", None)
+            return ai_forward(text, nf, skip_api=skip)
         if flow.get("verified"):
             team = (
                 flow.get("pending_handoff_team")
