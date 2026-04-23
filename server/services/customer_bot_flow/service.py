@@ -3962,11 +3962,24 @@ async def process_customer_bot_message(
     # LLM-first routing:
     # Keep only a minimal deterministic guard for active verification/security steps.
     otp_guard_steps = {
+        "awaiting_customer_type",
+        "awaiting_resume_choice",
         "existing_awaiting_email",
         "existing_awaiting_verification_code",
         "existing_awaiting_mobile",
     }
-    if step not in otp_guard_steps:
+    # Keep order/account verification bootstrap deterministic while unverified.
+    needs_verification_bootstrap = (
+        step == "conversational"
+        and not bool(flow.get("verified"))
+        and (
+            _looks_like_order_status_question(text)
+            or _is_likely_order_id_only(text)
+            or _looks_like_account_question(text)
+            or bool(_extract_standalone_email(text))
+        )
+    )
+    if step not in otp_guard_steps and not needs_verification_bootstrap:
         nf = {
             **flow,
             "step": "conversational",
@@ -4558,9 +4571,9 @@ async def process_customer_bot_message(
         if _wants_cannot_find_order_help(text):
             return save(flow, _t(flow_lang, MSGS["cannot_find_order_help"]))
 
+        # Stay on verification rails: do not escape this step to AI.
         if _is_natural_language(text) and not _is_likely_email(text):
-            nf = _bail_to_conversational(flow, flow_lang)
-            return ai_forward(text, nf, skip_api=True)
+            return save(flow, _t(flow_lang, MSGS["ask_email"]))
         email = (text or "").strip().lower()
         if not _is_likely_email(email):
             return save(flow, _t(flow_lang, MSGS["email_invalid"]))
@@ -4570,9 +4583,12 @@ async def process_customer_bot_message(
         if _wants_new_customer_path(text):
             nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+        # Stay on verification rails until code is entered/validated.
         if _is_natural_language(text):
-            nf = _bail_to_conversational(flow, flow_lang)
-            return ai_forward(text, nf, skip_api=True)
+            pending_email = (flow.get("pending_email") or "").strip().lower()
+            if pending_email:
+                return save(flow, _t(flow_lang, MSGS["verify"]).format(email=pending_email))
+            return save(flow, _t(flow_lang, MSGS["ask_email"]))
         code = (text or "").strip()
         pending_email = (flow.get("pending_email") or "").strip().lower()
         if not pending_email:
@@ -4613,9 +4629,9 @@ async def process_customer_bot_message(
         if _wants_new_customer_path(text):
             nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+        # Stay on verification rails until mobile lookup succeeds/fails.
         if _is_natural_language(text):
-            nf = _bail_to_conversational(flow, flow_lang)
-            return ai_forward(text, nf, skip_api=True)
+            return save(flow, _t(flow_lang, MSGS["ask_mobile"]))
         pending_email = (flow.get("pending_email") or "").strip().lower()
         mobile_raw = (text or "").strip()
         if not pending_email:

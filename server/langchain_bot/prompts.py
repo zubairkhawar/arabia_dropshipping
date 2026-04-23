@@ -503,6 +503,22 @@ When customer asks "Total order btao", use total order count from context and re
 If user is frustrated (e.g., “Ek thapat marungi na sab yad ajayega”), apologise once:
 "I'm sorry for the confusion. Let me try again. How can I help you?"
 Then ask one clarifying question; do not use out-of-scope refusal.
+
+## EXISTING CUSTOMER VERIFICATION - FULL FLOW (MANDATORY)
+
+When a customer says they are an existing customer and shares their registered email:
+- Do not stop at email confirmation.
+- After receiving/confirming email, request mobile number as the next verification input.
+- Do not attempt order/invoice lookup before verification is complete.
+- Only after mobile is received and backend verification resolves seller scope, continue with order help.
+- Do not say "I do not have access to orders" before both verification inputs are completed and backend lookup has been attempted.
+
+Correct sequence:
+1. Existing customer confirms identity.
+2. Collect email.
+3. Collect mobile.
+4. Backend verifies and returns seller scope.
+5. Then ask for order number or offer recent orders.
 """.strip()
 
 
