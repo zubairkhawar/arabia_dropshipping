@@ -402,20 +402,8 @@ def _existing_identity_entry(
     intro_key: str,
 ) -> Tuple[Dict[str, Any], str]:
     """
-    Start existing-customer identity: full verification script, or order-number-only when bypassed.
+    Start existing-customer identity using verification-first flow.
     """
-    if _script_verification_bypassed():
-        return (
-            {
-                **flow,
-                "step": "existing_awaiting_order_id",
-                "customer_kind": "existing",
-                "intro_shown": True,
-                "verify_reason": None,
-                "pending_order_ref": pending_order_ref or None,
-            },
-            _t(flow_lang, MSGS["order_verify_bypass_intro"]),
-        )
     return (
         {
             **flow,
@@ -1699,8 +1687,6 @@ def _looks_like_account_question(text: str) -> bool:
 
 
 def _needs_account_verification(flow: Dict[str, Any]) -> bool:
-    if _script_verification_bypassed():
-        return False
     if bool(flow.get("verified")):
         return False
     # Existing-customer path with seller scope already on file (completed verify earlier) —
@@ -4437,16 +4423,6 @@ async def process_customer_bot_message(
             nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
 
-        if _script_verification_bypassed():
-            f_b, msg_b = _existing_identity_entry(
-                flow,
-                flow_lang,
-                verify_reason=flow.get("verify_reason"),
-                pending_order_ref=flow.get("pending_order_ref"),
-                intro_key="ask_email",
-            )
-            return save(f_b, msg_b)
-
         # 1) Short-circuit: if the user just shares an order id, look it up
         #    without requiring email verification. Possession of the order id
         #    is itself proof enough for a single-order lookup.
@@ -4484,15 +4460,6 @@ async def process_customer_bot_message(
         return await submit_existing_email(flow, email)
 
     if step == "existing_awaiting_verification_code":
-        if _script_verification_bypassed():
-            f_b, msg_b = _existing_identity_entry(
-                flow,
-                flow_lang,
-                verify_reason=flow.get("verify_reason"),
-                pending_order_ref=flow.get("pending_order_ref"),
-                intro_key="ask_email",
-            )
-            return save(f_b, msg_b)
         if _wants_new_customer_path(text):
             nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
@@ -4536,15 +4503,6 @@ async def process_customer_bot_message(
         return save(f, _t(flow_lang, MSGS["email_verified_success"]))
 
     if step == "existing_awaiting_mobile":
-        if _script_verification_bypassed():
-            f_b, msg_b = _existing_identity_entry(
-                flow,
-                flow_lang,
-                verify_reason=flow.get("verify_reason"),
-                pending_order_ref=flow.get("pending_order_ref"),
-                intro_key="ask_email",
-            )
-            return save(f_b, msg_b)
         if _wants_new_customer_path(text):
             nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
@@ -4564,6 +4522,25 @@ async def process_customer_bot_message(
             return save(flow, _t(flow_lang, MSGS["ask_mobile"]))
         mobile = _normalize_phone(mobile_raw)
         if mobile is None:
+            digits_only = re.sub(r"\D", "", mobile_raw)
+            if digits_only.startswith("03") and len(digits_only) == 10:
+                if flow_lang == "roman_urdu":
+                    return save(
+                        flow,
+                        "Aap ka number 10 digits ka hai. Pakistan mobile 11 digits hota hai aur 03 se start hota hai "
+                        "(misal: 03474685920). Please dobara bhejein.",
+                    )
+                if flow_lang == "arabic":
+                    return save(
+                        flow,
+                        "الرقم الذي أدخلته مكوّن من 10 أرقام. رقم الجوال الباكستاني يجب أن يكون 11 رقماً ويبدأ بـ 03 "
+                        "(مثال: 03474685920). يرجى إعادة إدخاله.",
+                    )
+                return save(
+                    flow,
+                    "The number you entered has 10 digits. Pakistan mobile numbers have 11 digits starting with 03 "
+                    "(e.g., 03474685920). Please re-enter.",
+                )
             return save(flow, _t(flow_lang, MSGS["mobile_unsupported_country"]))
         customer = await store_client.get_customer_by_email_mobile_first_hit(
             pending_email, mobile_raw
@@ -4734,79 +4711,23 @@ async def process_customer_bot_message(
             kind = "existing"
             if mem_id:
                 ConversationMemory.store_bot_customer_kind(mem_id, "existing")
+            f_sw, msg_sw = _existing_identity_entry(
+                flow,
+                flow_lang,
+                verify_reason=None,
+                pending_order_ref=None,
+                intro_key="existing_switch_verify",
+            )
+            return save(f_sw, msg_sw)
 
         if not flow.get("verified"):
-            if _script_verification_bypassed() and _extract_standalone_email(text):
-                flow = {**flow, "customer_kind": "existing"}
-                kind = "existing"
-                if mem_id:
-                    ConversationMemory.store_bot_customer_kind(mem_id, "existing")
-                f_em_b, msg_em_b = _existing_identity_entry(
-                    flow,
-                    flow_lang,
-                    verify_reason=None,
-                    pending_order_ref=None,
-                    intro_key="ask_email",
-                )
-                return save(f_em_b, msg_em_b)
             em_only = _extract_standalone_email(text)
-            if em_only and not _script_verification_bypassed():
+            if em_only:
                 flow = {**flow, "customer_kind": "existing"}
                 kind = "existing"
                 if mem_id:
                     ConversationMemory.store_bot_customer_kind(mem_id, "existing")
                 return await submit_existing_email(flow, em_only)
-
-            if _script_verification_bypassed() and (
-                _looks_like_order_status_question(text)
-                or _looks_like_account_question(text)
-                or _is_likely_order_id_only(text)
-            ):
-                pre_ref = ""
-                if _is_likely_order_id_only(text):
-                    pre_ref = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
-                else:
-                    pre_ref = (_extract_order_id_from_message(text, phone) or "").strip()
-                if pre_ref:
-                    order, src = await _lookup_order(
-                        db, tenant_id, pre_ref, store_client,
-                        seller_id=_flow_merchant_seller_id(flow),
-                    )
-                    if order:
-                        f_ok = {
-                            **flow,
-                            "customer_kind": "existing",
-                            "step": "conversational",
-                            "lang": flow_lang,
-                        }
-                        return save(f_ok, _format_order_sentence(flow_lang, order))
-                    if src == "api_error":
-                        return save(
-                            {**flow, "customer_kind": "existing"},
-                            _t(flow_lang, MSGS["order_lookup_error"]),
-                        )
-                    retry_msg = (
-                        _t(flow_lang, MSGS["order_not_found"])
-                        + "\n\n"
-                        + _t(flow_lang, MSGS["order_verify_bypass_intro"])
-                    )
-                    return save(
-                        {
-                            **flow,
-                            "customer_kind": "existing",
-                            "step": "existing_awaiting_order_id",
-                            "intro_shown": True,
-                        },
-                        retry_msg,
-                    )
-                f_ob, msg_ob = _existing_identity_entry(
-                    {**flow, "customer_kind": "existing"},
-                    flow_lang,
-                    verify_reason="order",
-                    pending_order_ref=None,
-                    intro_key="order_verify_intro",
-                )
-                return save(f_ob, msg_ob)
 
         # Verified customers: route order/tracking/invoice queries through the
         # LLM with full store-API context instead of deterministic handlers.

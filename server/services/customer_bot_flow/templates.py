@@ -122,6 +122,11 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "رائع! كيف يمكنني مساعدتك؟ لا تتردد في طرح أي سؤال.",
         "roman_urdu": "Zabardast! Main kaise madad kar sakta hoon? Koi bhi sawal pooch sakte hain.",
     },
+    "existing_switch_verify": {
+        "english": "I understand. Let me verify your existing account. Please share your registered email address.",
+        "arabic": "فهمت. دعني أتحقق من حسابك الحالي. يرجى إرسال بريدك الإلكتروني المسجل.",
+        "roman_urdu": "Samajh gaya. Chaliye aapka existing account verify karte hain. Apna registered email address bhejein.",
+    },
     "entry": {
         "english": (
             "Hey 👋 Welcome to ArabiaDropshipping!\n\n"
@@ -355,9 +360,9 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": "Apna mobile number bhejein 📱",
     },
     "mobile_unsupported_country": {
-        "english": "We only support 🇵🇰 Pakistan, 🇦🇪 UAE, and 🇸🇦 Saudi Arabia numbers. Please send a valid mobile.",
-        "arabic": "ندعم أرقام 🇵🇰 باكستان و🇦🇪 الإمارات و🇸🇦 السعودية فقط. يرجى إرسال رقم جوال صحيح.",
-        "roman_urdu": "Sirf 🇵🇰 Pakistan, 🇦🇪 UAE aur 🇸🇦 Saudi Arabia ke numbers. Sahih mobile bhejein.",
+        "english": "The mobile number format looks invalid. For Pakistan, use 11 digits starting with 03 (e.g., 03474685920), or 923... / +923... . We also support UAE (+971...) and Saudi (+966...) numbers.",
+        "arabic": "صيغة رقم الجوال غير صحيحة. لباكستان استخدم 11 رقماً تبدأ بـ 03 (مثال: 03474685920) أو 923... / +923... . كما ندعم أرقام الإمارات (+971...) والسعودية (+966...).",
+        "roman_urdu": "Mobile number format ghalat lag raha hai. Pakistan ke liye 11 digits 03 se start hone chahiye (misal: 03474685920), ya 923... / +923... . UAE (+971...) aur Saudi (+966...) numbers bhi supported hain.",
     },
     "customer_not_found_after_verify": {
         "english": "We could not find an account with this email and mobile. Please check your details or contact support.",
