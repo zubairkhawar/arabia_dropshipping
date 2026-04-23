@@ -2869,6 +2869,30 @@ def _wants_invoice_csv_file(text: str) -> bool:
     return ("invoice" in t and any(m in t for m in ("april", "march", "22", "date", "wali", "waali")))
 
 
+def _looks_like_csv_file_followup(text: str) -> bool:
+    t = (text or "").lower().strip()
+    if not t:
+        return False
+    asks_file = any(x in t for x in ("csv", "excel", "spreadsheet", "export", "download", "file"))
+    if not asks_file:
+        return False
+    # Follow-up asks like "file dedo" / "send file" after invoice date/id was already shared.
+    return any(
+        x in t
+        for x in (
+            "file do",
+            "file dedo",
+            "send file",
+            "bhejo",
+            "bhej do",
+            "send csv",
+            "csv bhejo",
+            "download",
+            "export",
+        )
+    )
+
+
 def _extract_invoice_csv_date(text: str) -> Optional[str]:
     """
     Extract an exact invoice date (YYYY-MM-DD) from free text when possible.
@@ -3270,12 +3294,23 @@ async def process_customer_bot_message(
         channel == "whatsapp"
         and mem_id
         and flow.get("verified")
-        and _wants_invoice_csv_file(user_message)
+        and (
+            _wants_invoice_csv_file(user_message)
+            or bool(flow.get("awaiting_invoice_csv_ref"))
+            or (
+                _looks_like_csv_file_followup(user_message)
+                and bool(flow.get("last_invoice_csv_date") or flow.get("last_invoice_csv_id"))
+            )
+        )
     ):
         sid_csv = _flow_merchant_seller_id(flow)
         if sid_csv:
             inv_id = _extract_invoice_id(user_message)
             inv_date = _extract_invoice_csv_date(user_message)
+            if not inv_id:
+                inv_id = str(flow.get("last_invoice_csv_id") or "").strip() or None
+            if not inv_date:
+                inv_date = str(flow.get("last_invoice_csv_date") or "").strip() or None
             if not inv_id and not inv_date:
                 msg = (
                     "Please share the invoice number or exact invoice date (YYYY-MM-DD), "
@@ -3291,7 +3326,10 @@ async def process_customer_bot_message(
                         "يرجى إرسال رقم الفاتورة أو تاريخها الدقيق (YYYY-MM-DD)، "
                         "وسأرسل ملف CSV الخاص بها."
                     )
-                return save({**flow, "step": "conversational"}, msg)
+                return save(
+                    {**flow, "step": "conversational", "awaiting_invoice_csv_ref": True},
+                    msg,
+                )
             try:
                 from services.orders_export_service.csv_builder import object_key_for_invoice_csv
                 from services.orders_export_service.exporter import build_invoice_csv_export_bytes
@@ -3343,7 +3381,13 @@ async def process_customer_bot_message(
                 except Exception:
                     logger.warning("Optional R2 presign for invoice CSV skipped", exc_info=True)
                 return save(
-                    {**flow, "step": "conversational"},
+                    {
+                        **flow,
+                        "step": "conversational",
+                        "last_invoice_csv_id": (inv_ref or inv_id or ""),
+                        "last_invoice_csv_date": (inv_date_final or inv_date or ""),
+                        "awaiting_invoice_csv_ref": False,
+                    },
                     reply,
                     wa_documents=[doc_item],
                 )
@@ -3914,6 +3958,29 @@ async def process_customer_bot_message(
             team=team,
             esc=True,
         )
+
+    # LLM-first routing:
+    # Keep only a minimal deterministic guard for active verification/security steps.
+    otp_guard_steps = {
+        "existing_awaiting_email",
+        "existing_awaiting_verification_code",
+        "existing_awaiting_mobile",
+    }
+    if step not in otp_guard_steps:
+        nf = {
+            **flow,
+            "step": "conversational",
+            "intro_shown": True,
+            "lang": flow_lang,
+        }
+        if not nf.get("customer_kind"):
+            nf["customer_kind"] = "new"
+        if step == "awaiting_agent":
+            nf.pop("pending_handoff_team", None)
+        skip = not bool(flow.get("verified"))
+        kind = flow.get("customer_kind")
+        ai_msg = f"[Customer question] {text}" if kind else text
+        return ai_forward(ai_msg, nf, skip_api=skip)
 
     # Sets step awaiting_resume_choice; reply uses _RESUME_CHOICE_MSGS.
     if not _flow_is_tabula_rasa(flow) and _looks_like_greeting(text):
@@ -4759,6 +4826,27 @@ async def process_customer_bot_message(
                 intro_key="existing_switch_verify",
             )
             return save(f_sw, msg_sw)
+
+        if kind == "new" and (
+            _looks_like_order_status_question(text)
+            or _is_likely_order_id_only(text)
+            or _looks_like_invoice_for_order(text)
+        ):
+            msg = (
+                "As a new customer, you haven't placed any orders yet. "
+                "Would you like to learn how to start?"
+            )
+            if flow_lang == "roman_urdu":
+                msg = (
+                    "New customer hone ki wajah se abhi aap ka koi order place nahi hua. "
+                    "Kya aap chahtay hain main aap ko start karne ka tareeqa bataun?"
+                )
+            elif flow_lang == "arabic":
+                msg = (
+                    "بصفتك عميلاً جديداً، لا توجد لديك طلبات بعد. "
+                    "هل ترغب أن أشرح لك كيف تبدأ؟"
+                )
+            return save({**flow, "step": "conversational"}, msg, skip_api=True)
 
         if not flow.get("verified"):
             em_only = _extract_standalone_email(text)

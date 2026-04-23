@@ -267,7 +267,7 @@ def format_order_discovery_one_liner(order: Dict[str, Any]) -> str:
     status_raw = _pick_str(order, "status", "delivery_status", "order_status")
     if not status_raw and isinstance(order.get("tracking_result"), dict):
         status_raw = _pick_str(order["tracking_result"], "status", "delivery_status")
-    status_disp = status_raw or "Unknown"
+    status_disp = status_raw or "Tracking temporarily unavailable"
     tr = _pick_str(order, "tracking_number", "tracking", "tracking_id", "awb_number")
     head = f"Order #{num} placed on {placed}." if placed else f"Order #{num}."
     bits = [head, f"Status: {status_disp}."]

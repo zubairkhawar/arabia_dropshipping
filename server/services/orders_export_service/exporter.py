@@ -41,6 +41,24 @@ def _norm_date(s: str) -> str:
     return str(s or "").strip()[:10]
 
 
+def _order_items_text(order: Dict[str, Any]) -> str:
+    items = order.get("items")
+    if isinstance(items, list) and items:
+        parts: List[str] = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            nm = _pick_str(it, "name", "title", "product_name", "item")
+            qty = _pick_str(it, "qty", "quantity")
+            if nm and qty:
+                parts.append(f"{nm} x{qty}")
+            elif nm:
+                parts.append(nm)
+        if parts:
+            return "; ".join(parts)
+    return _pick_str(order, "details", "product_summary", "item_name", "product_name")
+
+
 def _invoices_from_merchant_payload(inv_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not isinstance(inv_payload, dict) or not inv_payload:
         return []
@@ -206,6 +224,8 @@ async def build_invoice_csv_export_bytes(
             if oid in idset:
                 filtered.append(o)
         orders = filtered
+    if not orders and order_ids:
+        orders = [{"id": oid, "createdon": inv_date} for oid in order_ids]
 
     if include_tracking and orders:
         try:
@@ -221,13 +241,13 @@ async def build_invoice_csv_export_bytes(
     # Build CSV: invoice summary section + order rows.
     headers = [
         "Order ID",
-        "Order Date",
-        "Status",
-        "Tracking Number",
+        "Date",
         "Items",
-        "Shipping",
         "Total",
+        "Shipping",
         "Profit",
+        "Tracking Number",
+        "Status",
     ]
     buf = io.StringIO(newline="")
     w = csv.writer(buf)
@@ -239,15 +259,18 @@ async def build_invoice_csv_export_bytes(
     w.writerow([])
     w.writerow(headers)
     for o in orders:
+        status = _pick_str(o, "status", "order_status", "delivery_status")
+        if not status:
+            status = "Tracking information temporarily unavailable"
         w.writerow([
             _pick_str(o, "id", "order_id", "order_number"),
             _pick_str(o, "createdon", "order_date", "created_at"),
-            _pick_str(o, "status", "order_status", "delivery_status"),
-            _pick_str(o, "tracking_number", "tracking_id", "awb", "awb_number"),
-            _pick_str(o, "details", "product_summary"),
-            _pick_str(o, "shipping_charges", "shipping", "shipping_fee"),
+            _order_items_text(o),
             _pick_str(o, "total", "amount", "grand_total"),
+            _pick_str(o, "shipping_charges", "shipping", "shipping_fee"),
             _pick_str(o, "profit"),
+            _pick_str(o, "tracking_number", "tracking_id", "awb", "awb_number"),
+            status,
         ])
 
     return buf.getvalue().encode("utf-8-sig"), len(orders), inv_ref, inv_date

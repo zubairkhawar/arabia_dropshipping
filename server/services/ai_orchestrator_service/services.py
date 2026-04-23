@@ -56,6 +56,66 @@ def _order_ids_from_invoices(invoices: List[Dict[str, Any]], max_ids: int = 40) 
     return out
 
 
+def _message_requests_full_invoice_history(message_text: str) -> bool:
+    t = (message_text or "").strip().lower()
+    if not t:
+        return False
+    keys = (
+        "all invoices",
+        "all my invoices",
+        "all invoice",
+        "saari invoice",
+        "saari invoices",
+        "sari invoice",
+        "sari invoices",
+        "invoice history",
+        "total payment",
+        "total payments",
+        "total paid",
+        "payment sum",
+        "invoice sum",
+        "kitni pay ho chuki",
+        "pay hochuki",
+        "ab tak pay",
+    )
+    return any(k in t for k in keys)
+
+
+def _message_requests_total_order_count(message_text: str) -> bool:
+    t = (message_text or "").strip().lower()
+    if not t:
+        return False
+    keys = (
+        "total order",
+        "total orders",
+        "order count",
+        "orders in total",
+        "kitne order",
+        "kitnay order",
+    )
+    return any(k in t for k in keys)
+
+
+def _safe_amount_float(v: Any) -> float:
+    if v is None:
+        return 0.0
+    s = str(v).strip()
+    if not s:
+        return 0.0
+    cleaned = re.sub(r"[^0-9.\-]", "", s)
+    if not cleaned:
+        return 0.0
+    try:
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_paid_invoice_status(v: Any) -> bool:
+    s = str(v or "").strip().lower()
+    return s in {"yes", "paid", "true", "1", "y"}
+
+
 def _resolve_merchant_seller_id(
     flow: Optional[Dict[str, Any]],
     customer: Optional[Dict[str, Any]],
@@ -552,9 +612,14 @@ class AIOrchestrator:
         orders_truncated = False
         date_from = ""
         date_to = ""
+        invoice_date_from = ""
+        invoice_date_to = ""
+        full_invoice_history_mode = False
+        total_order_count_mode = False
 
         # Only use Arabia APIs: orders by id, tracking, faq, invoice by seller_id
         if seller_id:
+            total_order_count_mode = _message_requests_total_order_count(message_text or "")
             parsed_msg_range = parse_date_range_from_message(message_text or "")
             use_parsed_window = bool(
                 parsed_msg_range
@@ -581,19 +646,26 @@ class AIOrchestrator:
                 parsed_msg_range = None
                 use_parsed_window = False
 
+            if _message_requests_full_invoice_history(message_text or ""):
+                full_invoice_history_mode = True
+                invoice_date_from = "2020-01-01"
+                invoice_date_to = datetime.utcnow().date().isoformat()
+            else:
+                invoice_date_from, invoice_date_to = date_from, date_to
+
             orders_truncated = False
             try:
                 inv_payload = await self.store_client.get_invoice_by_seller_id(
                     seller_id,
-                    date_from=date_from,
-                    date_to=date_to,
-                    all_invoices=False,
+                    date_from=invoice_date_from,
+                    date_to=invoice_date_to,
+                    all_invoices=full_invoice_history_mode,
                 )
                 if not _invoices_from_merchant_payload(inv_payload):
                     inv_payload = await self.store_client.get_invoice_by_seller_id(
                         seller_id,
-                        date_from=date_from,
-                        date_to=date_to,
+                        date_from=invoice_date_from,
+                        date_to=invoice_date_to,
                         all_invoices=True,
                     )
                 if isinstance(inv_payload.get("orders"), list):
@@ -601,15 +673,24 @@ class AIOrchestrator:
                 elif isinstance(inv_payload.get("data"), list):
                     orders = [x for x in inv_payload.get("data") if isinstance(x, dict)]
                 invoices = _invoices_from_merchant_payload(inv_payload)
+                if total_order_count_mode:
+                    try:
+                        orders = await self.store_client.get_orders_all(seller_id)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("Store API total-order-count unscoped fetch failed")
+                        store_context_error = (store_context_error or "") + f" orders_all_total:{exc!s}"[:220]
                 # Invoice payload often has no ``orders`` array — use /orders/all with a
                 # sensible window (merchant APIs may return NOT_FOUND for ad-hoc single days).
                 if not orders:
                     try:
-                        orders = await self.store_client.get_orders_all(
-                            seller_id,
-                            date_from=date_from,
-                            date_to=date_to,
-                        )
+                        if total_order_count_mode:
+                            orders = await self.store_client.get_orders_all(seller_id)
+                        else:
+                            orders = await self.store_client.get_orders_all(
+                                seller_id,
+                                date_from=date_from,
+                                date_to=date_to,
+                            )
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("Store API orders/all with window failed")
                         store_context_error = (store_context_error or "") + f" orders_all:{exc!s}"[:220]
@@ -769,6 +850,31 @@ class AIOrchestrator:
                 orders
             )
         has_orders = bool(orders_last_365)
+        invoice_order_ids: Set[str] = set()
+        total_paid_amount = 0.0
+        for inv in invoices:
+            if not isinstance(inv, dict):
+                continue
+            raw_oids = inv.get("order_ids")
+            if isinstance(raw_oids, list):
+                for oid in raw_oids:
+                    sid = str(oid or "").strip().lstrip("#")
+                    if sid:
+                        invoice_order_ids.add(sid)
+            if _is_paid_invoice_status(inv.get("pay_status")):
+                total_paid_amount += _safe_amount_float(
+                    inv.get("payable") or inv.get("net_total") or inv.get("invoice_payable")
+                )
+        order_ids_from_orders: Set[str] = set()
+        for row in orders:
+            if not isinstance(row, dict):
+                continue
+            oid = order_row_primary_id(row)
+            if oid:
+                order_ids_from_orders.add(oid)
+        total_order_count = max(len(order_ids_from_orders), len(invoice_order_ids))
+        if total_order_count <= 0:
+            total_order_count = len(orders or [])
 
         orders_requested_range: Optional[Dict[str, Any]] = None
         if (
@@ -807,6 +913,9 @@ class AIOrchestrator:
             "context_store_date_from": (date_from or None) if seller_id else None,
             "context_store_date_to": (date_to or None) if seller_id else None,
             "orders_requested_range": orders_requested_range,
+            "full_invoice_history_mode": full_invoice_history_mode,
+            "total_paid_amount": round(total_paid_amount, 2),
+            "total_order_count": total_order_count,
         }
 
     async def should_escalate(self, message: str) -> bool:
