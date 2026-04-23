@@ -4569,13 +4569,38 @@ async def process_customer_bot_message(
             pending_email, mobile_raw
         )
         if not customer:
-            return save(flow, _t(flow_lang, MSGS["customer_not_found_after_verify"]))
+            # Do not loop on the same mobile prompt; end verification step with a
+            # clear fallback path.
+            nf = {
+                **flow,
+                "step": "conversational",
+                "customer_kind": "existing",
+                "pending_email": None,
+                "pending_mobile": mobile,
+                "verify_reason": None,
+                "lang": flow_lang,
+            }
+            return save(nf, _t(flow_lang, MSGS["customer_not_found_after_verify"]))
         verified_at = _verified_at_iso()
         reason = flow.get("verify_reason")
         oref_raw = flow.get("pending_order_ref")
         oref = (str(oref_raw).strip() if oref_raw else "") or ""
 
         merchant_sid = merchant_seller_scope_from_row(customer)
+        if not merchant_sid:
+            # Verification is only complete when seller scope is available.
+            nf = {
+                **flow,
+                "step": "conversational",
+                "customer_kind": "existing",
+                "verified": False,
+                "seller_id": None,
+                "pending_email": None,
+                "pending_mobile": mobile,
+                "verify_reason": None,
+                "lang": flow_lang,
+            }
+            return save(nf, _t(flow_lang, MSGS["customer_not_found_after_verify"]))
         base_f: Dict[str, Any] = {
             **flow,
             "verified": True,

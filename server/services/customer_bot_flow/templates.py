@@ -360,9 +360,9 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": "Sirf 🇵🇰 Pakistan, 🇦🇪 UAE aur 🇸🇦 Saudi Arabia ke numbers. Sahih mobile bhejein.",
     },
     "customer_not_found_after_verify": {
-        "english": "We could not find a customer with this email and mobile. Please check and send your mobile number again.",
-        "arabic": "لم نعثر على عميل بهذا البريد والجوال. يرجى التحقق وإرسال رقم الجوال مرة أخرى.",
-        "roman_urdu": "Is email aur mobile par customer nahi mila. Mobile dobara check karke bhejein.",
+        "english": "We could not find an account with this email and mobile. Please check your details or contact support.",
+        "arabic": "لم نعثر على حساب بهذا البريد والجوال. يرجى التحقق من التفاصيل أو التواصل مع الدعم.",
+        "roman_urdu": "Is email aur mobile par account nahi mila. Details check karein ya support se rabta karein.",
     },
     "verification_success": {
         "english": "✅ Verified!",
