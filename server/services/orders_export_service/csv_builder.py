@@ -225,3 +225,11 @@ def object_key_for_orders_csv(seller_id: str, fingerprint: str = "") -> str:
     fp = "".join(c for c in str(fingerprint) if c.isalnum())[:16]
     suffix = f"_{fp}" if fp else ""
     return f"exports/orders_{sid}{suffix}_{ts}.csv"
+
+
+def object_key_for_invoice_csv(seller_id: str, invoice_ref: str = "") -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    sid = "".join(c for c in str(seller_id) if c.isalnum() or c in ("-", "_"))[:32]
+    iref = "".join(c for c in str(invoice_ref) if c.isalnum() or c in ("-", "_"))[:32]
+    suffix = f"_{iref}" if iref else ""
+    return f"exports/invoice_{sid}{suffix}_{ts}.csv"

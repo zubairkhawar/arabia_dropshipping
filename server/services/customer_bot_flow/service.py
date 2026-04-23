@@ -2819,6 +2819,68 @@ def _wants_orders_csv_file(text: str) -> bool:
     return False
 
 
+def _wants_invoice_csv_file(text: str) -> bool:
+    """
+    Detect invoice-specific CSV/download asks so we do not accidentally send a
+    generic orders export file.
+    """
+    t = (text or "").lower()
+    if not t:
+        return False
+    asks_file = any(x in t for x in ("csv", "excel", "spreadsheet", "export", "download", "file"))
+    if not asks_file:
+        return False
+    if "invoice" in t or "فاتور" in t or "فاتورة" in t:
+        return True
+    # Roman Urdu variants often mention only "invoice" shorthand + date words.
+    return ("invoice" in t and any(m in t for m in ("april", "march", "22", "date", "wali", "waali")))
+
+
+def _extract_invoice_csv_date(text: str) -> Optional[str]:
+    """
+    Extract an exact invoice date (YYYY-MM-DD) from free text when possible.
+    Supports ISO and simple ``22 april 2026`` / ``22 april`` variants.
+    """
+    t = (text or "").strip().lower()
+    if not t:
+        return None
+    m_iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", t)
+    if m_iso:
+        return m_iso.group(1)
+    month_map = {
+        "jan": 1, "january": 1,
+        "feb": 2, "february": 2,
+        "mar": 3, "march": 3,
+        "apr": 4, "april": 4,
+        "may": 5,
+        "jun": 6, "june": 6,
+        "jul": 7, "july": 7,
+        "aug": 8, "august": 8,
+        "sep": 9, "sept": 9, "september": 9,
+        "oct": 10, "october": 10,
+        "nov": 11, "november": 11,
+        "dec": 12, "december": 12,
+    }
+    m = re.search(
+        r"\b([0-3]?\d)\s+("
+        r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+        r")(?:\s+(\d{4}))?\b",
+        t,
+    )
+    if not m:
+        return None
+    day = int(m.group(1))
+    mon_raw = m.group(2)
+    year = int(m.group(3)) if m.group(3) else datetime.utcnow().year
+    month = month_map.get(mon_raw, None)
+    if not month:
+        return None
+    if day < 1 or day > 31:
+        return None
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
 def _csv_user_requests_enriched_export_wording(text: str) -> bool:
     """True when the user explicitly asks for tracking/status/invoice in the file."""
     if not _wants_orders_csv_file(text):
@@ -3170,6 +3232,108 @@ async def process_customer_bot_message(
             whatsapp_text_after_images=None,
             suppress_kb_wrap=suppress_kb_wrap,
         )
+
+    if (
+        channel == "whatsapp"
+        and mem_id
+        and flow.get("verified")
+        and _wants_invoice_csv_file(user_message)
+    ):
+        sid_csv = _flow_merchant_seller_id(flow)
+        if sid_csv:
+            inv_id = _extract_invoice_id(user_message)
+            inv_date = _extract_invoice_csv_date(user_message)
+            if not inv_id and not inv_date:
+                msg = (
+                    "Please share the invoice number or exact invoice date (YYYY-MM-DD), "
+                    "and I will send the invoice CSV."
+                )
+                if flow_lang == "roman_urdu":
+                    msg = (
+                        "Invoice number ya exact invoice date (YYYY-MM-DD) bhejein, "
+                        "main invoice CSV bhej deta hoon."
+                    )
+                elif flow_lang == "arabic":
+                    msg = (
+                        "يرجى إرسال رقم الفاتورة أو تاريخها الدقيق (YYYY-MM-DD)، "
+                        "وسأرسل ملف CSV الخاص بها."
+                    )
+                return save({**flow, "step": "conversational"}, msg)
+            try:
+                from services.orders_export_service.csv_builder import object_key_for_invoice_csv
+                from services.orders_export_service.exporter import build_invoice_csv_export_bytes
+
+                body, n, inv_ref, inv_date_final = await build_invoice_csv_export_bytes(
+                    store_client,
+                    str(sid_csv),
+                    invoice_id=inv_id or None,
+                    invoice_date=inv_date or None,
+                    include_tracking=True,
+                )
+                if n <= 0:
+                    miss = inv_date or inv_id or "that invoice"
+                    msg = f"I could not find invoice data for {miss}."
+                    if flow_lang == "roman_urdu":
+                        msg = f"Mujhe {miss} ke liye invoice data nahi mila."
+                    elif flow_lang == "arabic":
+                        msg = f"لم أجد بيانات فاتورة مطابقة لـ {miss}."
+                    return save({**flow, "step": "conversational"}, msg)
+                ref_tag = inv_ref or inv_id or inv_date_final or str(sid_csv)
+                fname = f"invoice_{sid_csv}_{ref_tag}.csv".replace(" ", "_")[:180]
+                cap = f"Invoice CSV ({n} orders)"
+                reply = (
+                    f"I have prepared a CSV for invoice {inv_ref or inv_id or inv_date_final}. "
+                    "Tap the file below to download."
+                )
+                if flow_lang == "roman_urdu":
+                    reply = (
+                        f"Main ne invoice {inv_ref or inv_id or inv_date_final} ki CSV bana di hai. "
+                        "Neeche file par tap karein."
+                    )
+                elif flow_lang == "arabic":
+                    reply = (
+                        f"تم تجهيز ملف CSV للفاتورة {inv_ref or inv_id or inv_date_final}. "
+                        "اضغط على الملف أدناه للتنزيل."
+                    )
+                doc_item: Dict[str, Any] = {
+                    "content_bytes": body,
+                    "filename": fname,
+                    "caption": cap,
+                    "mime_type": "text/csv",
+                }
+                try:
+                    from services.media_storage.r2 import is_r2_configured, presign_get, put_bytes
+                    if is_r2_configured():
+                        key = object_key_for_invoice_csv(str(sid_csv), str(ref_tag))
+                        put_bytes(key, body, "text/csv")
+                        doc_item["document_url"] = presign_get(key, 86400)
+                except Exception:
+                    logger.warning("Optional R2 presign for invoice CSV skipped", exc_info=True)
+                return save(
+                    {**flow, "step": "conversational"},
+                    reply,
+                    wa_documents=[doc_item],
+                )
+            except ValueError:
+                miss = inv_date or inv_id or "that invoice"
+                msg = f"I could not find an invoice for {miss}. Please check the date or invoice number."
+                if flow_lang == "roman_urdu":
+                    msg = (
+                        f"Mujhe {miss} ki invoice nahi mili. Please date ya invoice number dobara check karein."
+                    )
+                elif flow_lang == "arabic":
+                    msg = (
+                        f"لم أجد فاتورة لـ {miss}. يرجى التحقق من التاريخ أو رقم الفاتورة."
+                    )
+                return save({**flow, "step": "conversational"}, msg)
+            except Exception:
+                logger.exception("WhatsApp invoice CSV export failed")
+                err = "Sorry, I could not generate that invoice CSV right now. Please try again."
+                if flow_lang == "roman_urdu":
+                    err = "Maazrat, abhi invoice CSV generate nahi ho saki. Please dobara try karein."
+                elif flow_lang == "arabic":
+                    err = "عذرًا، تعذر إنشاء ملف CSV للفاتورة الآن. حاول مرة أخرى."
+                return save({**flow, "step": "conversational"}, err)
 
     if (
         channel == "whatsapp"
@@ -4735,30 +4899,6 @@ async def process_customer_bot_message(
                 _t(flow_lang, MSGS["hello_ack"]),
             )
 
-        # customer_kind not set yet — first real message without a greeting
-        # Treat as implicit new customer and answer directly
-        if not kind:
-            nf = {
-                **flow,
-                "step": "conversational",
-                "customer_kind": "new",
-                "intro_shown": True,
-                "lang": flow_lang,
-            }
-            return ai_forward(text, nf, skip_api=True)
-
-        # --- Existing customer (verified) path ---
-        # Route ALL verified-customer queries through the LLM with full
-        # store-API context.  fetch_customer_context() in the orchestrator
-        # already fetches orders, tracking, invoices, and FAQs using the
-        # seller_id — the LLM formulates a natural-language answer.
-        if flow.get("verified"):
-            return ai_forward(
-                "[Customer question] " + text,
-                {**flow, "step": "conversational"},
-                skip_api=False,
-            )
-
         # --- Unverified: order/account questions start existing-customer identity (or bypass order-id path) ---
         if _needs_account_verification(flow) and (
             _looks_like_order_status_question(text)
@@ -4801,6 +4941,30 @@ async def process_customer_bot_message(
                     queue_previous=False,
                 )
             return save(f_iv, msg_iv)
+
+        # customer_kind not set yet — first real message without a greeting
+        # Treat as implicit new customer and answer directly (non-order/account intent).
+        if not kind:
+            nf = {
+                **flow,
+                "step": "conversational",
+                "customer_kind": "new",
+                "intro_shown": True,
+                "lang": flow_lang,
+            }
+            return ai_forward(text, nf, skip_api=True)
+
+        # --- Existing customer (verified) path ---
+        # Route ALL verified-customer queries through the LLM with full
+        # store-API context.  fetch_customer_context() in the orchestrator
+        # already fetches orders, tracking, invoices, and FAQs using the
+        # seller_id — the LLM formulates a natural-language answer.
+        if flow.get("verified"):
+            return ai_forward(
+                "[Customer question] " + text,
+                {**flow, "step": "conversational"},
+                skip_api=False,
+            )
 
         # --- New customer or existing with general questions: answer from KB directly ---
         skip = not flow.get("verified")
