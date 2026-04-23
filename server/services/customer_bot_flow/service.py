@@ -1480,6 +1480,46 @@ def _wants_product_sourcing(text: str) -> bool:
     flat = re.sub(r"[^\w\u0600-\u06FF\s]", " ", t)
     flat = re.sub(r"\s+", " ", flat).strip()
 
+    # Informational/service questions about sourcing (charges/policy/how it works)
+    # should be answered directly by KB/LLM, not forced into sourcing handoff.
+    info_only_markers = (
+        "what is",
+        "how does",
+        "kya hai",
+        "kia hai",
+        "kya hota",
+        "kia hota",
+        "charges",
+        "charge",
+        "fees",
+        "pricing",
+        "proof",
+        "program",
+        "calculator",
+        "reliable",
+        "payment",
+        "policy",
+        "service",
+    )
+    if any(m in flat for m in info_only_markers):
+        if not (
+            re.search(r"\b\d{2,}\s*(?:piece|pieces|pcs|unit|units|qty)\b", flat)
+            or any(
+                m in flat
+                for m in (
+                    "source product",
+                    "source karo",
+                    "source kar do",
+                    "arrange kar do",
+                    "arrange kardo",
+                    "mangwa do",
+                    "bulk order",
+                    "wholesale",
+                )
+            )
+        ):
+            return False
+
     # Strong sourcing / bulk phrases — immediate match
     strong_markers = (
         "local market",
