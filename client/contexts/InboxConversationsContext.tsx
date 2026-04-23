@@ -91,6 +91,8 @@ interface InboxConversationsContextType {
   inboxHasMoreOlder: (convId: number) => boolean;
   loadOlderInboxMessages: (convId: number) => Promise<void>;
   syncInboxReadState: (convId: number, lastReadMessageId: number) => Promise<void>;
+  /** Increments whenever any message metadata (reactions, edits) changes via inbox_message_updated. */
+  messageRevision: number;
 }
 
 const InboxConversationsContext = createContext<InboxConversationsContextType | null>(null);
@@ -288,6 +290,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const selectedIdRef = useRef<number | null>(null);
   const [messagesByConvId, setMessagesByConvId] = useState<Record<number, InboxMessage[]>>({});
+  const [messageRevision, setMessageRevision] = useState(0);
   const [inboxMetaByConvId, setInboxMetaByConvId] = useState<Record<number, { hasMoreOlder: boolean }>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [loadingConversationId, setLoadingConversationId] = useState<number | null>(null);
@@ -597,6 +600,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           next[idx] = im;
           return { ...prev, [convId]: next };
         });
+        setMessageRevision((r) => r + 1);
         return;
       }
       if (msg.type === 'MESSAGE_DELETED' && typeof convId === 'number') {
@@ -985,6 +989,7 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
         inboxHasMoreOlder,
         loadOlderInboxMessages,
         syncInboxReadState,
+        messageRevision,
       }}
     >
       {children}

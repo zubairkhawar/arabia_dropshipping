@@ -99,3 +99,15 @@ a {
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 150ms;
 }
+
+/* Reply / search scroll-to highlight: brief background flash, no transform/zoom */
+@keyframes message-flash {
+  0%   { background-color: rgba(83, 189, 235, 0.25); }
+  60%  { background-color: rgba(83, 189, 235, 0.15); }
+  100% { background-color: transparent; }
+}
+
+.message-highlight {
+  border-radius: 8px;
+  animation: message-flash 1.5s ease-out forwards;
+}

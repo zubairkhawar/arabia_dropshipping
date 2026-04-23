@@ -421,6 +421,7 @@ export function ChatWindow({
     }
     return isInternalChat ? defaultInternalMessages : defaultCustomerMessages;
   });
+  const [highlightedMessageId, setHighlightedMessageId] = useState<number | null>(null);
 
   const selectedConv =
     inboxConv?.selectedId != null
@@ -482,7 +483,7 @@ export function ChatWindow({
         }),
       );
     });
-  }, [isInboxWithSelection, isInternalChat, inboxConv?.selectedId, inboxMessageCount, inboxPendingCount]);
+  }, [isInboxWithSelection, isInternalChat, inboxConv?.selectedId, inboxMessageCount, inboxPendingCount, inboxConv?.messageRevision]);
 
   useEffect(() => {
     if (!isInboxPage || isInternalChat || inboxConv?.selectedId == null) return;
@@ -1625,6 +1626,8 @@ export function ChatWindow({
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       setShowGroupInfo(false);
+      setHighlightedMessageId(id);
+      setTimeout(() => setHighlightedMessageId(null), 1500);
     }
   };
 
@@ -3613,7 +3616,7 @@ export function ChatWindow({
                     )}
                   <div
                     id={`message-${message.id}`}
-                    className={`group/message flex w-full items-end gap-1.5 ${outgoing ? 'justify-end' : 'justify-start'}`}
+                    className={`group/message flex w-full items-end gap-1.5 ${outgoing ? 'justify-end' : 'justify-start'} ${highlightedMessageId === message.id ? 'message-highlight' : ''}`}
                   >
                   {((isTeamChannel || isDmPage) || (isInboxPage && !isInternalChat)) &&
                     !outgoing &&
