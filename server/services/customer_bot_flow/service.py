@@ -681,6 +681,11 @@ def _looks_like_order_status_question(text: str) -> bool:
         "mere orders",
         "meray order",
         "order status",
+        "order ka status",
+        "order ki status",
+        "status maloom",
+        "status maloom karna",
+        "status maloom krna",
         "order details",
         "order detail",
         "order info",
@@ -731,7 +736,9 @@ def _looks_like_order_status_question(text: str) -> bool:
         or re.search(r"\bparcel\b", t)
         or re.search(r"\bpackage\b", t)
     )
-    is_asking = ("?" in t) or any(k in t for k in ("where", "when", "status", "kab", "kahan"))
+    is_asking = ("?" in t) or any(
+        k in t for k in ("where", "when", "status", "kab", "kahan", "maloom", "detail", "tafseel")
+    )
     if has_order_domain and is_asking:
         return True
     return False
@@ -4905,6 +4912,25 @@ async def process_customer_bot_message(
             or _looks_like_account_question(text)
             or _looks_like_invoice_for_order(text)
         ):
+            # Fresh state after reset: do not force "existing" immediately.
+            # Ask new/existing first, then continue with the appropriate path.
+            if not (flow.get("customer_kind") or "").strip():
+                if mem_id and (text or "").strip():
+                    ConversationMemory.store_pending_intent(
+                        mem_id,
+                        "resume_after_verify",
+                        "order" if _looks_like_order_status_question(text) else "account",
+                        (text or "").strip(),
+                        queue_previous=False,
+                    )
+                nf = {
+                    **flow,
+                    "step": "awaiting_customer_type",
+                    "intro_shown": True,
+                    "lang": flow_lang,
+                }
+                return save(nf, _t(flow_lang, MSGS["customer_type_menu_reminder"]))
+
             flow = {**flow, "customer_kind": "existing"}
             if mem_id:
                 ConversationMemory.store_bot_customer_kind(mem_id, "existing")
