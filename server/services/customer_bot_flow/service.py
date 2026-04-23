@@ -4414,10 +4414,12 @@ async def process_customer_bot_message(
             if _pinfo:
                 resume_q = (str(_pinfo.get("original_question") or "")).strip()
 
+        # If no order ref was stashed in flow state, try to recover it from
+        # the pending question (e.g. customer said "order 176386" before verification).
         if not oref and resume_q:
-            if mem_id:
-                ConversationMemory.clear_pending_intent(mem_id, promote_from_queue=False)
-            return ai_forward("[Customer question] " + resume_q, base_f, skip_api=False)
+            _extracted_oref = (_extract_order_id_from_message(resume_q, phone) or "").strip()
+            if _extracted_oref:
+                oref = _extracted_oref
 
         # Build a personalised success line that includes the store/customer name.
         cust_name = (
@@ -4437,15 +4439,7 @@ async def process_customer_bot_message(
         else:
             intro_line = _t(flow_lang, MSGS["verification_success"])
 
-        if flow_lang == "arabic":
-            welcome_line = "كيف يمكنني مساعدتك اليوم؟ يمكنك السؤال عن طلباتك أو فواتيرك أو تتبع الشحنة."
-        elif flow_lang == "roman_urdu":
-            welcome_line = "Aaj kaise madad karoon? Aap apne orders, invoices, ya tracking ke baare mein pooch sakte hain."
-        else:
-            welcome_line = "How can I help you today? You can ask about your orders, invoices, or tracking."
-
-        parts: list[str] = [intro_line, welcome_line]
-
+        # Case A: order ref known — look it up immediately (no need to ask again).
         if oref:
             if mem_id:
                 ConversationMemory.clear_pending_intent(mem_id, promote_from_queue=False)
@@ -4463,12 +4457,33 @@ async def process_customer_bot_message(
             oid_flow = {**base_f, "step": "existing_awaiting_order_id"}
             return save(oid_flow, "\n\n".join(parts))
 
+        # Case B: customer asked about an order but gave no number — ask for it.
         if reason == "order":
-            parts = [intro_line, _t(flow_lang, MSGS["ask_order"])]
+            if mem_id:
+                ConversationMemory.clear_pending_intent(mem_id, promote_from_queue=False)
+            if flow_lang == "arabic":
+                ask_line = "📦 يرجى إرسال رقم طلبك أو يمكنني عرض آخر طلباتك."
+            elif flow_lang == "roman_urdu":
+                ask_line = "📦 Apna order number bhejein ya main aapke recent orders dikhata hoon."
+            else:
+                ask_line = "📦 Please share your order number or I can show your recent orders."
             oid_flow = {**base_f, "step": "existing_awaiting_order_id"}
-            return save(oid_flow, "\n\n".join(parts))
+            return save(oid_flow, "\n\n".join([intro_line, ask_line]))
 
-        return save(base_f, "\n\n".join(parts))
+        # Case C: pending non-order question — forward to LLM with full context.
+        if resume_q:
+            if mem_id:
+                ConversationMemory.clear_pending_intent(mem_id, promote_from_queue=False)
+            return ai_forward("[Customer question] " + resume_q, base_f, skip_api=False)
+
+        # Case D: no pending intent — generic welcome.
+        if flow_lang == "arabic":
+            welcome_line = "كيف يمكنني مساعدتك اليوم؟ يمكنك السؤال عن طلباتك أو فواتيرك أو تتبع الشحنة."
+        elif flow_lang == "roman_urdu":
+            welcome_line = "Aaj kaise madad karoon? Aap apne orders, invoices, ya tracking ke baare mein pooch sakte hain."
+        else:
+            welcome_line = "How can I help you today? You can ask about your orders, invoices, or tracking."
+        return save(base_f, "\n\n".join([intro_line, welcome_line]))
 
     if step == "existing_awaiting_order_id":
         raw = (text or "").strip()
