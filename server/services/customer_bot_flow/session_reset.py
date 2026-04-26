@@ -32,6 +32,12 @@ def normalize_bot_flow_after_human_handoff_end(conversation: Conversation) -> No
         return
     new_bf = dict(bf)
     new_bf["step"] = "conversational"
-    new_bf.pop("pending_handoff_team", None)
+    # Clear all handoff and sourcing state so the bot starts fresh
+    for key in (
+        "pending_handoff_team",
+        "sourcing_product_name",
+        "awaiting_sourcing_details",
+    ):
+        new_bf.pop(key, None)
     md[BOT_FLOW_KEY] = new_bf
     conversation.conversation_metadata = md

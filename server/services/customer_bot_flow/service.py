@@ -529,10 +529,19 @@ def _deterministic_kb_answer(text: str, lang: str) -> Optional[str]:
     )
     if asks_activate_confirmation:
         if lang == "english":
-            return "To activate Order Confirmation service, please contact Customer Support. They will guide you through activation. No separate upfront activation payment step is required."
+            return (
+                "To activate the Order Confirmation service, send a message to the Arabia support team on WhatsApp at +971555516304 or email info@arabiadropship.com. "
+                "They will walk you through the activation steps. No upfront payment is required for activation."
+            )
         if lang == "arabic":
-            return "لتفعيل خدمة تأكيد الطلبات، يرجى التواصل مع فريق دعم العملاء. سيقومون بإرشادك لخطوات التفعيل، ولا توجد خطوة دفع مبدئية منفصلة للتفعيل."
-        return "Confirmation service activate karwane ke liye Customer Support se rabta karein. Team aapko activation process guide karegi. Is ke liye koi alag upfront activation payment step required nahi hota."
+            return (
+                "لتفعيل خدمة تأكيد الطلبات، راسل فريق دعم Arabia عبر واتساب على +971555516304 أو بريد info@arabiadropship.com. "
+                "سيرشدونك عبر خطوات التفعيل. لا يوجد دفع مسبق مطلوب للتفعيل."
+            )
+        return (
+            "Order Confirmation service activate karwane ke liye Arabia support team ko WhatsApp karein: +971555516304 "
+            "ya email karein: info@arabiadropship.com. Team activation steps guide karegi. Koi upfront payment required nahi hai."
+        )
 
     asks_reliability = _contains_any("reliable", "bharosa", "trust", "trusted", "authentic")
     if asks_reliability and _contains_any("arabia"):
@@ -587,6 +596,172 @@ def _deterministic_kb_answer(text: str, lang: str) -> Optional[str]:
             "Qatar 4th market hai jo jald operational ho jayegi."
         )
 
+    # ── Shipping Charges ──────────────────────────────────────────────────
+    asks_shipping = _contains_any(
+        "shipping charge", "shipping cost", "shipping rate", "delivery charge",
+        "delivery cost", "shipping fee", "courier charge", "return charge",
+        "shipping kya", "shipping kitna", "charges for shipping", "delivery ka charge",
+        "charges uae", "charges ksa", "charges pak", "charges pakistan",
+        "uae charges", "ksa charges", "pakistan charges", "shipping charges to",
+    )
+    if asks_shipping:
+        if lang == "english":
+            return (
+                "Arabia Dropship shipping charges:\n\n"
+                "🇦🇪 UAE:\n"
+                "  • Delivered: 18 AED\n"
+                "  • Returned: 5 AED\n\n"
+                "🇸🇦 KSA:\n"
+                "  • Delivered: 25 SAR\n"
+                "  • Returned: 10 AED\n"
+                "  • 3% COD tax on net payable amount\n\n"
+                "🇵🇰 Pakistan:\n"
+                "  • TCS: 250 PKR (both delivered and returned)\n"
+                "  • Other couriers (Leopard, Postex, Trax etc.): 200 PKR (both delivered and returned)"
+            )
+        if lang == "arabic":
+            return (
+                "رسوم الشحن في Arabia Dropship:\n\n"
+                "🇦🇪 الإمارات:\n"
+                "  • التسليم: 18 درهم\n"
+                "  • الإرجاع: 5 دراهم\n\n"
+                "🇸🇦 السعودية:\n"
+                "  • التسليم: 25 ريال\n"
+                "  • الإرجاع: 10 دراهم\n"
+                "  • ضريبة COD: 3% على صافي المبلغ\n\n"
+                "🇵🇰 باكستان:\n"
+                "  • TCS: 250 روبية (تسليم أو إرجاع)\n"
+                "  • شركات أخرى (Leopard, Postex, Trax): 200 روبية (تسليم أو إرجاع)"
+            )
+        return (
+            "Arabia Dropship shipping charges:\n\n"
+            "🇦🇪 UAE:\n"
+            "  • Delivered: 18 AED\n"
+            "  • Returned: 5 AED\n\n"
+            "🇸🇦 KSA:\n"
+            "  • Delivered: 25 SAR\n"
+            "  • Returned: 10 AED\n"
+            "  • Net COD par 3% COD tax\n\n"
+            "🇵🇰 Pakistan:\n"
+            "  • TCS: 250 PKR (deliver ya return dono)\n"
+            "  • Other couriers (Leopard, Postex, Trax): 200 PKR (deliver ya return dono)"
+        )
+
+    # ── Payment Day / Schedule ────────────────────────────────────────────
+    asks_payment_day = _contains_any(
+        "payment day", "payment kab", "payment schedule", "kab milti", "kab milega",
+        "kis din", "which day", "payout day", "payment on which", "wednesday",
+        "when is payment", "when do i get paid", "payment timing", "payment date",
+        "payment process", "payment kaise", "payment kesy", "payment system",
+        "profit kab", "profit kaise milta", "paise kab", "paisay kab",
+    )
+    if asks_payment_day:
+        if lang == "english":
+            return (
+                "Arabia Dropship payments are processed every Wednesday for both UAE and KSA sellers. "
+                "Payments are sent directly to your registered bank account. "
+                "Supported countries: Pakistan, India, Bangladesh, UAE. "
+                "For amounts over AED 1,000, crypto payment is also available."
+            )
+        if lang == "arabic":
+            return (
+                "تتم معالجة المدفوعات في Arabia Dropship كل يوم الأربعاء لسوقي الإمارات والسعودية. "
+                "تُحوَّل المدفوعات مباشرة إلى حسابك البنكي المسجل. "
+                "الدول المدعومة: باكستان، الهند، بنغلاديش، الإمارات. "
+                "للمبالغ التي تتجاوز 1000 درهم، يمكن الدفع عبر العملات المشفرة."
+            )
+        return (
+            "Arabia Dropship ki payments har Wednesday ko process hoti hain — UAE aur KSA dono ke liye. "
+            "Payments seedha aapke registered bank account mein transfer ki jati hain. "
+            "Supported countries: Pakistan, India, Bangladesh, UAE. "
+            "1000 AED se zyada hone par crypto payment bhi available hai."
+        )
+
+    # ── Seller Protection / Penalty ───────────────────────────────────────
+    asks_seller_protection = _contains_any(
+        "seller protection", "penalty", "compensation", "not shipped",
+        "order not dispatch", "unshipped", "unavailable product",
+        "seller invoice", "adjustment", "protection policy",
+    )
+    if asks_seller_protection:
+        if lang == "english":
+            return (
+                "Arabia Dropship protects sellers when an order cannot be shipped. "
+                "If an order is not dispatched within 3 days due to product unavailability, "
+                "it is automatically canceled and Arabia pays a penalty to the seller:\n\n"
+                "  • UAE: 10 AED per order\n"
+                "  • KSA: 10 SAR per order\n"
+                "  • Pakistan: 500 PKR per order\n\n"
+                "This penalty is reflected in your invoice under the 'Adjustment' section."
+            )
+        if lang == "arabic":
+            return (
+                "تحمي Arabia Dropship البائعين عند تعذر شحن الطلبات. "
+                "إذا لم يُشحن الطلب خلال 3 أيام بسبب عدم توفر المنتج، يُلغى تلقائيا وتدفع Arabia غرامة للبائع:\n\n"
+                "  • الإمارات: 10 دراهم لكل طلب\n"
+                "  • السعودية: 10 ريالات لكل طلب\n"
+                "  • باكستان: 500 روبية لكل طلب\n\n"
+                "تظهر الغرامة في فاتورتك ضمن قسم 'التعديل'."
+            )
+        return (
+            "Arabia Dropship sellers ko protect karta hai jab order ship nahi ho sakta. "
+            "Agar product unavailable hone ki wajah se order 3 din mein dispatch nahi hota, "
+            "auto cancel ho jata hai aur Arabia seller ko penalty deta hai:\n\n"
+            "  • UAE: 10 AED per order\n"
+            "  • KSA: 10 SAR per order\n"
+            "  • Pakistan: 500 PKR per order\n\n"
+            "Yeh penalty aapki invoice mein 'Adjustment' section mein dikhti hai."
+        )
+
+    # ── Account Activation Time ───────────────────────────────────────────
+    asks_account_activation = _contains_any(
+        "account active", "account activate", "not active", "not activated",
+        "account activation", "when will my account", "account kab",
+        "account abhi tak", "login nahi", "login nhi", "account approve",
+        "account ki activation", "account approved",
+    )
+    if asks_account_activation:
+        if lang == "english":
+            return (
+                "If you have signed up but your account is not yet active, please wait. "
+                "Account activation typically takes between 30 minutes to 1 hour after signup."
+            )
+        if lang == "arabic":
+            return (
+                "إذا سجلت ولم يتم تفعيل حسابك بعد، يرجى الانتظار قليلا. "
+                "عادةً ما يستغرق تفعيل الحساب من 30 دقيقة إلى ساعة بعد التسجيل."
+            )
+        return (
+            "Agar aap ne sign up kar liya hai lekin account abhi active nahi hua, thora intezar karein. "
+            "Account activation mein aam tor par sign up ke baad 30 minute se 1 ghanta lagta hai."
+        )
+
+    # ── Winning Product Privacy ───────────────────────────────────────────
+    asks_product_privacy = _contains_any(
+        "winning product", "product secret", "product visible", "other sellers",
+        "product expose", "product leak", "product hidden", "exclusive product",
+        "product sirf mujhe", "product private",
+    )
+    if asks_product_privacy:
+        if lang == "english":
+            return (
+                "Your winning product is completely secure. "
+                "If you share a product that is not already listed on Arabia, it will be listed exclusively for you "
+                "and hidden from all other sellers. Arabia strictly enforces this policy."
+            )
+        if lang == "arabic":
+            return (
+                "منتجك الرابح آمن تمامًا. "
+                "إذا شاركت منتجاً غير مُدرج على Arabia، سيُدرج حصريًا لك ومخفيًا عن جميع البائعين الآخرين. "
+                "تطبق Arabia هذه السياسة بصرامة."
+            )
+        return (
+            "Aapka winning product bilkul secure hai. "
+            "Agar aap koi aisa product share karein jo Arabia par listed nahi hai, "
+            "woh sirf aapke liye list hoga aur baqi sellers se hidden rahega. "
+            "Arabia is policy ko strictly follow karta hai."
+        )
+
     return None
 
 
@@ -632,6 +807,27 @@ def _looks_like_order_status_question(text: str) -> bool:
         "guarantee",
         "seller protection",
         "seller invoice",
+        # Service / pricing FAQ patterns — NOT personal order lookups
+        "order confirmation",
+        "confirmation charges",
+        "confirmation service",
+        "confirmation fee",
+        "whatsapp order confirmation",
+        "whatsapp confirmation",
+        "confirmation pricing",
+        "confirmation rate",
+        "order confirmation charges",
+        "order confirmation fee",
+        "confirmation activate",
+        "confirmation timing",
+        "what are the",
+        "what is the charge",
+        "what is the fee",
+        "what is the cost",
+        "charges for",
+        "fee for",
+        "cost for",
+        "pricing for",
         # Roman Urdu policy patterns
         "kya arabia",
         "arabia kya",
@@ -640,6 +836,11 @@ def _looks_like_order_status_question(text: str) -> bool:
         "kaise hota",
         "agar order",
         "agar mera order",
+        "charges kya",
+        "kia charges",
+        "kia charge",
+        "charges kitne",
+        "fee kya",
     )
     if any(m in t for m in policy_markers):
         return False
@@ -1709,6 +1910,20 @@ def _looks_like_account_question(text: str) -> bool:
         return False
     if _looks_like_order_status_question(text):
         return False
+    # General payment/service FAQs must NOT trigger account verification.
+    # These are policy questions about HOW Arabia works, not about a specific account.
+    payment_policy_markers = (
+        "payment kaise", "payment kesy", "payment process", "payment system",
+        "payment hoti", "payment hota", "payment milti", "payment milega",
+        "payment kab", "payment day", "payment schedule", "payment timing",
+        "how does payment", "how are payments", "when is payment", "when do i get paid",
+        "payment wednesday", "bi-weekly", "biweekly", "payout",
+        "payment method", "bank transfer", "crypto payment",
+        "profit kaise", "profit kab", "profit milta",
+        "kab milti hai", "kab milega payment",
+    )
+    if any(m in t for m in payment_policy_markers):
+        return False
     markers = (
         "invoice",
         "invoices",
@@ -1718,11 +1933,17 @@ def _looks_like_account_question(text: str) -> bool:
         "my account",
         "account details",
     )
-    ru = ("hisab", "invoice", "payment", "account")
+    # "payment" alone only triggers if combined with account-specific intent
+    ru_strong = ("hisab", "invoice", "meri payment", "mera payment", "account")
+    ru_weak = ("payment",)
     if any(m in t for m in markers):
         return True
-    if any(m in t for m in ru) and len(t) >= 8:
+    if any(m in t for m in ru_strong) and len(t) >= 8:
         return True
+    # "payment" only triggers verification if combined with "meri/mera/my/nahi aayi" (personal)
+    if any(m in t for m in ru_weak) and len(t) >= 8:
+        personal_markers = ("meri", "mera", "my ", "nahi aayi", "nhi aayi", "nahi mili", "receive", "nahi mila")
+        return any(p in t for p in personal_markers)
     return False
 
 
@@ -3959,6 +4180,17 @@ async def process_customer_bot_message(
             esc=True,
         )
 
+    # Show entry/greeting menu on very first contact (intro not yet shown).
+    # Do NOT set customer_kind here — we don't know yet if they're new or existing.
+    if not flow.get("intro_shown") and _looks_like_greeting(text):
+        nf = {
+            **flow,
+            "step": "conversational",
+            "intro_shown": True,
+            "lang": flow_lang,
+        }
+        return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=True)
+
     # LLM-first routing:
     # Keep only a minimal deterministic guard for active verification/security steps.
     otp_guard_steps = {
@@ -3979,15 +4211,16 @@ async def process_customer_bot_message(
             or bool(_extract_standalone_email(text))
         )
     )
-    if step not in otp_guard_steps and not needs_verification_bootstrap:
+    # Trending/non-trending product requests must bypass LLM-first routing and
+    # go through the deterministic trending flow handler which queries the DB.
+    wants_trending_now = _wants_trending_products(text) or _wants_non_trending_products(text)
+    if step not in otp_guard_steps and not needs_verification_bootstrap and not wants_trending_now:
         nf = {
             **flow,
             "step": "conversational",
             "intro_shown": True,
             "lang": flow_lang,
         }
-        if not nf.get("customer_kind"):
-            nf["customer_kind"] = "new"
         if step == "awaiting_agent":
             nf.pop("pending_handoff_team", None)
         skip = not bool(flow.get("verified"))

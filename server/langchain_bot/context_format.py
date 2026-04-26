@@ -361,7 +361,14 @@ def _pay_status_label(raw: str) -> str:
 
 
 def format_single_invoice_for_llm(inv: Dict[str, Any]) -> str:
-    """One invoice row (merchant /customers/invoice or /orders/{id}/invoice)."""
+    """One invoice row (merchant /customers/invoice or /orders/{id}/invoice).
+
+    IMPORTANT label meanings (tell LLM exactly what each field means):
+    - profit = seller's NET earnings on this invoice (what the seller EARNS)
+    - payable = total amount Arabia OWES to the seller (gross before any deductions)
+    - net_total = net amount after deductions
+    - payment_transfer_status = whether Arabia has TRANSFERRED this money to the seller yet
+    """
     if not inv:
         return ""
     inv_date = _pick_str(inv, "date", "invoice_date", "created_at")
@@ -381,16 +388,18 @@ def format_single_invoice_for_llm(inv: Dict[str, Any]) -> str:
     cur = _invoice_currency(inv)
     inv_net = _pick_str(inv, "net_total", "net")
     if inv_net:
-        parts.append(f"net_total {_amount_with_currency(inv_net, inv)}")
+        parts.append(f"net_total(after deductions) {_amount_with_currency(inv_net, inv)}")
     inv_profit = _pick_str(inv, "profit")
     if inv_profit:
-        parts.append(f"profit {_amount_with_currency(inv_profit, inv)}")
+        parts.append(f"seller_profit(what seller earns) {_amount_with_currency(inv_profit, inv)}")
     if inv_payable:
-        parts.append(f"payable {_amount_with_currency(inv_payable, inv)}")
+        parts.append(f"gross_payable(Arabia owes seller) {_amount_with_currency(inv_payable, inv)}")
     if raw_ps:
-        parts.append(f"payment {_pay_status_label(raw_ps)} (raw: {raw_ps})")
+        # Map status to clear plain-English label to avoid LLM confusion
+        transfer_label = _pay_status_label(raw_ps)
+        parts.append(f"transfer_to_seller={transfer_label} (raw_api_value={raw_ps})")
     if penalties:
-        parts.append(f"penalties {_amount_with_currency(penalties, inv)}")
+        parts.append(f"penalties_deducted {_amount_with_currency(penalties, inv)}")
     if isinstance(order_ids, list) and order_ids:
         n = len(order_ids)
         sample = [str(x) for x in order_ids[:5]]
@@ -421,16 +430,16 @@ def format_invoice_llm_compact(inv: Dict[str, Any], *, sample_n: int = 5) -> str
         bits.append(inv_date)
     if inv_items:
         bits.append(f"{inv_items} items")
-    if inv_payable:
-        bits.append(f"payable {_amount_with_currency(inv_payable, inv)}")
-    if inv_net and inv_net != inv_payable:
-        bits.append(f"net {_amount_with_currency(inv_net, inv)}")
     if inv_profit:
-        bits.append(f"profit {_amount_with_currency(inv_profit, inv)}")
+        bits.append(f"seller_profit {_amount_with_currency(inv_profit, inv)}")
+    if inv_net and inv_net != inv_payable:
+        bits.append(f"net_total {_amount_with_currency(inv_net, inv)}")
+    if inv_payable:
+        bits.append(f"gross_payable {_amount_with_currency(inv_payable, inv)}")
     if penalties:
         bits.append(f"penalties {_amount_with_currency(penalties, inv)}")
     if raw_ps:
-        bits.append(_pay_status_label(raw_ps))
+        bits.append(f"transferred={_pay_status_label(raw_ps)}")
     head = " | ".join(bits) if bits else ""
     n = len(order_ids)
     if n and sample_n >= 0:
