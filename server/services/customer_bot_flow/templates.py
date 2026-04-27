@@ -598,49 +598,25 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         ),
     },
     "kb_wrap": {
-        "english": (
-            "{body}\n\n"
-            "If you need more information or assistance, feel free to ask.\n"
-            "You can also visit our website at https://www.arabiadropship.com\n"
-            "Or type \"support\" to speak with a human agent."
-        ),
-        "arabic": (
-            "{body}\n\n"
-            "إذا كنت بحاجة إلى مزيد من المعلومات أو المساعدة، لا تتردد في السؤال.\n"
-            "يمكنك أيضاً زيارة موقعنا: https://www.arabiadropship.com\n"
-            "أو اكتب \"support\" للتحدث مع موظف."
-        ),
-        "roman_urdu": (
-            "{body}\n\n"
-            "Agar aapko mazeed information ya madad chahiye, befikr hokar poochein.\n"
-            "Aap hamari website bhi visit kar sakte hain: https://www.arabiadropship.com\n"
-            "Ya \"support\" likhein human agent se baat karne ke liye."
-        ),
+        "english": "{body}",
+        "arabic": "{body}",
+        "roman_urdu": "{body}",
     },
     "kb_wrap_agency": {
         "english": (
             "{body}\n\n"
             "For more details, visit our Agency Partnership Program:\n"
-            "https://www.agency.arabiadropship.com/\n\n"
-            "If you need more information or assistance, feel free to ask.\n"
-            "You can also visit our website at https://www.arabiadropship.com\n"
-            "Or type \"support\" to speak with a human agent."
+            "https://www.agency.arabiadropship.com/"
         ),
         "arabic": (
             "{body}\n\n"
             "لمزيد من التفاصيل، قم بزيارة برنامج شراكة الوكالة:\n"
-            "https://www.agency.arabiadropship.com/\n\n"
-            "إذا كنت بحاجة إلى مزيد من المعلومات أو المساعدة، لا تتردد في السؤال.\n"
-            "يمكنك أيضاً زيارة موقعنا: https://www.arabiadropship.com\n"
-            "أو اكتب \"support\" للتحدث مع موظف."
+            "https://www.agency.arabiadropship.com/"
         ),
         "roman_urdu": (
             "{body}\n\n"
             "Mazeed details ke liye hamara Agency Partnership Program dekhein:\n"
-            "https://www.agency.arabiadropship.com/\n\n"
-            "Agar aapko mazeed information ya madad chahiye, befikr hokar poochein.\n"
-            "Aap hamari website bhi visit kar sakte hain: https://www.arabiadropship.com\n"
-            "Ya \"support\" likhein human agent se baat karne ke liye."
+            "https://www.agency.arabiadropship.com/"
         ),
     },
     "unknown_info": {

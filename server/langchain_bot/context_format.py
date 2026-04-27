@@ -169,15 +169,27 @@ def format_order_for_llm(order: Dict[str, Any]) -> str:
         if item_lines:
             lines.append("Items: " + "; ".join(item_lines))
 
-    # Shipping charges
-    sc = _pick_str(order, "shipping_charges", "shipping_cost", "shipping")
-    if sc:
-        lines.append(f"Shipping charges: {_money(order, 'shipping_charges', 'shipping_cost', 'shipping') or sc}")
+    # COD / selling price (what the customer paid — the order's sale value)
+    cod = _pick_str(order, "cod_amount", "cod", "selling_price", "sale_price",
+                    "consumer_price", "customer_price", "order_amount", "order_value",
+                    "total_price", "price")
+    if cod:
+        lines.append(f"Selling price / COD amount (what customer paid): {_money(order, 'cod_amount', 'cod', 'selling_price', 'sale_price', 'consumer_price', 'order_amount', 'order_value', 'total_price', 'price') or cod} {_currency_suffix(order)}")
 
-    # Profit
+    # Shipping charges — only meaningful for delivered/dispatched orders
+    sc = _pick_str(order, "shipping_charges", "shipping_cost", "shipping")
+    if sc and status_key not in ("cancelled", "canceled"):
+        lines.append(f"Shipping charges: {_money(order, 'shipping_charges', 'shipping_cost', 'shipping') or sc} {_currency_suffix(order)}")
+    elif sc and status_key in ("cancelled", "canceled"):
+        # For cancelled orders, mention shipping only if it was dispatched and returned
+        lines.append(f"NOTE: Order was CANCELLED — standard shipping charge does NOT apply. Return charge (5 AED/UAE) only if it was dispatched before cancellation.")
+
+    # Profit — only meaningful for delivered orders
     profit = _pick_str(order, "profit", "seller_profit")
-    if profit:
-        lines.append(f"Profit: {_money(order, 'profit', 'seller_profit') or profit}")
+    if profit and status_key not in ("cancelled", "canceled"):
+        lines.append(f"Seller profit: {_money(order, 'profit', 'seller_profit') or profit} {_currency_suffix(order)}")
+    elif profit and status_key in ("cancelled", "canceled"):
+        lines.append(f"NOTE: Order was CANCELLED — profit shown in raw data ({profit}) does NOT apply. Cancelled orders have no seller profit.")
 
     tn = _pick_str(order, "tracking_number", "tracking", "tracking_id", "awb_number")
     if tn:
