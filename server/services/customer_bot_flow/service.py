@@ -597,12 +597,14 @@ def _deterministic_kb_answer(text: str, lang: str) -> Optional[str]:
         )
 
     # ── Shipping Charges ──────────────────────────────────────────────────
+    # Note: use word-boundary safe phrases — avoid "shipping kya" matching "dropshipping kya"
     asks_shipping = _contains_any(
         "shipping charge", "shipping cost", "shipping rate", "delivery charge",
         "delivery cost", "shipping fee", "courier charge", "return charge",
-        "shipping kya", "shipping kitna", "charges for shipping", "delivery ka charge",
+        "shipping kitna", "charges for shipping", "delivery ka charge",
         "charges uae", "charges ksa", "charges pak", "charges pakistan",
         "uae charges", "ksa charges", "pakistan charges", "shipping charges to",
+        " shipping kya", "shipping kya hai",
     )
     if asks_shipping:
         if lang == "english":
