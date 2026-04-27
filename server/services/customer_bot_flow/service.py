@@ -1802,6 +1802,10 @@ def _wants_non_trending_products(text: str) -> bool:
     # Must still be talking about products at all; otherwise phrases like
     # "not trending right now?" (about something unrelated) wouldn't qualify.
     # ``prod`` covers "product / products / prodcut / prodcts" (typos).
+    # Fast-path: "non trending" or "non-trending" alone is enough (no product word needed)
+    if re.search(r"\bnon[-\s]*trending\b", flat):
+        return True
+
     product_markers = (
         "prod",
         "item",
@@ -1819,8 +1823,6 @@ def _wants_non_trending_products(text: str) -> bool:
 
     # English + Arabic + Roman-Urdu negations around the word "trending".
     if re.search(r"\b(not|without|no)\s+trending\b", flat):
-        return True
-    if re.search(r"\bnon[-\s]*trending\b", flat):
         return True
     if re.search(
         r"\btrending\s+(nahi|nahin|nhi|mat|na)\b",
