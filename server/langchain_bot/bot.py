@@ -767,10 +767,19 @@ class ArabiaLangChainBot:
             conversation_history=history_block,
             user_message=user_message,
         )
-        try:
-            response = await llm.ainvoke(messages)
-        except Exception:
-            logger.exception("LangChain OpenAI chat call failed")
+        for _attempt in range(2):
+            try:
+                response = await llm.ainvoke(messages)
+                break
+            except Exception as exc:
+                if _attempt == 0:
+                    logger.warning("LangChain OpenAI chat call failed (attempt 1), retrying: %s", exc)
+                    import asyncio as _asyncio
+                    await _asyncio.sleep(1)
+                else:
+                    logger.exception("LangChain OpenAI chat call failed (attempt 2)")
+                    return llm_unavailable_reply(language)
+        else:
             return llm_unavailable_reply(language)
         content = getattr(response, "content", None)
         out = content.strip() if isinstance(content, str) else str(response).strip()

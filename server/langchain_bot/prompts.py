@@ -341,12 +341,16 @@ def append_default_followups(body: str, language: str) -> str:
 def llm_unavailable_reply(language: str) -> str:
     lk = (language or "english").strip().lower()
     if lk == "arabic":
-        intro = "تعذر عليّ إكمال الرد الآن. يمكنني اقتراح ما قد تودّ معرفته بعد ذلك:"
+        return (
+            "عذراً، حدث خطأ مؤقت. يرجى إعادة المحاولة أو اكتب **agent** للتحدث مع موظف دعم."
+        )
     elif lk in ("roman_urdu", "urdu", "roman urdu"):
-        intro = "Abhi jawab mukammal nahi kar sakta. Yeh cheezen aap ke liye mufeed ho sakti hain:"
-    else:
-        intro = "I could not complete a reply just now. Here are some things you might ask next:"
-    return append_default_followups(intro, language)
+        return (
+            "Maafi, abhi jawab mein masla aa gaya. Dobara try karein, ya **agent** likhein human support se baat karne ke liye."
+        )
+    return (
+        "Sorry, I ran into a temporary issue. Please try again, or type **agent** to speak with a human support agent."
+    )
 
 
 def knowledge_gap_reply(language: str) -> str:
