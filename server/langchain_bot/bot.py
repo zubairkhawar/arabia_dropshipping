@@ -669,6 +669,8 @@ class ArabiaLangChainBot:
             model_name=self.model_name,
             temperature=self.temperature,
             openai_api_key=key,
+            timeout=getattr(settings, "openai_request_timeout", 30.0),
+            max_retries=0,
         )
 
         fc = fetch_context
@@ -767,19 +769,26 @@ class ArabiaLangChainBot:
             conversation_history=history_block,
             user_message=user_message,
         )
+        import asyncio as _asyncio
+        response = None
         for _attempt in range(2):
             try:
                 response = await llm.ainvoke(messages)
                 break
             except Exception as exc:
+                status_code = getattr(exc, "status_code", None) or getattr(
+                    getattr(exc, "response", None), "status_code", None
+                )
+                detail = (
+                    f"type={type(exc).__name__} status={status_code} model={self.model_name} msg={exc!s}"
+                )
                 if _attempt == 0:
-                    logger.warning("LangChain OpenAI chat call failed (attempt 1), retrying: %s", exc)
-                    import asyncio as _asyncio
-                    await _asyncio.sleep(1)
+                    logger.warning("OpenAI chat call failed (attempt 1) — %s; retrying", detail)
+                    await _asyncio.sleep(2)
                 else:
-                    logger.exception("LangChain OpenAI chat call failed (attempt 2)")
+                    logger.error("OpenAI chat call failed (attempt 2) — %s", detail)
                     return llm_unavailable_reply(language)
-        else:
+        if response is None:
             return llm_unavailable_reply(language)
         content = getattr(response, "content", None)
         out = content.strip() if isinstance(content, str) else str(response).strip()
@@ -854,6 +863,8 @@ class ArabiaLangChainBot:
             model_name=self.model_name,
             temperature=self.temperature,
             openai_api_key=key,
+            timeout=getattr(settings, "openai_request_timeout", 30.0),
+            max_retries=0,
         )
         messages = build_prompt(omit_followup_suggestions=True).format_messages(
             current_time=now_utc_iso(),

@@ -743,6 +743,7 @@ class AIOrchestrator:
                 store_context_error = (store_context_error or "") + f" customer_fetch:{exc!s}"[:220]
 
         order_id = _extract_order_id_from_message(message_text or "", phone)
+        requested_order_not_found: Optional[str] = None
         if order_id:
             try:
                 detail = await self.store_client.get_order_by_id(order_id, seller_id=seller_id)
@@ -756,6 +757,8 @@ class AIOrchestrator:
                     )
                 if not detail and invoices:
                     detail = synthetic_order_stub_from_invoices(invoices, order_id)
+                if not detail:
+                    requested_order_not_found = str(order_id)
                 if detail:
                     orders = [detail] + [
                         o for o in orders if str(o.get("id", o)) != str(detail.get("id", detail))
@@ -916,6 +919,7 @@ class AIOrchestrator:
             "full_invoice_history_mode": full_invoice_history_mode,
             "total_paid_amount": round(total_paid_amount, 2),
             "total_order_count": total_order_count,
+            "requested_order_not_found": requested_order_not_found,
         }
 
     async def should_escalate(self, message: str) -> bool:

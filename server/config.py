@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4.1"
     openai_temperature: float = 0.2
+    openai_request_timeout: float = 30.0
     kb_min_score: int = 1
     kb_use_embeddings: bool = False
     # When True, the LangChain system prompt asks the model for 3 contextual follow-up suggestions per turn.

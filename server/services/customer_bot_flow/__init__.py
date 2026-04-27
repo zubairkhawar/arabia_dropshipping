@@ -1,3 +1,10 @@
+from services.customer_bot_flow.templates import (
+    BOT_FLOW_TEMPLATES,
+    append_handoff_agent_line,
+    lookup_agent_display_name,
+    public_templates_payload,
+    resolve_bot_template,
+)
 from services.customer_bot_flow.service import (
     BotFlowResult,
     format_kb_reply,
@@ -6,13 +13,6 @@ from services.customer_bot_flow.service import (
 from services.customer_bot_flow.session_reset import (
     normalize_bot_flow_after_human_handoff_end,
     release_agent_and_clear_bot_flow,
-)
-from services.customer_bot_flow.templates import (
-    BOT_FLOW_TEMPLATES,
-    append_handoff_agent_line,
-    lookup_agent_display_name,
-    public_templates_payload,
-    resolve_bot_template,
 )
 
 __all__ = [

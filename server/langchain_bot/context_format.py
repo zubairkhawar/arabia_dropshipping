@@ -669,6 +669,29 @@ def build_customer_identity_summary(
             f"Invoices: {len(invoices)} row(s) — full detail is in the **Invoices** context block below."
         )
 
+    total_order_count = fetch_ctx.get("total_order_count")
+    if isinstance(total_order_count, int) and total_order_count > 0:
+        lines.append(
+            f"Pre-computed total order count across all invoices: {total_order_count}. "
+            "If the customer asks for a count, use this number directly; do not re-count."
+        )
+
+    total_paid_amount = fetch_ctx.get("total_paid_amount")
+    if isinstance(total_paid_amount, (int, float)) and total_paid_amount > 0:
+        lines.append(
+            f"Pre-computed total paid amount across paid invoices: {total_paid_amount}. "
+            "Use this number when asked for total paid / total received; "
+            "currency is the invoice currency shown in the Invoices block."
+        )
+
+    not_found_oid = fetch_ctx.get("requested_order_not_found")
+    if isinstance(not_found_oid, str) and not_found_oid.strip():
+        lines.append(
+            f"Requested order #{not_found_oid.strip()} was NOT found in the store records "
+            "after all lookups (id, number, reference, invoice match). "
+            "Tell the customer the order was not found and offer their recent orders from context."
+        )
+
     ot = fetch_ctx.get("order_tracking")
     if isinstance(ot, dict) and ot:
         tline = format_tracking_payload_for_llm(

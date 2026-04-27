@@ -484,110 +484,11 @@ def _bot_decline_text_for_whatsapp_media(kind: str, language: str) -> str:
     return en.get(kind, en["image"])
 
 
-def _parse_meta_whatsapp_inbound(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Parse Meta webhook: first inbound user message as text, image, audio, video, or document.
-    """
-    if payload.get("object") != "whatsapp_business_account":
-        return None
-    for entry in payload.get("entry", []):
-        for change in entry.get("changes", []):
-            value = change.get("value", {})
-            messages = value.get("messages") or []
-            if not messages:
-                continue
-            contacts = value.get("contacts") or []
-            contact_name = None
-            if contacts and isinstance(contacts[0], dict):
-                profile = contacts[0].get("profile") or {}
-                contact_name = profile.get("name")
-            for msg in messages:
-                from_phone = msg.get("from")
-                wa_message_id = msg.get("id")
-                if not from_phone or not wa_message_id:
-                    continue
-                base = {
-                    "from_phone": from_phone,
-                    "wa_message_id": wa_message_id,
-                    "contact_name": contact_name,
-                    "timestamp": msg.get("timestamp"),
-                }
-                mtype = msg.get("type")
-                if mtype == "text":
-                    text = (msg.get("text") or {}).get("body", "")
-                    if not text:
-                        continue
-                    return {**base, "kind": "text", "text": text}
-                if mtype == "image":
-                    img = msg.get("image") or {}
-                    mid = img.get("id")
-                    if not mid:
-                        continue
-                    cap = (img.get("caption") or "") if isinstance(img.get("caption"), str) else ""
-                    return {**base, "kind": "image", "media_id": str(mid), "caption": cap}
-                if mtype == "audio":
-                    au = msg.get("audio") or {}
-                    mid = au.get("id")
-                    if not mid:
-                        continue
-                    dur_raw = au.get("duration")
-                    duration_seconds = None
-                    if isinstance(dur_raw, (int, float)):
-                        duration_seconds = int(dur_raw)
-                    elif isinstance(dur_raw, str) and dur_raw.strip().isdigit():
-                        duration_seconds = int(dur_raw.strip())
-                    return {
-                        **base,
-                        "kind": "audio",
-                        "media_id": str(mid),
-                        "duration_seconds": duration_seconds,
-                    }
-                if mtype == "video":
-                    vid = msg.get("video") or {}
-                    mid = vid.get("id")
-                    if not mid:
-                        continue
-                    cap = (vid.get("caption") or "") if isinstance(vid.get("caption"), str) else ""
-                    return {
-                        **base,
-                        "kind": "video",
-                        "media_id": str(mid),
-                        "caption": cap,
-                    }
-                if mtype == "document":
-                    doc = msg.get("document") or {}
-                    mid = doc.get("id")
-                    if not mid:
-                        continue
-                    cap = (doc.get("caption") or "") if isinstance(doc.get("caption"), str) else ""
-                    return {
-                        **base,
-                        "kind": "document",
-                        "media_id": str(mid),
-                        "filename": str(doc.get("filename") or "File"),
-                        "caption": cap,
-                    }
-                if mtype == "reaction":
-                    rxn = msg.get("reaction") or {}
-                    target_id = rxn.get("message_id")
-                    emoji = rxn.get("emoji")
-                    if not isinstance(target_id, str) or not target_id.strip():
-                        continue
-                    if not isinstance(emoji, str):
-                        emoji = ""
-                    return {
-                        **base,
-                        "kind": "reaction",
-                        "target_wa_message_id": target_id.strip(),
-                        "emoji": emoji.strip(),
-                    }
-                if mtype == "sticker":
-                    st = msg.get("sticker") or {}
-                    mid = st.get("id")
-                    if not mid:
-                        continue
-                    return {**base, "kind": "image", "media_id": str(mid), "caption": ""}
-    return None
+from services.messaging_service.inbound_parser import (
+    parse_meta_whatsapp_inbound as _parse_meta_whatsapp_inbound,
+    parse_meta_whatsapp_inbound_all as _parse_meta_whatsapp_inbound_all,
+    parse_one_meta_message as _parse_one_meta_message,
+)
 
 
 def _get_or_create_default_store(db: Session, tenant_id: int) -> Store:
@@ -1859,19 +1760,38 @@ async def whatsapp_webhook_verify(
 @router.post("/whatsapp/webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
-    Meta Cloud API webhook receiver:
-    - parse inbound text message
-    - persist inbound message to conversation
-    - generate AI reply with LangChain bot
-    - send outbound reply via Meta Cloud API
-    - persist outbound AI reply
+    Meta Cloud API webhook receiver. Each inbound message in the batch is processed
+    sequentially (Meta may pack multiple messages in one delivery — see TC9).
     """
     body = await request.json()
-    inbound = _parse_meta_whatsapp_inbound(body)
-    if not inbound:
+    inbound_list = _parse_meta_whatsapp_inbound_all(body)
+    if not inbound_list:
         # Non-message webhooks (delivery/read/status) are valid and should ACK.
         return {"status": "ignored"}
+    if len(inbound_list) == 1:
+        return await _process_one_whatsapp_inbound(db, inbound_list[0])
+    results: List[Dict[str, Any]] = []
+    for inbound in inbound_list:
+        try:
+            results.append(await _process_one_whatsapp_inbound(db, inbound))
+        except Exception:
+            logger.exception(
+                "WhatsApp inbound processing failed (wa_id=%s)",
+                inbound.get("wa_message_id"),
+            )
+            results.append(
+                {"status": "error", "wa_message_id": inbound.get("wa_message_id")}
+            )
+    return {"status": "ok", "processed": len(results), "results": results}
 
+
+async def _process_one_whatsapp_inbound(
+    db: Session, inbound: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Process a single parsed inbound WhatsApp message:
+    persist, generate reply, send outbound, persist outbound.
+    """
     from_phone = inbound["from_phone"]
     if not from_phone:
         return {"status": "ignored"}

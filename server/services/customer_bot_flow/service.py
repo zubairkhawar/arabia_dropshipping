@@ -920,15 +920,20 @@ def _looks_like_order_status_question(text: str) -> bool:
 
     # Secondary gate: require both order-domain and "asking" intent.
     # Use word boundaries — substring "order" matches inside "inventory" and misroutes FAQ to verify.
+    # Tolerate common typos of "order": orde, oder, ordr, ordre, oders, orderr, odrer.
     has_order_domain = bool(
         re.search(r"\border\b", t)
+        or re.search(r"\b(?:orde|oder|ordr|ordre|oders|odrer|orderr+)\b", t)
         or re.search(r"\btracking\b", t)
         or re.search(r"\btrack\b", t)
         or re.search(r"\bparcel\b", t)
         or re.search(r"\bpackage\b", t)
     )
     is_asking = ("?" in t) or any(
-        k in t for k in ("where", "when", "status", "kab", "kahan", "maloom", "detail", "tafseel")
+        k in t for k in (
+            "where", "when", "status", "kab", "kahan", "maloom",
+            "detail", "tafseel", "info", "show", "give me", "btao",
+        )
     )
     if has_order_domain and is_asking:
         return True
@@ -3654,6 +3659,19 @@ async def process_customer_bot_message(
                         "date_to": pr.get("date_to"),
                         "label": pr.get("label"),
                     }
+            if not win:
+                # Customer asked for a CSV with no explicit date range
+                # ("saare orders de do" / "send csv of all my orders" — TCL).
+                # Default to the last 365 days so the request still succeeds
+                # rather than silently falling through to the LLM.
+                from datetime import timedelta as _td
+                _today = datetime.utcnow().date()
+                _from = _today - _td(days=365)
+                win = {
+                    "date_from": _from.isoformat(),
+                    "date_to": _today.isoformat(),
+                    "label": "last 365 days",
+                }
             if win and win.get("date_from") and win.get("date_to"):
                 df = str(win["date_from"])[:10]
                 dt = str(win["date_to"])[:10]
