@@ -1,0 +1,371 @@
+"""
+Tool handlers — the actual side-effecting code.
+
+Each handler accepts:
+  - validated_args: a Pydantic model instance (already passed schema validation)
+  - ctx: ToolContext (db session, customer, conversation, lang, store_client, ...)
+and returns a ``ToolResult``.
+
+Handlers DO NOT trust the LLM. They:
+  1. Re-validate verification state for account_data tools (defense in depth —
+     the control plane already filtered, but a misconfigured registry shouldn't
+     be the only thing standing between a hallucinated tool call and PII.)
+  2. Call existing services (store_client, knowledge_service, etc.) — no
+     duplication of business logic.
+  3. Return compact, LLM-friendly payloads (the LLM sees the result string,
+     so giant blobs waste tokens and confuse it).
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy.orm import Session
+
+from langchain_bot.tools import schemas as S
+from langchain_bot.tools.registry import ToolResult
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolContext:
+    """Everything a handler needs to do its job. Built once per orchestrator invocation."""
+
+    db: Session
+    tenant_id: int
+    customer_phone: str
+    conversation_id: Optional[int]
+    language: str
+    store_client: Any  # StoreIntegrationClient — typed as Any to avoid circular imports
+    bot_flow: Dict[str, Any]  # the persisted flow dict (verification state, customer_kind, etc.)
+
+    @property
+    def is_verified(self) -> bool:
+        return bool(self.bot_flow.get("verified"))
+
+    @property
+    def seller_id(self) -> Optional[str]:
+        sid = self.bot_flow.get("seller_id")
+        return str(sid) if sid else None
+
+
+def _require_verified(ctx: ToolContext, tool_name: str) -> Optional[ToolResult]:
+    if not ctx.is_verified or not ctx.seller_id:
+        return ToolResult(
+            ok=False,
+            data={},
+            error=(
+                f"{tool_name} requires verified customer with seller_id; "
+                "call start_verification first."
+            ),
+        )
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: lookup_order
+# ─────────────────────────────────────────────────────────────────────────────
+async def handle_lookup_order(args: S.LookupOrderArgs, ctx: ToolContext) -> ToolResult:
+    guard = _require_verified(ctx, "lookup_order")
+    if guard:
+        return guard
+    order_id = args.order_id.lstrip("#").strip()
+    try:
+        detail = await ctx.store_client.get_order_by_id(order_id, seller_id=ctx.seller_id)
+        if not detail:
+            detail = await ctx.store_client.get_order_by_number(order_id, seller_id=ctx.seller_id)
+        if not detail:
+            return ToolResult(ok=False, data={"requested_order_id": order_id}, error="order_not_found")
+        # Enrich with tracking + invoice mapping when available.
+        try:
+            tracking = await ctx.store_client.get_order_tracking(order_id, seller_id=ctx.seller_id)
+        except Exception:
+            tracking = {}
+        try:
+            inv = await ctx.store_client.get_order_invoice_mapping(order_id)
+            if isinstance(inv, dict):
+                inv = inv.get("invoice", inv)
+        except Exception:
+            inv = {}
+        return ToolResult(
+            ok=True,
+            data={"order": detail, "tracking": tracking or {}, "invoice": inv or {}},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("lookup_order failed")
+        return ToolResult(ok=False, data={}, error=f"store_api_error:{type(exc).__name__}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: lookup_orders_by_range
+# ─────────────────────────────────────────────────────────────────────────────
+async def handle_lookup_orders_by_range(
+    args: S.LookupOrdersByRangeArgs, ctx: ToolContext
+) -> ToolResult:
+    guard = _require_verified(ctx, "lookup_orders_by_range")
+    if guard:
+        return guard
+    if args.date_from > args.date_to:
+        return ToolResult(ok=False, data={}, error="date_from is after date_to")
+    try:
+        rows = await ctx.store_client.get_orders_all(
+            seller_id=ctx.seller_id,
+            date_from=args.date_from.isoformat(),
+            date_to=args.date_to.isoformat(),
+        )
+        rows = list(rows or [])
+        truncated = len(rows) > 5
+        return ToolResult(
+            ok=True,
+            data={
+                "label": args.label or f"{args.date_from} to {args.date_to}",
+                "date_from": args.date_from.isoformat(),
+                "date_to": args.date_to.isoformat(),
+                "total_count": len(rows),
+                "sample": rows[:5],
+                "truncated": truncated,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("lookup_orders_by_range failed")
+        return ToolResult(ok=False, data={}, error=f"store_api_error:{type(exc).__name__}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: list_invoices
+# ─────────────────────────────────────────────────────────────────────────────
+def _is_paid(status: Any) -> bool:
+    s = str(status or "").strip().lower()
+    return s in ("yes", "paid", "true", "1")
+
+
+async def handle_list_invoices(args: S.ListInvoicesArgs, ctx: ToolContext) -> ToolResult:
+    guard = _require_verified(ctx, "list_invoices")
+    if guard:
+        return guard
+    try:
+        df = args.date_from.isoformat() if args.date_from else None
+        dt = args.date_to.isoformat() if args.date_to else None
+        rows = await ctx.store_client.get_invoice_by_seller_id(
+            seller_id=ctx.seller_id,
+            date_from=df,
+            date_to=dt,
+        )
+        rows = [r for r in (rows or []) if isinstance(r, dict)]
+        if args.only_unpaid:
+            rows = [r for r in rows if not _is_paid(r.get("pay_status"))]
+        return ToolResult(
+            ok=True,
+            data={
+                "total_count": len(rows),
+                "sample": rows[:5],
+                "truncated": len(rows) > 5,
+                "filters": {"date_from": df, "date_to": dt, "only_unpaid": bool(args.only_unpaid)},
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("list_invoices failed")
+        return ToolResult(ok=False, data={}, error=f"store_api_error:{type(exc).__name__}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: get_total_paid
+# ─────────────────────────────────────────────────────────────────────────────
+def _safe_float(v: Any) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def handle_get_total_paid(args: S.GetTotalPaidArgs, ctx: ToolContext) -> ToolResult:
+    guard = _require_verified(ctx, "get_total_paid")
+    if guard:
+        return guard
+    try:
+        rows = await ctx.store_client.get_invoice_by_seller_id(seller_id=ctx.seller_id)
+        rows = rows or []
+        total = 0.0
+        currency = None
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if _is_paid(r.get("pay_status")):
+                total += _safe_float(r.get("payable") or r.get("net_total"))
+                currency = currency or r.get("currency")
+        return ToolResult(
+            ok=True,
+            data={"total_paid": round(total, 2), "currency": currency or "AED", "invoice_count": len(rows)},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("get_total_paid failed")
+        return ToolResult(ok=False, data={}, error=f"store_api_error:{type(exc).__name__}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: get_total_orders
+# ─────────────────────────────────────────────────────────────────────────────
+async def handle_get_total_orders(args: S.GetTotalOrdersArgs, ctx: ToolContext) -> ToolResult:
+    guard = _require_verified(ctx, "get_total_orders")
+    if guard:
+        return guard
+    try:
+        invoices = await ctx.store_client.get_invoice_by_seller_id(seller_id=ctx.seller_id)
+        ids: set[str] = set()
+        for inv in invoices or []:
+            if not isinstance(inv, dict):
+                continue
+            for oid in inv.get("order_ids") or []:
+                sid = str(oid or "").strip().lstrip("#")
+                if sid:
+                    ids.add(sid)
+        return ToolResult(ok=True, data={"total_orders": len(ids)})
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("get_total_orders failed")
+        return ToolResult(ok=False, data={}, error=f"store_api_error:{type(exc).__name__}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: search_kb
+# ─────────────────────────────────────────────────────────────────────────────
+async def handle_search_kb(args: S.SearchKbArgs, ctx: ToolContext) -> ToolResult:
+    """Wrap ArabiaLangChainBot's KB retrieval — single source of truth for KB ranking."""
+    try:
+        from langchain_bot.bot import ArabiaLangChainBot
+
+        bot = ArabiaLangChainBot(ctx.db)
+        knowledge_str, followups = bot._build_knowledge_context(  # noqa: SLF001
+            ctx.tenant_id, user_message=args.query, max_chunks=args.max_chunks
+        )
+        return ToolResult(
+            ok=True,
+            data={"knowledge_excerpts": knowledge_str, "kb_followup_suggestions": followups},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("search_kb failed")
+        return ToolResult(ok=False, data={}, error=f"kb_error:{type(exc).__name__}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: escalate_to_agent
+# ─────────────────────────────────────────────────────────────────────────────
+async def handle_escalate_to_agent(
+    args: S.EscalateToAgentArgs, ctx: ToolContext
+) -> ToolResult:
+    """Mark the turn for handoff. Actual agent assignment is performed by the
+    legacy ``BotFlowResult`` plumbing in messaging_service — the orchestrator
+    surfaces ``escalation_signal=True`` so the caller can trigger it.
+    """
+    return ToolResult(
+        ok=True,
+        data={"escalation_signal": True, "reason": args.reason, "team": args.team},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: get_trending_products
+# Pagination cursor lives in Redis (memory_service); LLM only passes a direction.
+# ─────────────────────────────────────────────────────────────────────────────
+async def handle_get_trending_products(
+    args: S.GetTrendingProductsArgs, ctx: ToolContext
+) -> ToolResult:
+    """The full trending/non-trending renderer is in the legacy state machine
+    because it produces structured WhatsApp image+caption messages.
+
+    For now the tool returns a *signal* that the orchestrator turns into a
+    fall-through to the deterministic trending handler. Phase 4.2+ will move
+    the structured rendering itself behind this tool.
+    """
+    return ToolResult(
+        ok=True,
+        data={
+            "trending_signal": True,
+            "country": args.country,
+            "mode": args.mode,
+            "direction": args.direction,
+            "category": args.category,
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: generate_csv
+# ─────────────────────────────────────────────────────────────────────────────
+async def handle_generate_csv(args: S.GenerateCsvArgs, ctx: ToolContext) -> ToolResult:
+    """Same fall-through pattern as trending — the CSV builder + R2 upload +
+    WhatsApp document send is wired in service.py. The orchestrator surfaces
+    a signal; the caller dispatches to the existing CSV pipeline."""
+    guard = _require_verified(ctx, "generate_csv")
+    if guard:
+        return guard
+    today = date.today()
+    df = (args.date_from or (today - timedelta(days=365))).isoformat()
+    dt = (args.date_to or today).isoformat()
+    return ToolResult(
+        ok=True,
+        data={
+            "csv_signal": True,
+            "kind": args.kind,
+            "date_from": df,
+            "date_to": dt,
+            "invoice_id": args.invoice_id,
+            "invoice_date": args.invoice_date.isoformat() if args.invoice_date else None,
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handler: verification family
+# These tools surface signals the caller turns into existing flow transitions.
+# Real OTP/email/mobile parsing stays deterministic — see the design rule.
+# ─────────────────────────────────────────────────────────────────────────────
+async def handle_start_verification(
+    args: S.StartVerificationArgs, ctx: ToolContext
+) -> ToolResult:
+    return ToolResult(ok=True, data={"verification_signal": "start", "reason": args.reason})
+
+
+async def handle_submit_verification_email(
+    args: S.SubmitVerificationEmailArgs, ctx: ToolContext
+) -> ToolResult:
+    return ToolResult(ok=True, data={"verification_signal": "submit_email", "email": args.email})
+
+
+async def handle_verify_otp(args: S.VerifyOtpArgs, ctx: ToolContext) -> ToolResult:
+    return ToolResult(ok=True, data={"verification_signal": "submit_otp", "code": args.code})
+
+
+async def handle_submit_verification_mobile(
+    args: S.SubmitVerificationMobileArgs, ctx: ToolContext
+) -> ToolResult:
+    return ToolResult(
+        ok=True, data={"verification_signal": "submit_mobile", "mobile": args.mobile}
+    )
+
+
+async def handle_send_otp_resend(args: S.ResendOtpArgs, ctx: ToolContext) -> ToolResult:
+    return ToolResult(ok=True, data={"verification_signal": "resend_otp"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dispatch table — name → handler
+# ─────────────────────────────────────────────────────────────────────────────
+HANDLERS: Dict[str, Any] = {
+    "start_verification": handle_start_verification,
+    "submit_verification_email": handle_submit_verification_email,
+    "verify_otp": handle_verify_otp,
+    "submit_verification_mobile": handle_submit_verification_mobile,
+    "send_otp_resend": handle_send_otp_resend,
+    "lookup_order": handle_lookup_order,
+    "lookup_orders_by_range": handle_lookup_orders_by_range,
+    "list_invoices": handle_list_invoices,
+    "get_total_paid": handle_get_total_paid,
+    "get_total_orders": handle_get_total_orders,
+    "generate_csv": handle_generate_csv,
+    "search_kb": handle_search_kb,
+    "get_trending_products": handle_get_trending_products,
+    "escalate_to_agent": handle_escalate_to_agent,
+}

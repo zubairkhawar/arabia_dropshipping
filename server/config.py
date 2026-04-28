@@ -52,6 +52,19 @@ class Settings(BaseSettings):
     kb_use_embeddings: bool = False
     # When True, the LangChain system prompt asks the model for 3 contextual follow-up suggestions per turn.
     llm_followup_suggestions: bool = True
+
+    # Bot architecture mode. "legacy" = state-machine-first (current default).
+    # "llm_first" = orchestrator + tool-use; control plane gates side-effects.
+    # Toggle per tenant via the rollout config (see langchain_bot/control_plane.py).
+    bot_mode: str = "legacy"
+    # Per-customer daily LLM token soft cap (input+output combined). When exceeded,
+    # llm_first turns fall back to legacy state machine until UTC rollover.
+    llm_daily_token_cap_per_customer: int = 50_000
+    # Hard ceiling on tool-use chain length per turn — keeps p95 latency in budget.
+    llm_max_tool_calls_per_turn: int = 2
+    # Comma-separated tenant_ids that opt into llm_first regardless of bot_mode default.
+    # Empty string = use bot_mode for all tenants. "1,7,12" = only those tenants are llm_first.
+    bot_mode_llm_first_tenants: str = ""
     
     # WhatsApp
     wati_api_key: Optional[str] = None
