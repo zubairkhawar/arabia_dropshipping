@@ -430,6 +430,133 @@ def _bail_to_conversational(flow: Dict[str, Any], flow_lang: str) -> Dict[str, A
     }
 
 
+# Universal bail/cancel words that mean "stop this verification, I want out".
+# Roman Urdu + English + Arabic. Match as whole-word/phrase to avoid false positives
+# (e.g. "bs" in "bus stop" must not trigger).
+_VERIF_BAIL_PATTERNS = (
+    r"\b(?:bs|bas)\s+kr\s*do\b",          # bs/bas kr do, "stop it"
+    r"\bbs\s*krdo\b",                       # bs krdo
+    r"\b(?:bas|bs)\b\s*$",                  # message that's just "bs" / "bas"
+    r"\brehne\s+do\b",                      # rehne do, "leave it"
+    r"\bnahi\s+kar(?:na|oo?n)\b",           # nahi karna, "I don't want"
+    r"\bnah[ií]\s+karwana\b",
+    r"\bcancel\b",
+    r"\bstop\b",
+    r"\bskip\b",
+    r"\b(?:wapas|back)\b",
+    r"\bnot\s+now\b",
+    r"\bquit\b",
+    r"\bexit\b",
+    r"يلغي|توقف|إلغاء",                       # cancel / stop / cancellation (Arabic)
+)
+_VERIF_AGENT_PATTERNS = (
+    r"\bagent\b",
+    r"\bsupport\b",
+    r"\bhuman\b",
+    r"\binsa+n\b",          # insaan / insan (Roman Urdu for "human")
+    r"\bbanda\b",
+    r"موظف|دعم|إنسان",
+)
+_VERIF_TOPIC_CHANGE_TOKENS = (
+    "arabia",
+    "dropship",
+    "platform",
+    "platforms",
+    "services",
+    "service",
+    "shipping",
+    "fulfilment",
+    "fulfillment",
+    "agency",
+    "commission",
+    "payout",
+    "payment",
+    "policy",
+    "warehouse",
+    "sourcing",
+    "marketing",
+    "calculator",
+    "trending",
+)
+_VERIF_TOPIC_QUESTION_WORDS = (
+    "kya", "kese", "kesy", "kaise", "kaisa", "behtar", "reliable",
+    "kahan", "kab", "kyun", "what", "how", "where", "why", "which",
+    "compare", "difference", "vs",
+    # Statements that imply asking (Roman Urdu) — covers "I am asking about X"
+    "pooch", "poochna", "puchhna", "baray", "barey", "baare", "bare",
+    # English "tell me / explain"
+    "tell", "explain", "describe", "show",
+)
+
+
+def _looks_like_otp_code(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return False
+    # Require the message to be predominantly digits (allow common separators).
+    cleaned = re.sub(r"[\s\-]", "", s)
+    if not re.fullmatch(r"\d+", cleaned):
+        return False
+    return 4 <= len(cleaned) <= 8
+
+
+def _looks_like_mobile_number(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return False
+    cleaned = re.sub(r"[\s\-]", "", s)
+    # Allow leading + and digits only.
+    if not re.fullmatch(r"\+?\d+", cleaned):
+        return False
+    digits = cleaned.lstrip("+")
+    # Pakistan / UAE / KSA mobile lengths after stripping format chars.
+    return 9 <= len(digits) <= 15
+
+
+def _should_bail_from_verification(text: str, current_step: str) -> bool:
+    """Return True when the customer's reply during a verification step is
+    clearly NOT what the step expects, AND looks like a bail signal, an
+    agent request, or a topic-change question.
+
+    Per the LLM-first design: if the customer is changing topic or asking
+    to stop, route the message through the LLM (or legacy KB path) instead
+    of looping the rigid 'send your email / OTP / mobile' template.
+    """
+    s = (text or "").strip().lower()
+    if not s:
+        return False
+
+    # Don't bail when the customer is actually providing the expected input.
+    if current_step == "existing_awaiting_email" and _is_likely_email(s):
+        return False
+    if current_step == "existing_awaiting_verification_code" and _looks_like_otp_code(s):
+        return False
+    if current_step == "existing_awaiting_mobile" and _looks_like_mobile_number(s):
+        return False
+
+    # Explicit bail / cancel.
+    for p in _VERIF_BAIL_PATTERNS:
+        if re.search(p, s, flags=re.IGNORECASE):
+            return True
+
+    # Agent / human / support request.
+    for p in _VERIF_AGENT_PATTERNS:
+        if re.search(p, s, flags=re.IGNORECASE):
+            return True
+
+    # Topic change: a meaningful word about the platform combined with an
+    # asking word (or punctuation) is a clear signal the customer is asking
+    # something else.
+    has_topic = any(tok in s for tok in _VERIF_TOPIC_CHANGE_TOKENS)
+    has_question = ("?" in s) or any(
+        re.search(rf"\b{re.escape(qw)}\b", s) for qw in _VERIF_TOPIC_QUESTION_WORDS
+    )
+    if has_topic and has_question:
+        return True
+
+    return False
+
+
 def _looks_like_free_text_question(text: str) -> bool:
     """
     Detect likely FAQ/free-text requests at the entry step so we don't hard-loop
@@ -4875,6 +5002,14 @@ async def process_customer_bot_message(
         if _wants_cannot_find_order_help(text):
             return save(flow, _t(flow_lang, MSGS["cannot_find_order_help"]))
 
+        # Escape route: customer changed topic, asked for help, or wants to bail.
+        # Route the message through ai_forward (= LLM-first when flag is set,
+        # legacy ai_forward otherwise). The LLM answers their actual question
+        # naturally; verification can resume next time.
+        if _should_bail_from_verification(text, "existing_awaiting_email"):
+            nf = _bail_to_conversational(flow, flow_lang)
+            nf["intro_shown"] = True
+            return ai_forward(text, nf, skip_api=not bool(flow.get("verified")))
         # Stay on verification rails: do not escape this step to AI.
         if _is_natural_language(text) and not _is_likely_email(text):
             return save(flow, _t(flow_lang, MSGS["ask_email"]))
@@ -4887,6 +5022,11 @@ async def process_customer_bot_message(
         if _wants_new_customer_path(text):
             nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+        # Escape route: bail / topic-change / agent request — let LLM handle it.
+        if _should_bail_from_verification(text, "existing_awaiting_verification_code"):
+            nf = _bail_to_conversational(flow, flow_lang)
+            nf["intro_shown"] = True
+            return ai_forward(text, nf, skip_api=not bool(flow.get("verified")))
         # Stay on verification rails until code is entered/validated.
         if _is_natural_language(text):
             pending_email = (flow.get("pending_email") or "").strip().lower()
@@ -4933,6 +5073,11 @@ async def process_customer_bot_message(
         if _wants_new_customer_path(text):
             nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+        # Escape route: bail / topic-change / agent request — let LLM handle it.
+        if _should_bail_from_verification(text, "existing_awaiting_mobile"):
+            nf = _bail_to_conversational(flow, flow_lang)
+            nf["intro_shown"] = True
+            return ai_forward(text, nf, skip_api=not bool(flow.get("verified")))
         # Stay on verification rails until mobile lookup succeeds/fails.
         if _is_natural_language(text):
             return save(flow, _t(flow_lang, MSGS["ask_mobile"]))
