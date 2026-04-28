@@ -5235,13 +5235,16 @@ async def process_customer_bot_message(
         # Greeting: just acknowledge — do NOT re-show the new/existing menu here.
         # The welcome menu is only shown on fresh entry or /reset; mid-conversation
         # greetings get a simple acknowledgment so the customer can continue naturally.
+        # Forward to LLM — prompts.py "CASUAL MESSAGES" rule covers warm short replies.
         if _looks_like_greeting(text):
-            return save(
-                {**flow, "step": "conversational"},
-                _t(flow_lang, MSGS["hello_ack"]),
+            return ai_forward(
+                text,
+                {**flow, "step": "conversational", "intro_shown": True, "lang": flow_lang},
+                skip_api=not bool(flow.get("verified")),
             )
 
-        # Simple acknowledgments (okay, good, fine, hmm, etc.) — reply naturally
+        # Simple acknowledgments (okay, good, fine, hmm, etc.) — let LLM reply naturally
+        # using the prompt's casual-messages rules.
         _lowered_text = text.strip().lower()
         _thank_words = {
             "thanks", "thank you", "shukriya", "shukria", "jazakallah",
@@ -5255,15 +5258,11 @@ async def process_customer_bot_message(
             "theek hai", "thik", "thik hai", "sahi", "sahi hai",
             "no", "nahi", "nhi", "na",
         }
-        if _lowered_text in _thank_words:
-            return save(
-                {**flow, "step": "conversational"},
-                _t(flow_lang, MSGS["thanks_ack"]),
-            )
-        if _lowered_text in _ack_words_conv:
-            return save(
-                {**flow, "step": "conversational"},
-                _t(flow_lang, MSGS["hello_ack"]),
+        if _lowered_text in _thank_words or _lowered_text in _ack_words_conv:
+            return ai_forward(
+                text,
+                {**flow, "step": "conversational", "intro_shown": True, "lang": flow_lang},
+                skip_api=not bool(flow.get("verified")),
             )
 
         # --- Unverified: order/account questions start existing-customer identity (or bypass order-id path) ---

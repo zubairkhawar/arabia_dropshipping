@@ -32,11 +32,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "مرحبًا! كيف يمكنني مساعدتك اليوم؟",
         "roman_urdu": "Hello! Aaj kya madad karoon?",
     },
-    "thanks_ack": {
-        "english": "You're welcome! Is there anything else I can help you with?",
-        "arabic": "على الرحب والسعة! هل هناك أي شيء آخر يمكنني مساعدتك به؟",
-        "roman_urdu": "Shukriya! Kya aur koi madad chahiye?",
-    },
     "customer_type_menu_reminder": {
         "english": "To continue, reply **1** if you are a new customer or **2** if you are an existing customer.",
         "arabic": "للمتابعة، أجب بـ **1** إذا كنت عميلاً جديداً أو **2** إذا كنت عميلاً حالياً.",
@@ -277,23 +272,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "يرجى إرسال عنوان البريد الإلكتروني المرتبط بحسابك.",
         "roman_urdu": "Apne account se jura hua email address bhejein.",
     },
-    "order_verify_bypass_intro": {
-        "english": (
-            "We're not using email verification in chat right now.\n\n"
-            "Please send your **order number** (for example #157955). "
-            "If you only remember the phone number used on the order, send that and we’ll try to help."
-        ),
-        "arabic": (
-            "لا نستخدم التحقق عبر البريد في الدردشة حاليًا.\n\n"
-            "يرجى إرسال **رقم الطلب** (مثال: #157955). "
-            "إن كان لديك فقط رقم الجوال المستخدم في الطلب، فأرسله وسنحاول المساعدة."
-        ),
-        "roman_urdu": (
-            "Filhaal chat mein email verification use nahi ho rahi.\n\n"
-            "Apna **order number** bhejein (misal #157955). "
-            "Agar sirf woh mobile yaad hai jo order par tha, woh bhejein — dekh kar madad karte hain."
-        ),
-    },
     "email_invalid": {
         "english": "Please enter a valid email address (example: name@email.com).",
         "arabic": "يرجى إدخال بريد إلكتروني صحيح (مثال: name@email.com).",
@@ -379,11 +357,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "هل تحتاج إلى أي شيء آخر؟",
         "roman_urdu": "Aur kuch madad chahiye?",
     },
-    "verified_menu": {
-        "english": "✅ Verified! How can I help you next?",
-        "arabic": "✅ تم التحقق! كيف يمكنني مساعدتك الآن؟",
-        "roman_urdu": "✅ Verified! Ab kya madad karoon?",
-    },
     "ask_order": {
         "english": "📦 Please enter your Order ID:",
         "arabic": "📦 يرجى إدخال رقم الطلب:",
@@ -420,48 +393,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "ya **agent** / **support** likhein."
         ),
     },
-    "invoice_not_found": {
-        "english": (
-            "I couldn't find an invoice matching that request. "
-            "Please double-check the order/invoice number, or type **agent** for help."
-        ),
-        "arabic": (
-            "لم أتمكن من العثور على فاتورة مطابقة. "
-            "يرجى التحقق من رقم الطلب/الفاتورة، أو اكتب **agent** للمساعدة."
-        ),
-        "roman_urdu": (
-            "Koi matching invoice nahi mila. Order ya invoice number check karein, "
-            "ya **agent** likhein madad ke liye."
-        ),
-    },
-    "invoice_lookup_error": {
-        "english": (
-            "I'm having trouble reaching invoice data right now. Please try again in a moment, "
-            "or type **agent** / **support** if you need help."
-        ),
-        "arabic": (
-            "نواجه صعوبة في الوصول إلى بيانات الفاتورة حاليًا. يرجى المحاولة بعد قليل، "
-            "أو اكتب **agent** / **support** للمساعدة."
-        ),
-        "roman_urdu": (
-            "Abhi invoice data access mein masla aa raha hai. Thori dair baad dobara try karein, "
-            "ya **agent** / **support** likhein."
-        ),
-    },
-    "tracking_lookup_error": {
-        "english": (
-            "I couldn't pull tracking info for that number right now. Please double-check it, "
-            "or type **agent** / **support** for help."
-        ),
-        "arabic": (
-            "لم أتمكن من الحصول على معلومات التتبع لهذا الرقم الآن. يرجى التحقق منه، "
-            "أو اكتب **agent** / **support** للمساعدة."
-        ),
-        "roman_urdu": (
-            "Abhi is tracking number ki info nahi mil rahi. Number check karein, "
-            "ya **agent** / **support** likhein."
-        ),
-    },
     "cannot_find_order_help": {
         "english": (
             "No worries — here's how to find it quickly:\n\n"
@@ -488,20 +419,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "3. *Email se dhundhwaein*: aap wo email bhejein jo order ke waqt use ki thi, main dekh "
             "leta hoon.\n\n"
             "Agar phir bhi na miley to *agent* likhein, aap ko insaan connect kar doonga."
-        ),
-    },
-    "orders_period_lookup_error": {
-        "english": (
-            "I couldn't fetch orders for that period right now. Please try again in a moment, "
-            "or type **agent** / **support** for help."
-        ),
-        "arabic": (
-            "لم أتمكن من جلب الطلبات لهذه الفترة الآن. يرجى المحاولة بعد قليل، "
-            "أو اكتب **agent** / **support** للمساعدة."
-        ),
-        "roman_urdu": (
-            "Abhi is period ke orders nahi aa rahe. Thori dair baad try karein, "
-            "ya **agent** / **support** likhein."
         ),
     },
     "connecting_agent_named": {
@@ -577,26 +494,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Kuch dair baad dobara try karein, ya yahin message chhor dein — wapas aate hi jawab dein ge."
         ),
     },
-    "experience": {
-        "english": (
-            "How much experience do you have in dropshipping?\n\n"
-            "1️⃣ Less than 1 year\n"
-            "2️⃣ 1–2 years\n"
-            "3️⃣ 3+ years"
-        ),
-        "arabic": (
-            "ما مقدار خبرتك في الدروبشيبينغ؟\n\n"
-            "1️⃣ أقل من سنة\n"
-            "2️⃣ من 1 إلى سنتين\n"
-            "3️⃣ أكثر من 3 سنوات"
-        ),
-        "roman_urdu": (
-            "Aap ka dropshipping experience kitna hai?\n\n"
-            "1️⃣ 1 saal se kam\n"
-            "2️⃣ 1–2 saal\n"
-            "3️⃣ 3+ saal"
-        ),
-    },
     "kb_wrap": {
         "english": "{body}",
         "arabic": "{body}",
@@ -618,16 +515,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
             "Mazeed details ke liye hamara Agency Partnership Program dekhein:\n"
             "https://www.agency.arabiadropship.com/"
         ),
-    },
-    "unknown_info": {
-        "english": 'I don\'t have that information. Type "agent" to speak with a human.',
-        "arabic": "لا تتوفر لدي هذه المعلومة. اكتب \"agent\" للتحدث مع موظف.",
-        "roman_urdu": "Mere paas yeh information nahi hai. Insaan se baat ke liye \"agent\" likhein.",
-    },
-    "products_hint": {
-        "english": "Browse products section is available. You can also type your question.",
-        "arabic": "يمكنك تصفح قسم المنتجات. ويمكنك أيضاً كتابة سؤالك.",
-        "roman_urdu": "Aap products browse kar sakte hain. Ya apna sawal likh dein.",
     },
     "trending_ask_country": {
         "english": (
@@ -785,39 +672,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": (
             "Abhi catalog mein {name} ka koi description nahi hai.\n\n"
             "Specs, stock, pricing ke liye \"agent\" likhein support se — ya koi aur sawal pooch lein."
-        ),
-    },
-    "trending_product_detail_handoff": {
-        "english": (
-            "I'd be happy to help you with more details about {product_name}.\n\n"
-            "Let me connect you with a support agent who can provide complete information including "
-            "availability, bulk pricing, and shipping options.\n\n"
-            "Please wait a moment."
-        ),
-        "arabic": (
-            "يسعدني مساعدتك في المزيد من التفاصيل عن {product_name}.\n\n"
-            "دعني أوصلك بأحد موظفي الدعم ليقدم لك معلومات كاملة تشمل التوفر والأسعار بالجملة وخيارات الشحن.\n\n"
-            "يرجى الانتظار لحظة."
-        ),
-        "roman_urdu": (
-            "{product_name} ki mazeed details mein madad karne ko tayyar hoon.\n\n"
-            "Main aap ko support agent se connect karta hoon — availability, bulk pricing, aur shipping "
-            "options ka poora jawab mil jaye ga.\n\n"
-            "Thora intezar karein."
-        ),
-    },
-    "trending_product_not_matched": {
-        "english": (
-            "I couldn’t match that to one of the trending products in this list. "
-            "Try a list number (e.g. 3 or \"product 3\"), type \"show me more\", or type \"agent\" for a human."
-        ),
-        "arabic": (
-            "لم أستطع ربط ذلك بأحد المنتجات الرائجة في هذه القائمة. "
-            "جرّب رقم المنتج (مثل 3 أو \"product 3\")، أو اكتب \"المزيد\"، أو \"agent\" للتحدث مع موظف."
-        ),
-        "roman_urdu": (
-            "Isay is trending list se match nahi kar saka. "
-            "List number try karein (jaise 3 ya \"product 3\"), \"aur dikhao\" likhein, ya \"agent\" human ke liye."
         ),
     },
     "trending_no_products": {
