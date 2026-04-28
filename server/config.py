@@ -53,10 +53,12 @@ class Settings(BaseSettings):
     # When True, the LangChain system prompt asks the model for 3 contextual follow-up suggestions per turn.
     llm_followup_suggestions: bool = True
 
-    # Bot architecture mode. "legacy" = state-machine-first (current default).
-    # "llm_first" = orchestrator + tool-use; control plane gates side-effects.
-    # Toggle per tenant via the rollout config (see langchain_bot/control_plane.py).
-    bot_mode: str = "legacy"
+    # Bot architecture mode. "llm_first" (default, Phase 5) = orchestrator +
+    # tool-use; control plane gates side-effects. Only the 4 deterministic
+    # buckets (verification, trending pagination, file pipelines, handoff
+    # routing) stay in the legacy state machine. "legacy" = legacy state
+    # machine for everything (kill-switch).
+    bot_mode: str = "llm_first"
     # Per-customer daily LLM token soft cap (input+output combined). When exceeded,
     # llm_first turns fall back to legacy state machine until UTC rollover.
     llm_daily_token_cap_per_customer: int = 50_000

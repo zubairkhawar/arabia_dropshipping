@@ -4341,7 +4341,13 @@ async def process_customer_bot_message(
         return save(nf, _t(flow_lang, MSGS["entry"]), skip_api=True)
 
     # LLM-first routing:
-    # Keep only a minimal deterministic guard for active verification/security steps.
+    # ── 4 deterministic buckets (Phase 5 architecture) ───────────────────────
+    # Steps where the deterministic state machine must own the turn:
+    #   ① Verification flow (email → OTP → mobile)
+    #   ② Trending pagination cursor (structured numbered renderer)
+    #   ③ Sourcing data collection (structured intake → handoff)
+    #   ④ Active agent handoff queue
+    # Everything else is routed through the LLM-first orchestrator.
     otp_guard_steps = {
         "awaiting_customer_type",
         "awaiting_resume_choice",
@@ -4349,21 +4355,11 @@ async def process_customer_bot_message(
         "existing_awaiting_verification_code",
         "existing_awaiting_mobile",
     }
-    # Keep order/account verification bootstrap deterministic while unverified.
-    needs_verification_bootstrap = (
-        step == "conversational"
-        and not bool(flow.get("verified"))
-        and (
-            _looks_like_order_status_question(text)
-            or _is_likely_order_id_only(text)
-            or _looks_like_account_question(text)
-            or bool(_extract_standalone_email(text))
-        )
-    )
     # Trending/non-trending product requests must bypass LLM-first routing and
-    # go through the deterministic trending flow handler which queries the DB.
+    # go through the deterministic trending flow handler which queries the DB
+    # and maintains a pagination cursor in Redis.
     wants_trending_now = _wants_trending_products(text) or _wants_non_trending_products(text)
-    if step not in otp_guard_steps and not needs_verification_bootstrap and not wants_trending_now:
+    if step not in otp_guard_steps and not wants_trending_now:
         nf = {
             **flow,
             "step": "conversational",
