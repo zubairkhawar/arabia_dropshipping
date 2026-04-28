@@ -30,9 +30,10 @@ class TestCoreRulesPresent:
             "Privacy",                     # don't reveal stored email/phone
             "kyun nahi kar sakte",         # 'why can't you' explainer
             "Always address the LATEST",   # don't drop a turn
-            # Verification gate
+            # Verification gate — must instruct LLM to CALL the tool, not draft script
             "VERIFICATION GATE",
-            "new** or **existing",
+            "start_verification",
+            "TOOL ONLY",
             # Store API error
             "Store API error while loading customer/orders",
             # Patterns

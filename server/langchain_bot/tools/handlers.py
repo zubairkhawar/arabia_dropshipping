@@ -318,9 +318,10 @@ async def handle_generate_csv(args: S.GenerateCsvArgs, ctx: ToolContext) -> Tool
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Handler: verification family
-# These tools surface signals the caller turns into existing flow transitions.
-# Real OTP/email/mobile parsing stays deterministic — see the design rule.
+# Handler: start_verification — only verification tool the LLM is allowed to call.
+# email/OTP/mobile parsing stays in the deterministic state machine; letting
+# the LLM call submit_* tools resulted in the LLM 'playing verification'
+# without actually advancing the flow (WhatsApp transcript bug 2026-04-29).
 # ─────────────────────────────────────────────────────────────────────────────
 async def handle_start_verification(
     args: S.StartVerificationArgs, ctx: ToolContext
@@ -328,37 +329,11 @@ async def handle_start_verification(
     return ToolResult(ok=True, data={"verification_signal": "start", "reason": args.reason})
 
 
-async def handle_submit_verification_email(
-    args: S.SubmitVerificationEmailArgs, ctx: ToolContext
-) -> ToolResult:
-    return ToolResult(ok=True, data={"verification_signal": "submit_email", "email": args.email})
-
-
-async def handle_verify_otp(args: S.VerifyOtpArgs, ctx: ToolContext) -> ToolResult:
-    return ToolResult(ok=True, data={"verification_signal": "submit_otp", "code": args.code})
-
-
-async def handle_submit_verification_mobile(
-    args: S.SubmitVerificationMobileArgs, ctx: ToolContext
-) -> ToolResult:
-    return ToolResult(
-        ok=True, data={"verification_signal": "submit_mobile", "mobile": args.mobile}
-    )
-
-
-async def handle_send_otp_resend(args: S.ResendOtpArgs, ctx: ToolContext) -> ToolResult:
-    return ToolResult(ok=True, data={"verification_signal": "resend_otp"})
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Dispatch table — name → handler
 # ─────────────────────────────────────────────────────────────────────────────
 HANDLERS: Dict[str, Any] = {
     "start_verification": handle_start_verification,
-    "submit_verification_email": handle_submit_verification_email,
-    "verify_otp": handle_verify_otp,
-    "submit_verification_mobile": handle_submit_verification_mobile,
-    "send_otp_resend": handle_send_otp_resend,
     "lookup_order": handle_lookup_order,
     "lookup_orders_by_range": handle_lookup_orders_by_range,
     "list_invoices": handle_list_invoices,

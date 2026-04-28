@@ -34,46 +34,20 @@ class ToolDefinition:
 
 TOOL_REGISTRY: Dict[str, ToolDefinition] = {
     # ── Verification ────────────────────────────────────────────────────────
+    # The deterministic state machine owns email/OTP/mobile parsing — the LLM
+    # only triggers entry into the flow via `start_verification`. Do not add
+    # `submit_*` or `verify_otp` tools here; they would let the LLM 'play
+    # verification' instead of deferring to the security-critical script.
     "start_verification": ToolDefinition(
         name="start_verification",
         description=(
-            "Begin the email-then-mobile verification script for an existing customer. "
-            "Call when the customer asks for order/invoice/account data and is not yet verified."
+            "Begin the deterministic verification script for an existing customer. "
+            "Call this whenever the customer asks for order/invoice/tracking/profit/account data "
+            "and is not yet verified. After this tool returns, the deterministic state machine "
+            "takes over for email/OTP/mobile entry on subsequent turns — do not draft those "
+            "prompts yourself, do not ask for email/OTP/mobile in free-form text."
         ),
         args_schema=S.StartVerificationArgs,
-        category=ToolCategory.VERIFICATION,
-    ),
-    "submit_verification_email": ToolDefinition(
-        name="submit_verification_email",
-        description=(
-            "Pass the email the customer just typed into the verification script. "
-            "Use only when the bot is on the email step of verification."
-        ),
-        args_schema=S.SubmitVerificationEmailArgs,
-        category=ToolCategory.VERIFICATION,
-    ),
-    "verify_otp": ToolDefinition(
-        name="verify_otp",
-        description=(
-            "Validate the 6-digit verification code the customer just typed. "
-            "Use only when the bot is on the OTP step of verification."
-        ),
-        args_schema=S.VerifyOtpArgs,
-        category=ToolCategory.VERIFICATION,
-    ),
-    "submit_verification_mobile": ToolDefinition(
-        name="submit_verification_mobile",
-        description=(
-            "Pass the mobile number the customer typed into the verification script. "
-            "Use only when the bot is on the mobile step (after email+OTP succeed)."
-        ),
-        args_schema=S.SubmitVerificationMobileArgs,
-        category=ToolCategory.VERIFICATION,
-    ),
-    "send_otp_resend": ToolDefinition(
-        name="send_otp_resend",
-        description="Re-send the OTP to the email currently on file for this turn.",
-        args_schema=S.ResendOtpArgs,
         category=ToolCategory.VERIFICATION,
     ),
     # ── Account data (gated: verified=True only) ────────────────────────────

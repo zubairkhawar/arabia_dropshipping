@@ -23,8 +23,7 @@ class TestRegistryShape:
     def test_minimum_tools_present(self) -> None:
         names = set(available_tool_names())
         for required in (
-            "start_verification",
-            "verify_otp",
+            "start_verification",  # only verification tool exposed; OTP/email/mobile owned by deterministic flow
             "lookup_order",
             "lookup_orders_by_range",
             "list_invoices",
@@ -99,11 +98,20 @@ class TestVerificationGating:
         for not_yet in ("verify_otp", "submit_verification_email", "submit_verification_mobile", "send_otp_resend"):
             assert not_yet not in names
 
-    def test_unverified_in_flow_includes_otp_tools(self) -> None:
+    def test_unverified_in_flow_only_has_start_verification(self) -> None:
+        """The deterministic state machine owns email/OTP/mobile parsing once
+        a verification flow is active. The LLM only ever calls
+        `start_verification` to enter the flow — any subsequent turn while in
+        a verification step is handled by the legacy handlers (control plane
+        falls back). So the LLM never needs submit_* / verify_otp tools."""
         tools = tools_for_verification_state(verified=False, in_verification_flow=True)
         names = {t.name for t in tools}
-        for verif in ("start_verification", "verify_otp", "submit_verification_email", "submit_verification_mobile"):
-            assert verif in names
+        assert "start_verification" in names
+        # These submit_* tools were intentionally removed from the registry —
+        # see langchain_bot/tools/registry.py docstring for the WhatsApp
+        # transcript regression that motivated it.
+        for removed in ("verify_otp", "submit_verification_email", "submit_verification_mobile", "send_otp_resend"):
+            assert removed not in names
         # Still no account_data while not verified.
         assert "lookup_order" not in names
 

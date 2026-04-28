@@ -103,11 +103,11 @@ EXPECTED_PUBLIC_TOOLS = frozenset(
 )
 EXPECTED_VERIFICATION_TOOLS = frozenset(
     {
+        # Only `start_verification` is exposed. email/OTP/mobile are owned by
+        # the deterministic state machine — letting the LLM call submit_* tools
+        # caused the LLM to "play verification" without actually advancing the
+        # flow (WhatsApp transcript regression on 2026-04-29).
         "start_verification",
-        "submit_verification_email",
-        "verify_otp",
-        "submit_verification_mobile",
-        "send_otp_resend",
     }
 )
 EXPECTED_ACCOUNT_DATA_TOOLS = frozenset(
