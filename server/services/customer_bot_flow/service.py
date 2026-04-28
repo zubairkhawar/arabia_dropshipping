@@ -513,6 +513,34 @@ def _looks_like_mobile_number(text: str) -> bool:
     return 9 <= len(digits) <= 15
 
 
+def _is_explicit_verification_consent(text: str) -> bool:
+    """Customer is explicitly saying 'yes do verification' / 'kro verify' /
+    'han verification' — they want to start the verification flow.
+
+    This is a deterministic safety net for cases where the LLM is supposed
+    to call ``start_verification`` but instead drafts a friendly text reply
+    without calling the tool. When this returns True and the customer is
+    unverified, the bootstrap deterministically advances to the email step.
+    """
+    s = (text or "").strip().lower()
+    if not s:
+        return False
+    has_verif_word = any(
+        token in s for token in ("verif", "verfy", "verifcation", "verficaton", "tasdeeq")
+    )
+    if not has_verif_word:
+        return False
+    has_affirmative = any(
+        re.search(rf"\b{re.escape(w)}\b", s)
+        for w in (
+            "han", "haan", "haa", "hanji", "ji", "yes", "ok", "okay",
+            "kro", "kar", "karo", "karna", "karein", "do", "start", "begin",
+            "yeah", "yup", "sure", "please",
+        )
+    )
+    return has_affirmative
+
+
 def _should_bail_from_verification(text: str, current_step: str) -> bool:
     """Return True when the customer's reply during a verification step is
     clearly NOT what the step expects, AND looks like a bail signal, an
@@ -1060,6 +1088,12 @@ def _looks_like_order_status_question(text: str) -> bool:
         k in t for k in (
             "where", "when", "status", "kab", "kahan", "maloom",
             "detail", "tafseel", "info", "show", "give me", "btao",
+            # Roman Urdu indirect-question phrasings — "k baray mein" / "janna hai"
+            # commonly mean "about" / "want to know" without explicit possessive.
+            "baray", "baare", "bare",
+            "janna", "jaanna",
+            "pooch", "puchh",
+            "tell", "explain",
         )
     )
     if has_order_domain and is_asking:
@@ -2885,8 +2919,17 @@ def _looks_like_invoice_for_order(text: str) -> bool:
     )
     if any(m in t for m in ru_invoice_followups):
         return True
-    if "invoice" in t and any(
-        w in t for w in ("bata", "btao", "batay", "dekha", "dikha", "against", "ke liye", "keliye")
+    # Tightened: 'invoice + verb' alone is over-broad — it false-fires on
+    # plural / account-wide queries like 'total invoices btao' / 'saari invoices'.
+    # Require an order-context hint so this only matches "the invoice OF an order".
+    has_order_context = (
+        "order" in t
+        or any(d in t for d in ("iska", "iskay", "iske", "iss ka", "is ka", "uss ka", "us ka", "iss ki", "us ki", "is ki"))
+    )
+    if (
+        "invoice" in t
+        and any(w in t for w in ("bata", "btao", "batay", "dekha", "dikha", "against", "ke liye", "keliye"))
+        and has_order_context
     ):
         return True
     return False
@@ -4355,11 +4398,29 @@ async def process_customer_bot_message(
         "existing_awaiting_verification_code",
         "existing_awaiting_mobile",
     }
+    # Verification ENTRY is also deterministic. The LLM-first orchestrator
+    # was unreliable at calling the start_verification tool — live transcript
+    # on 2026-04-29 showed the LLM drafting the verification dialogue itself
+    # ('Theek hai, pehle main aap ki verification kar leta hoon.') without
+    # actually calling the tool, so step never advanced. Restoring the
+    # deterministic bootstrap so the verification BUCKET truly owns its entry.
+    needs_verification_bootstrap = (
+        step == "conversational"
+        and not bool(flow.get("verified"))
+        and (
+            _looks_like_order_status_question(text)
+            or _is_likely_order_id_only(text)
+            or _looks_like_account_question(text)
+            or _looks_like_invoice_for_order(text)
+            or _is_explicit_verification_consent(text)
+            or bool(_extract_standalone_email(text))
+        )
+    )
     # Trending/non-trending product requests must bypass LLM-first routing and
     # go through the deterministic trending flow handler which queries the DB
     # and maintains a pagination cursor in Redis.
     wants_trending_now = _wants_trending_products(text) or _wants_non_trending_products(text)
-    if step not in otp_guard_steps and not wants_trending_now:
+    if step not in otp_guard_steps and not needs_verification_bootstrap and not wants_trending_now:
         nf = {
             **flow,
             "step": "conversational",
