@@ -4248,6 +4248,55 @@ async def process_customer_bot_message(
         skip = not bool(flow.get("verified"))
         kind = flow.get("customer_kind")
         ai_msg = f"[Customer question] {text}" if kind else text
+
+        # Phase 4.1: try LLM-first orchestrator (behind BOT_MODE flag).
+        # control_plane.run_one_turn returns fell_back=True when the tenant
+        # is in legacy mode or when this flow state is reserved for the
+        # deterministic state machine; in that case we fall through to
+        # ai_forward() (the existing path) and behaviour is unchanged.
+        try:
+            from langchain_bot.control_plane import run_one_turn as _llm_first_run
+
+            _lf = await _llm_first_run(
+                db=db,
+                tenant_id=tenant_id,
+                customer_phone=phone or "",
+                conversation_id=conversation.id if conversation else None,
+                user_message=text,
+                language=flow_lang,
+                bot_flow=nf,
+                store_client=store_client,
+                agent_assigned=False,
+                customer_email=(
+                    flow.get("customer_email") if isinstance(flow, dict) else None
+                ),
+            )
+            if (
+                not _lf.fell_back
+                and _lf.reply_text
+                and not _lf.csv_signal
+                and not _lf.trending_signal
+            ):
+                _f_after = {**nf}
+                if (
+                    _lf.verification_signal
+                    and _lf.verification_signal.get("step") == "start"
+                ):
+                    # Advance into the legacy email-asking step so subsequent
+                    # turns use the deterministic OTP exchange.
+                    _f_after["customer_kind"] = "existing"
+                    _f_after["step"] = "existing_awaiting_email"
+                return save(
+                    _f_after,
+                    _lf.reply_text,
+                    esc=bool(_lf.escalation_signal),
+                    skip_api=True,
+                )
+        except Exception:
+            logger.exception(
+                "llm_first orchestrator attempt failed; falling through to legacy ai_forward"
+            )
+
         return ai_forward(ai_msg, nf, skip_api=skip)
 
     # Sets step awaiting_resume_choice; reply uses _RESUME_CHOICE_MSGS.

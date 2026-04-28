@@ -1,9 +1,32 @@
 """
-Verbatim customer-bot copy served by the API layer.
+Customer-bot template **protocol library**.
 
-These strings are injected by the customer bot flow engine only. The LLM must not
-invent or paraphrase welcome lines, onboarding menus, verification prompts, or
-other scripted steps — see langchain_bot/prompts.py.
+**Design rule (LLM-first redesign):**
+The LLM drafts; the control plane gates and executes; templates are the
+*protocol library* for messages whose exact bytes are contractually
+meaningful. Anything else — greetings, errors, explanations, summaries —
+is LLM-drafted via ``langchain_bot/orchestrator.py``.
+
+**A template earns its place in this file only if** at least one of these
+holds (call out the reason in a ``# protocol-reason: ...`` comment when
+adding a new entry):
+
+  * **branded contract** — exact wording is part of the brand / marketing
+    contract (e.g. the welcome menu).
+  * **security-critical placeholder** — wraps a substituted value that
+    the LLM must not be trusted to emit (e.g. ``{email}`` in OTP).
+  * **next-turn parser contract** — the bot's deterministic next-turn
+    parser depends on the wording (e.g. "reply 1 or 2").
+  * **format hint** — exact format examples matter
+    (e.g. ``+923...``, ``+971...`` in mobile-format help).
+  * **command literal** — message contains a literal command
+    the customer is meant to copy (e.g. ``/reset``).
+  * **flow milestone marker** — a string the flow code pattern-matches
+    later for state transitions (rare; prefer state flags).
+  * **failure fallback** — used when the LLM call itself hard-fails.
+
+If none of those apply, the message belongs in ``prompts.py`` as a rule
+the LLM follows, not here.
 """
 
 from typing import Any, Dict, Optional
