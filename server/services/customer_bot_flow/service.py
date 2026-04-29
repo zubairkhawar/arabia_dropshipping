@@ -2430,6 +2430,35 @@ def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
     }
 
 
+async def _enrich_order_with_invoice(
+    order: Dict[str, Any], store_client: StoreIntegrationClient
+) -> None:
+    """Best-effort: pull invoice mapping for an order and merge invoice_date /
+    invoice_payable / invoice_pay_status fields into ``order`` in place.
+    Silent on failure — if the order has no invoice yet (very common for
+    recently-placed orders) the function is a no-op and the caller's
+    formatter just skips the invoice block."""
+    try:
+        oid = str(order.get("order_number") or order.get("id") or "").lstrip("#").strip()
+        if not oid:
+            return
+        inv_map = await store_client.get_order_invoice_mapping(oid)
+        if not isinstance(inv_map, dict):
+            return
+        inv_inner = inv_map.get("invoice") if isinstance(inv_map.get("invoice"), dict) else inv_map
+        if not isinstance(inv_inner, dict):
+            return
+        if inv_inner.get("date"):
+            order["invoice_date"] = inv_inner.get("date")
+        payable = inv_inner.get("payable") or inv_inner.get("net_total")
+        if payable:
+            order["invoice_payable"] = payable
+        if inv_inner.get("pay_status"):
+            order["invoice_pay_status"] = inv_inner.get("pay_status")
+    except Exception:  # noqa: BLE001
+        logger.debug("invoice enrichment failed", exc_info=True)
+
+
 def _format_order_full_details(lang: str, o: Dict[str, Any]) -> str:
     """Multi-line breakdown of an order with everything the customer might
     want: date, status, tracking, items, totals, shipping, profit, invoice.
@@ -5258,8 +5287,9 @@ async def process_customer_bot_message(
                 seller_id=_flow_merchant_seller_id(flow),
             )
             if order:
+                await _enrich_order_with_invoice(order, store_client)
                 f = {**flow, "step": "conversational", "lang": flow_lang, "pending_order_ref": None}
-                return save(f, _format_order_sentence(flow_lang, order))
+                return save(f, _format_order_full_details(flow_lang, order))
             if src == "api_error":
                 return save(flow, _t(flow_lang, MSGS["order_lookup_error"]))
             # Not found → keep them in the email step; show not-found and
@@ -5478,7 +5508,8 @@ async def process_customer_bot_message(
                 seller_id=base_f.get("seller_id"),
             )
             if order:
-                parts = [intro_line, _format_order_sentence(flow_lang, order), _t(flow_lang, MSGS["verified_followup"])]
+                await _enrich_order_with_invoice(order, store_client)
+                parts = [intro_line, _format_order_full_details(flow_lang, order)]
                 return save(base_f, "\n\n".join(parts))
             if src == "api_error":
                 parts = [intro_line, _t(flow_lang, MSGS["order_lookup_error"]), _t(flow_lang, MSGS["verified_followup"])]
@@ -5523,28 +5554,7 @@ async def process_customer_bot_message(
             seller_id=_flow_merchant_seller_id(flow),
         )
         if order:
-            # Hydrate the order with invoice mapping so the full-details
-            # reply includes invoice date / payable / status without a
-            # second roundtrip via the LLM.
-            try:
-                inv_map = await store_client.get_order_invoice_mapping(
-                    str(order.get("order_number") or ref).lstrip("#")
-                )
-                if isinstance(inv_map, dict):
-                    inv_inner = inv_map.get("invoice") if isinstance(inv_map.get("invoice"), dict) else inv_map
-                    if isinstance(inv_inner, dict):
-                        if inv_inner.get("date"):
-                            order["invoice_date"] = inv_inner.get("date")
-                        if inv_inner.get("payable") or inv_inner.get("net_total"):
-                            order["invoice_payable"] = (
-                                inv_inner.get("payable") or inv_inner.get("net_total")
-                            )
-                        if inv_inner.get("pay_status"):
-                            order["invoice_pay_status"] = inv_inner.get("pay_status")
-            except Exception:  # noqa: BLE001
-                logger.debug(
-                    "order lookup: invoice mapping enrichment failed for %s", ref, exc_info=True
-                )
+            await _enrich_order_with_invoice(order, store_client)
             f = {**flow, "step": "conversational", "lang": flow_lang}
             return save(f, _format_order_full_details(flow_lang, order))
         f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
