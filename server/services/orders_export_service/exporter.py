@@ -59,7 +59,14 @@ def _order_items_text(order: Dict[str, Any]) -> str:
     return _pick_str(order, "details", "product_summary", "item_name", "product_name")
 
 
-def _invoices_from_merchant_payload(inv_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _invoices_from_merchant_payload(inv_payload: Any) -> List[Dict[str, Any]]:
+    """Accept any of:
+      * the new list-shape returned by ``StoreIntegrationClient.get_invoice_by_seller_id``
+      * the legacy ``{"invoices": [...]}`` dict
+      * the legacy ``{"invoice": {...}}`` singular-dict.
+    """
+    if isinstance(inv_payload, list):
+        return [x for x in inv_payload if isinstance(x, dict)]
     if not isinstance(inv_payload, dict) or not inv_payload:
         return []
     invs = inv_payload.get("invoices")
@@ -90,10 +97,9 @@ async def fetch_orders_and_invoices_for_export(
             all_invoices=True,
         )
         invoices = _invoices_from_merchant_payload(inv_payload)
-        if isinstance(inv_payload.get("orders"), list):
-            orders = [x for x in inv_payload.get("orders") if isinstance(x, dict)]
-        elif isinstance(inv_payload.get("data"), list):
-            orders = [x for x in inv_payload.get("data") if isinstance(x, dict)]
+        # `get_invoice_by_seller_id` now always returns a normalized list of
+        # invoice dicts (no embedded `orders` array). Orders are fetched via
+        # the `/orders/all` fallback below.
     except Exception:
         logger.exception("export: invoice fetch failed seller_id=%s", sid[:8])
 
