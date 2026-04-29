@@ -1102,10 +1102,27 @@ def _looks_like_order_status_question(text: str) -> bool:
 
 
 def _is_likely_order_id_only(text: str) -> bool:
+    """True only when ``text`` is plausibly an Arabia order id by itself.
+
+    Arabia order ids are 4–9 digit numbers (real range: ~5–7). A 10+ digit
+    digit string is a phone number, NOT an order id (transcript regression
+    on 2026-04-29 where the bot looked up the customer's typed mobile as
+    an order). Strings starting with ``+`` or with ``0`` followed by 9+
+    more digits are also rejected as phone-shaped.
+    """
     s = (text or "").strip()
     if len(s) < 4 or len(s) > 20:
         return False
-    return bool(re.fullmatch(r"[\d\-\s#]+", s))
+    if not re.fullmatch(r"[\d\-\s#]+", s):
+        return False
+    digits = re.sub(r"\D", "", s)
+    if not digits:
+        return False
+    if len(digits) > 9:
+        return False
+    if len(digits) >= 10 and digits.startswith("0"):
+        return False
+    return True
 
 
 def _is_likely_email(text: str) -> bool:

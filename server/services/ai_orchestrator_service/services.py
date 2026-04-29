@@ -179,26 +179,42 @@ def _customer_record_is_linked(customer: Optional[Dict[str, Any]]) -> bool:
 def _extract_order_id_from_message(message: str, phone: Optional[str]) -> Optional[str]:
     """
     Best-effort order reference from free text (e.g. "order 123432", "#123432").
-    Avoids treating the full WhatsApp phone number as an order id when possible.
+
+    Phone-shape rejection (transcript regression 2026-04-29):
+      Arabia order ids are typically 5-7 digits (max ~9). Any candidate
+      that is 10+ digits, OR starts with "0" and is 10+ digits, OR matches
+      the WhatsApp from-phone, is rejected as phone-shaped — even if the
+      customer prefixed it with "order", they almost certainly meant to
+      verify themselves, not look up an order.
     """
     if not (message or "").strip():
         return None
     phone_digits = re.sub(r"\D", "", phone or "")
+
+    def _phone_shaped(d: str) -> bool:
+        if not d:
+            return True
+        if phone_digits and d == phone_digits:
+            return True
+        if len(phone_digits) >= 10 and d in phone_digits and len(d) >= 8:
+            return True
+        # Standalone phone-shape: 10+ digits, leading "0" with 10+ length
+        if len(d) >= 10:
+            return True
+        return False
+
     for pattern in (
         r"(?i)\b(?:order|ord)\s+id\s*[#:\-]?\s*(\d{4,14})\b",
         r"(?i)\b(?:order|ord)\s*[#:\-]?\s*(\d{4,14})\b",
         r"#\s*(\d{4,14})\b",
     ):
         m = re.search(pattern, message)
-        if m:
+        if m and not _phone_shaped(m.group(1)):
             return m.group(1)
-    for m in re.finditer(r"\b(\d{5,12})\b", message):
+    for m in re.finditer(r"\b(\d{5,9})\b", message):
         cand = m.group(1)
-        if phone_digits and cand == phone_digits:
-            continue
-        if len(phone_digits) >= 10 and cand in phone_digits and len(cand) >= 8:
-            continue
-        return cand
+        if not _phone_shaped(cand):
+            return cand
     return None
 
 

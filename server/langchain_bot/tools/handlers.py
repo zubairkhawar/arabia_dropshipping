@@ -73,6 +73,18 @@ async def handle_lookup_order(args: S.LookupOrderArgs, ctx: ToolContext) -> Tool
     if guard:
         return guard
     order_id = args.order_id.lstrip("#").strip()
+    # Defence in depth: even if the LLM ignores its prompt rule, refuse to
+    # look up a clearly-phone-shaped string (10+ digits or leading 0/+ with
+    # 10+ digits). Arabia order ids are 5–7 digits; anything longer is a
+    # phone number, not an order. Returns 'not an order' so the LLM can
+    # ack briefly instead of presenting a confusing 'order not found'.
+    digits_only = "".join(c for c in order_id if c.isdigit())
+    if len(digits_only) >= 10 or (len(digits_only) >= 10 and digits_only.startswith("0")):
+        return ToolResult(
+            ok=False,
+            data={"requested": order_id},
+            error="not_an_order_id_phone_shaped",
+        )
     try:
         detail = await ctx.store_client.get_order_by_id(order_id, seller_id=ctx.seller_id)
         if not detail:
