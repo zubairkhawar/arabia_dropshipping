@@ -1076,8 +1076,10 @@ def _looks_like_order_status_question(text: str) -> bool:
     # Secondary gate: require both order-domain and "asking" intent.
     # Use word boundaries — substring "order" matches inside "inventory" and misroutes FAQ to verify.
     # Tolerate common typos of "order": orde, oder, ordr, ordre, oders, orderr, odrer.
+    # Note: \borders?\b matches both "order" and "orders" so plural Roman Urdu
+    # ("meray orders k baray mein janna hai") is correctly classified.
     has_order_domain = bool(
-        re.search(r"\border\b", t)
+        re.search(r"\borders?\b", t)
         or re.search(r"\b(?:orde|oder|ordr|ordre|oders|odrer|orderr+)\b", t)
         or re.search(r"\btracking\b", t)
         or re.search(r"\btrack\b", t)

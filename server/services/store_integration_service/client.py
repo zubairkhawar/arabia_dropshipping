@@ -416,6 +416,52 @@ class StoreIntegrationClient:
         except httpx.HTTPError:
             return []
 
+    async def _get_invoice_by_seller_id_once(
+        self,
+        seller_id: str,
+        date_from: Optional[str],
+        date_to: Optional[str],
+        all_invoices: bool,
+        invoice_id: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """One attempt — public method retries on transient failure."""
+        sid = (seller_id or "").strip()
+        if not sid and not (invoice_id or "").strip():
+            return []
+        params: Dict[str, Any] = {}
+        if sid:
+            params["seller_id"] = sid
+        if (date_from or "").strip():
+            params["date_from"] = date_from.strip()
+        if (date_to or "").strip():
+            params["date_to"] = date_to.strip()
+        if all_invoices:
+            params["all"] = 1
+        iid = (invoice_id or "").strip()
+        if iid:
+            params["invoice_id"] = iid
+        async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
+            resp = await client.get("/customers/invoice", params=params)
+            if resp.status_code >= 400:
+                return []
+            payload = resp.json()
+            if isinstance(payload, dict) and payload.get("success") is False:
+                return []
+            if not isinstance(payload, dict):
+                return []
+            data = payload.get("data")
+            if isinstance(data, list):
+                return [x for x in data if isinstance(x, dict)]
+            if not isinstance(data, dict):
+                return []
+            arr = data.get("invoices")
+            if isinstance(arr, list):
+                return [x for x in arr if isinstance(x, dict)]
+            single = data.get("invoice")
+            if isinstance(single, dict):
+                return [single]
+            return []
+
     async def get_invoice_by_seller_id(
         self,
         seller_id: str,
@@ -443,47 +489,25 @@ class StoreIntegrationClient:
         """
         if not self.base_url:
             return []
-        sid = (seller_id or "").strip()
-        if not sid and not (invoice_id or "").strip():
-            return []
-        params: Dict[str, Any] = {}
-        if sid:
-            params["seller_id"] = sid
-        if (date_from or "").strip():
-            params["date_from"] = date_from.strip()
-        if (date_to or "").strip():
-            params["date_to"] = date_to.strip()
-        if all_invoices:
-            params["all"] = 1
-        iid = (invoice_id or "").strip()
-        if iid:
-            params["invoice_id"] = iid
         try:
-            async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
-                resp = await client.get("/customers/invoice", params=params)
-                if resp.status_code >= 400:
-                    return []
-                payload = resp.json()
-                if isinstance(payload, dict) and payload.get("success") is False:
-                    return []
-                if not isinstance(payload, dict):
-                    return []
-                data = payload.get("data")
-                if isinstance(data, list):
-                    return [x for x in data if isinstance(x, dict)]
-                if not isinstance(data, dict):
-                    return []
-                # Plural array form
-                arr = data.get("invoices")
-                if isinstance(arr, list):
-                    return [x for x in arr if isinstance(x, dict)]
-                # Singular form
-                single = data.get("invoice")
-                if isinstance(single, dict):
-                    return [single]
-                return []
+            rows = await self._get_invoice_by_seller_id_once(
+                seller_id, date_from, date_to, all_invoices, invoice_id
+            )
+            if rows:
+                return rows
+            # Empty can mean genuinely none OR transient empty — retry once.
+            await asyncio.sleep(0.5)
+            return await self._get_invoice_by_seller_id_once(
+                seller_id, date_from, date_to, all_invoices, invoice_id
+            )
         except httpx.HTTPError:
-            return []
+            try:
+                await asyncio.sleep(0.5)
+                return await self._get_invoice_by_seller_id_once(
+                    seller_id, date_from, date_to, all_invoices, invoice_id
+                )
+            except httpx.HTTPError:
+                return []
 
     async def get_order_invoice_mapping(
         self, order_id: str
@@ -573,6 +597,11 @@ class StoreIntegrationClient:
     ) -> List[Dict[str, Any]]:
         """
         GET /orders/all?seller_id=...
+
+        Retries once on transient failure (the upstream is observably flaky on
+        wide-range queries — confirmed in the integration tests). Without this,
+        a single hiccup surfaces 'data fetch failed' to the customer for orders
+        that exist and would have succeeded on retry.
         """
         if not self.base_url:
             return []
@@ -586,7 +615,8 @@ class StoreIntegrationClient:
             params["date_from"] = date_from.strip()
         if (date_to or "").strip():
             params["date_to"] = date_to.strip()
-        try:
+
+        async def _fetch_once() -> List[Dict[str, Any]]:
             async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
                 resp = await client.get("/orders/all", params=params)
                 if resp.status_code >= 400:
@@ -599,8 +629,21 @@ class StoreIntegrationClient:
                 if isinstance(payload, list):
                     return [x for x in payload if isinstance(x, dict)]
                 return []
+
+        try:
+            rows = await _fetch_once()
+            if rows:
+                return rows
+            # Empty response can mean genuinely no orders OR transient empty
+            # response from the upstream. Retry once with a short backoff.
+            await asyncio.sleep(0.5)
+            return await _fetch_once()
         except httpx.HTTPError:
-            return []
+            try:
+                await asyncio.sleep(0.5)
+                return await _fetch_once()
+            except httpx.HTTPError:
+                return []
 
     async def fetch_orders_for_order_ids(
         self,
