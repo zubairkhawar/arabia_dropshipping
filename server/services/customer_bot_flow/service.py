@@ -2376,6 +2376,12 @@ def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
     """
     Normalize an order payload (from DB order_data JSON or external API) into
     a flat dict with every field the bot might display.
+
+    NOTE: when a customer asks 'tell me order details', the deterministic
+    formatter needs profit / shipping / items / customer fields too —
+    those used to be dropped at this normalization step, so the bot would
+    have to re-call lookup_order via the LLM (and fail on transient blips).
+    Now they're carried through.
     """
     return {
         "order_number": _pick(raw, "order_number", "order_id", "id") or ref,
@@ -2389,14 +2395,18 @@ def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
             "booking_date",
             "order_placed_date",
             "invoice_row_date",
+            "createdon",
         ),
         "status": _pick(raw, "status"),
-        "delivery_status": _pick(raw, "delivery_status", "fulfillment_status", "shipping_status"),
+        "delivery_status": _pick(raw, "delivery_status", "fulfillment_status", "shipping_status", "tracking_result"),
         "expected_delivery": _pick(raw, "expected_delivery", "estimated_delivery", "delivery_date", "expected_delivery_date"),
-        "tracking_id": _pick(raw, "tracking_id", "tracking_number", "awb_number", "awb"),
+        "tracking_id": _pick(raw, "tracking_id", "tracking_number", "awb_number", "awb", "shipped_ref"),
         "payment_status": _pick(raw, "payment_status", "invoice_pay_status"),
         "invoice_id": _pick(raw, "invoice_id", "invoice_number", "invoice_ref"),
         "invoice_amount": _pick(raw, "invoice_amount"),
+        "invoice_date": _pick(raw, "invoice_date", "invoice_row_date"),
+        "invoice_payable": _pick(raw, "invoice_payable", "payable"),
+        "invoice_pay_status": _pick(raw, "invoice_pay_status", "pay_status"),
         "return_status": _pick(raw, "return_status"),
         "return_date": _pick(raw, "return_date"),
         "return_charges": _pick(raw, "return_charges"),
@@ -2405,10 +2415,109 @@ def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
         "cancellation_type": _pick(raw, "cancellation_type"),
         "cancellation_reason": _pick(raw, "cancellation_reason"),
         "total_amount": _pick(
-            raw, "total_amount", "amount", "invoice_net_total", "invoice_payable"
+            raw, "total_amount", "amount", "invoice_net_total", "invoice_payable", "total", "grand_total", "cod_amount"
         ),
         "currency": _pick(raw, "currency"),
+        # Full-details fields — needed for the comprehensive order-detail reply.
+        "profit": _pick(raw, "profit", "seller_profit"),
+        "shipping_charges": _pick(raw, "shipping_charges", "shipping", "shipping_fee"),
+        "qty": _pick(raw, "qty", "quantity"),
+        "items": raw.get("items") if isinstance(raw.get("items"), list) else None,
+        "customer_name": _pick(raw, "name", "customer_name", "consignee"),
+        "customer_mobile": _pick(raw, "mobile", "customer_phone", "phone"),
+        "customer_address": _pick(raw, "address"),
+        "customer_city": _pick(raw, "city_name", "city"),
     }
+
+
+def _format_order_full_details(lang: str, o: Dict[str, Any]) -> str:
+    """Multi-line breakdown of an order with everything the customer might
+    want: date, status, tracking, items, totals, shipping, profit, invoice.
+
+    Used when the customer types an order id at the existing_awaiting_order_id
+    step — they get the full picture immediately, no follow-up needed.
+    Falls back gracefully when fields are missing.
+    """
+    oid = o.get("order_number") or "?"
+    date_s = (o.get("order_date") or "").strip()
+    status = (o.get("delivery_status") or o.get("status") or "").strip() or "Unknown"
+    tracking = (o.get("tracking_id") or "").strip()
+    profit = o.get("profit")
+    shipping = o.get("shipping_charges")
+    qty = o.get("qty")
+    total = o.get("total_amount")
+    items = o.get("items") if isinstance(o.get("items"), list) else []
+    inv_date = (o.get("invoice_date") or "").strip()
+    inv_payable = o.get("invoice_payable")
+    inv_paid = (o.get("invoice_pay_status") or "").strip()
+    cancelled = (o.get("status") or "").lower() in {"cancelled", "canceled"}
+
+    if lang == "roman_urdu":
+        L = {
+            "head": f"📦 *Order #{oid}* ki details:",
+            "date": "Order date", "status": "Status", "tracking": "Tracking",
+            "items": "Items", "total": "Selling price (COD)", "shipping": "Shipping charges",
+            "profit": "Profit", "invoice": "Invoice", "payable": "Payable", "paid": "Status",
+            "currency_aed": "AED", "qty_of": "x",
+        }
+    elif lang == "arabic":
+        L = {
+            "head": f"📦 *تفاصيل الطلب #{oid}*:",
+            "date": "تاريخ الطلب", "status": "الحالة", "tracking": "رقم التتبع",
+            "items": "المنتجات", "total": "سعر البيع (COD)", "shipping": "رسوم الشحن",
+            "profit": "الربح", "invoice": "الفاتورة", "payable": "المستحق", "paid": "الحالة",
+            "currency_aed": "AED", "qty_of": "x",
+        }
+    else:
+        L = {
+            "head": f"📦 *Order #{oid}* details:",
+            "date": "Order date", "status": "Status", "tracking": "Tracking",
+            "items": "Items", "total": "Selling price (COD)", "shipping": "Shipping",
+            "profit": "Profit", "invoice": "Invoice", "payable": "Payable", "paid": "Status",
+            "currency_aed": "AED", "qty_of": "x",
+        }
+
+    lines: List[str] = [L["head"]]
+    if date_s:
+        lines.append(f"• {L['date']}: {date_s}")
+    lines.append(f"• {L['status']}: {status}")
+    if tracking and not cancelled:
+        lines.append(f"• {L['tracking']}: {tracking}")
+    if items:
+        item_strs = []
+        for it in items[:5]:
+            if not isinstance(it, dict):
+                continue
+            title = (it.get("title") or it.get("product_name") or "").strip()
+            iqty = it.get("qty") or it.get("quantity") or 1
+            iprice = it.get("price")
+            piece = title or "item"
+            if iqty:
+                piece = f"{piece} {L['qty_of']} {iqty}"
+            if iprice:
+                piece += f" @ {iprice}"
+            item_strs.append(piece)
+        if item_strs:
+            lines.append(f"• {L['items']}: {'; '.join(item_strs)}")
+    elif qty:
+        lines.append(f"• Qty: {qty}")
+    if total and not cancelled:
+        lines.append(f"• {L['total']}: {total} {L['currency_aed']}")
+    if shipping and not cancelled:
+        lines.append(f"• {L['shipping']}: {shipping} {L['currency_aed']}")
+    if profit and not cancelled:
+        lines.append(f"• {L['profit']}: {profit} {L['currency_aed']}")
+    if inv_date or inv_payable:
+        inv_pieces: List[str] = []
+        if inv_date:
+            inv_pieces.append(inv_date)
+        if inv_payable:
+            inv_pieces.append(f"{L['payable']} {inv_payable} {L['currency_aed']}")
+        if inv_paid:
+            inv_pieces.append(f"{L['paid']}: {inv_paid}")
+        if inv_pieces:
+            lines.append(f"• {L['invoice']}: " + " · ".join(inv_pieces))
+    return "\n".join(lines)
 
 
 def _flow_merchant_seller_id(flow: Dict[str, Any]) -> Optional[str]:
@@ -2475,14 +2584,12 @@ async def _lookup_order(
     if not detail and sid:
         try:
             df, dt = _orders_list_date_window()
-            invp = await store_client.get_invoice_by_seller_id(
+            inv_rows = await store_client.get_invoice_by_seller_id(
                 sid, date_from=df, date_to=dt, all_invoices=True
-            )
-            inv_rows: List[Dict[str, Any]] = []
-            if isinstance(invp.get("invoices"), list):
-                inv_rows = [x for x in invp["invoices"] if isinstance(x, dict)]
-            elif isinstance(invp.get("invoice"), dict):
-                inv_rows = [invp["invoice"]]
+            ) or []
+            # `get_invoice_by_seller_id` now always returns a normalized list
+            # of dicts (see client.py refactor). Treat it as a list, not a dict.
+            inv_rows = [x for x in inv_rows if isinstance(x, dict)]
             stub = synthetic_order_stub_from_invoices(inv_rows, ref)
             if stub:
                 detail = stub
@@ -5416,8 +5523,30 @@ async def process_customer_bot_message(
             seller_id=_flow_merchant_seller_id(flow),
         )
         if order:
+            # Hydrate the order with invoice mapping so the full-details
+            # reply includes invoice date / payable / status without a
+            # second roundtrip via the LLM.
+            try:
+                inv_map = await store_client.get_order_invoice_mapping(
+                    str(order.get("order_number") or ref).lstrip("#")
+                )
+                if isinstance(inv_map, dict):
+                    inv_inner = inv_map.get("invoice") if isinstance(inv_map.get("invoice"), dict) else inv_map
+                    if isinstance(inv_inner, dict):
+                        if inv_inner.get("date"):
+                            order["invoice_date"] = inv_inner.get("date")
+                        if inv_inner.get("payable") or inv_inner.get("net_total"):
+                            order["invoice_payable"] = (
+                                inv_inner.get("payable") or inv_inner.get("net_total")
+                            )
+                        if inv_inner.get("pay_status"):
+                            order["invoice_pay_status"] = inv_inner.get("pay_status")
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "order lookup: invoice mapping enrichment failed for %s", ref, exc_info=True
+                )
             f = {**flow, "step": "conversational", "lang": flow_lang}
-            return save(f, _format_order_sentence(flow_lang, order))
+            return save(f, _format_order_full_details(flow_lang, order))
         f = {**flow, "step": "existing_awaiting_order_id", "lang": flow_lang}
         if src == "api_error":
             return save(f, _t(flow_lang, MSGS["order_lookup_error"]))
