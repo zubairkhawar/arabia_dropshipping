@@ -104,12 +104,18 @@ async def handle_lookup_order(args: S.LookupOrderArgs, ctx: ToolContext) -> Tool
 # ─────────────────────────────────────────────────────────────────────────────
 def _aggregate_order_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Compact stats over a list of orders so the LLM can answer
-    'profit of last 30 days' / 'tracking numbers of last 30 days orders'
-    without needing the full list (which can be hundreds of rows)."""
+    'profit of last 30 days' / 'returned orders kitny hain?' /
+    'delivery ratio kya hai?' / 'top city kaunsi hai?' / 'best product?'
+    without needing the full list (which can be hundreds of rows).
+    """
     total_profit = 0.0
     total_shipping = 0.0
     total_qty = 0
     by_status: Dict[str, int] = {}
+    by_city: Dict[str, int] = {}
+    by_product: Dict[str, int] = {}     # qty across items
+    by_month: Dict[str, int] = {}        # YYYY-MM → count
+    profit_by_month: Dict[str, float] = {}
     tracking_numbers: List[str] = []
     delivered = 0
     returned = 0
@@ -118,7 +124,8 @@ def _aggregate_order_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        total_profit += _safe_float(row.get("profit"))
+        order_profit = _safe_float(row.get("profit"))
+        total_profit += order_profit
         total_shipping += _safe_float(row.get("shipping_charges"))
         try:
             total_qty += int(row.get("qty") or 0)
@@ -127,7 +134,7 @@ def _aggregate_order_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         status_raw = (row.get("tracking_result") or row.get("status") or "").strip() or "Unknown"
         by_status[status_raw] = by_status.get(status_raw, 0) + 1
         s_low = status_raw.lower()
-        if "deliver" in s_low:
+        if "deliver" in s_low and "return" not in s_low:
             delivered += 1
         elif "return" in s_low:
             returned += 1
@@ -138,6 +145,37 @@ def _aggregate_order_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         tn = (row.get("shipped_ref") or "").strip()
         if tn:
             tracking_numbers.append(tn)
+        city = (row.get("city_name") or "").strip() or "Unknown"
+        by_city[city] = by_city.get(city, 0) + 1
+        items = row.get("items")
+        if isinstance(items, list):
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                title = (it.get("title") or "").strip() or "Unknown"
+                try:
+                    item_qty = int(it.get("qty") or 1)
+                except (TypeError, ValueError):
+                    item_qty = 1
+                by_product[title] = by_product.get(title, 0) + item_qty
+        # createdon = "YYYY-MM-DD HH:MM:SS"
+        created = (row.get("createdon") or "").strip()
+        if len(created) >= 7:
+            ym = created[:7]
+            by_month[ym] = by_month.get(ym, 0) + 1
+            profit_by_month[ym] = round(profit_by_month.get(ym, 0.0) + order_profit, 2)
+
+    total = len(rows)
+    delivery_ratio_pct = round((delivered / total * 100), 2) if total else 0.0
+    return_ratio_pct = round((returned / total * 100), 2) if total else 0.0
+    cancel_ratio_pct = round((cancelled / total * 100), 2) if total else 0.0
+    avg_profit = round((total_profit / total), 2) if total else 0.0
+    avg_shipping = round((total_shipping / total), 2) if total else 0.0
+
+    def _topn(d: Dict[str, Any], n: int = 5) -> List[Dict[str, Any]]:
+        items = sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:n]
+        return [{"name": k, "count": v} for k, v in items]
+
     return {
         "total_profit": round(total_profit, 2),
         "total_shipping": round(total_shipping, 2),
@@ -146,7 +184,16 @@ def _aggregate_order_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "returned": returned,
         "pending_or_other": pending,
         "cancelled": cancelled,
+        "delivery_ratio_pct": delivery_ratio_pct,
+        "return_ratio_pct": return_ratio_pct,
+        "cancel_ratio_pct": cancel_ratio_pct,
+        "avg_profit_per_order": avg_profit,
+        "avg_shipping_per_order": avg_shipping,
         "by_status": by_status,
+        "top_cities": _topn(by_city, 5),
+        "top_products": _topn(by_product, 5),
+        "by_month": by_month,
+        "profit_by_month": profit_by_month,
         "tracking_numbers": tracking_numbers,
     }
 
@@ -187,7 +234,16 @@ async def handle_lookup_orders_by_range(
                     "returned": agg["returned"],
                     "pending_or_other": agg["pending_or_other"],
                     "cancelled": agg["cancelled"],
+                    "delivery_ratio_pct": agg["delivery_ratio_pct"],
+                    "return_ratio_pct": agg["return_ratio_pct"],
+                    "cancel_ratio_pct": agg["cancel_ratio_pct"],
+                    "avg_profit_per_order": agg["avg_profit_per_order"],
+                    "avg_shipping_per_order": agg["avg_shipping_per_order"],
                     "by_status": agg["by_status"],
+                    "top_cities": agg["top_cities"],
+                    "top_products": agg["top_products"],
+                    "by_month": agg["by_month"],
+                    "profit_by_month": agg["profit_by_month"],
                 },
                 "tracking_numbers": tracking_capped,
                 "tracking_numbers_truncated": len(agg["tracking_numbers"]) > len(tracking_capped),
