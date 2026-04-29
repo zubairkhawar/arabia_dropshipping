@@ -182,13 +182,41 @@ async def run_turn(
 
     result = OrchestratorResult(reply_text="")
     max_iters = max(1, int(getattr(settings, "llm_max_tool_calls_per_turn", 2)) + 1)
+    # Retry budget for transient LLM failures (timeouts, 429, network blips).
+    # Mirrors what bot.py legacy path does — without this, a single hiccup
+    # surfaces 'Hamare server par mukhtasar technical masla hua hai' to the
+    # customer for a question the LLM could absolutely answer on retry.
+    _LLM_CALL_RETRIES = 2  # total attempts per LLM invocation
+    _LLM_CALL_BACKOFF_S = 2.0
+
+    import asyncio as _asyncio
+
+    async def _ainvoke_with_retry() -> Any:
+        last_exc: Optional[Exception] = None
+        for attempt in range(_LLM_CALL_RETRIES):
+            try:
+                return await llm_with_tools.ainvoke(messages)
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                status_code = getattr(exc, "status_code", None) or getattr(
+                    getattr(exc, "response", None), "status_code", None
+                )
+                if attempt < _LLM_CALL_RETRIES - 1:
+                    logger.warning(
+                        "orchestrator LLM call failed (attempt %d, status=%s, type=%s) — retrying",
+                        attempt + 1, status_code, type(exc).__name__,
+                    )
+                    await _asyncio.sleep(_LLM_CALL_BACKOFF_S)
+        if last_exc is not None:
+            raise last_exc
+        return None
 
     for iteration in range(max_iters):
         try:
             with LLMCallTimer(
                 model=model_name, customer_phone=customer_phone, tenant_id=tenant_id
             ) as timer:
-                response = await llm_with_tools.ainvoke(messages)
+                response = await _ainvoke_with_retry()
                 # Best-effort token bookkeeping
                 usage = getattr(response, "response_metadata", {}).get("token_usage", {})
                 timer.input_tokens = int(usage.get("prompt_tokens", 0) or 0)
@@ -196,7 +224,7 @@ async def run_turn(
                 timer.tool_calls = len(getattr(response, "tool_calls", []) or [])
         except Exception as exc:  # noqa: BLE001
             logger.exception(
-                "orchestrator LLM call failed (iter=%d, model=%s)", iteration, model_name
+                "orchestrator LLM call failed (iter=%d, model=%s) after retries", iteration, model_name
             )
             return OrchestratorResult(
                 reply_text=llm_unavailable_reply(language),
