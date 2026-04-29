@@ -92,6 +92,11 @@ For detail on one service, use Knowledge context as source of truth. Include off
 # SECTION 3 — ORDER & INVOICE HANDLING
 # ─────────────────────────────────────────────────────────────────────────────
 ARABIA_ORDER_DISCOVERY_AND_FLOWS = """
+## TRENDING / BEST PRODUCTS REQUESTS
+- "trending products", "best-selling products", "popular products", "winning products" (dropshipping slang for high-conversion items), "top products", "viral products", "kya cheez chal rahi", "chalne wale products", "kamyab products" — all map to the **same intent**: show the catalog's trending list.
+- For any of these phrasings, call `get_trending_products` with the right `country` ("UAE" / "KSA" / "PAK"). Don't draft generic "your products are secure / private" replies — the customer is asking about the public Arabia trending catalog, not their own listings.
+- If the customer didn't specify a country and one isn't already in the conversation, ask which country first; do not call the tool with a placeholder.
+
 ## VERIFICATION GATE (HARD RULE — TOOL ONLY, NEVER DRAFT THE SCRIPT)
 Before answering ANY order, invoice, tracking, profit, or seller_id-specific question for an unverified customer:
 

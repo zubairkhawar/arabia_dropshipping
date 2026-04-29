@@ -2086,6 +2086,18 @@ def _wants_trending_products(text: str) -> bool:
         "products batao",
         "product btao",
         "product batao",
+        # 'Winning product' is dropshipping slang for high-conversion products —
+        # treat as a trending intent. Roman Urdu spellings included.
+        "winning product",
+        "winning products",
+        "wining product",
+        "winning ka product",
+        "kamyab product",
+        "chalty product",
+        "chalti product",
+        "chalne wale product",
+        "viral product",
+        "high conversion product",
     )
     # Normalize plural→singular for broader matching
     flat_singular = flat.replace("products", "product")
@@ -4410,12 +4422,28 @@ async def process_customer_bot_message(
     #   ③ Sourcing data collection (structured intake → handoff)
     #   ④ Active agent handoff queue
     # Everything else is routed through the LLM-first orchestrator.
+    # All steps where the deterministic state machine MUST own the turn.
+    # Adding a step here means LLM-first will not run for messages received
+    # while flow.step matches — preserving state-machine guarantees for the
+    # 4 deterministic buckets (verification, pagination, sourcing, handoff).
     otp_guard_steps = {
+        # Verification bucket
         "awaiting_customer_type",
         "awaiting_resume_choice",
         "existing_awaiting_email",
         "existing_awaiting_verification_code",
         "existing_awaiting_mobile",
+        "existing_awaiting_order_id",
+        "existing_awaiting_experience",
+        # Pagination bucket — trending / non-trending cursor must own '1'/'2'/'3'
+        # menu replies, 'show me more' / 'aur dikhao', and product detail
+        # selection. Without this guard, '1' (a country pick) leaks to LLM-first.
+        "trending_awaiting_country",
+        "trending_showing_products",
+        # Sourcing bucket — structured data collection
+        "sourcing_collecting_details",
+        # Handoff bucket
+        "awaiting_agent",
     }
     # Verification ENTRY is also deterministic. The LLM-first orchestrator
     # was unreliable at calling the start_verification tool — live transcript
