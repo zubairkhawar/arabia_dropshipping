@@ -4600,11 +4600,35 @@ async def process_customer_bot_message(
         if choice == "existing":
             if mem_id:
                 ConversationMemory.store_bot_customer_kind(mem_id, "existing")
+            # Carry the original question's reason into verify_reason. Otherwise
+            # the post-verification path can't tell the customer's original ask
+            # was about orders, defaults reason to None / "account", and routes
+            # through ai_forward — which surfaces 'data fetch failed' on any
+            # transient API blip. Reading from pending_intent keeps the
+            # verification-bucket flow deterministic end to end.
+            existing_reason: Optional[str] = None
+            existing_pre_ref: Optional[str] = None
+            if mem_id:
+                _pinfo = ConversationMemory.get_pending_intent(mem_id) or {}
+                _orig_q = (str(_pinfo.get("original_question") or "")).strip()
+                if _orig_q:
+                    if (
+                        _looks_like_order_status_question(_orig_q)
+                        or _is_likely_order_id_only(_orig_q)
+                        or _looks_like_invoice_for_order(_orig_q)
+                    ):
+                        existing_reason = "order"
+                    elif _looks_like_account_question(_orig_q):
+                        existing_reason = "account"
+                    extracted = _extract_order_id_from_message(_orig_q, phone) or ""
+                    extracted = extracted.strip()
+                    if extracted:
+                        existing_pre_ref = extracted
             f_ex, msg_ex = _existing_identity_entry(
                 flow,
                 flow_lang,
-                verify_reason=None,
-                pending_order_ref=None,
+                verify_reason=existing_reason,
+                pending_order_ref=existing_pre_ref,
                 intro_key="ask_email",
             )
             return save(f_ex, msg_ex)
