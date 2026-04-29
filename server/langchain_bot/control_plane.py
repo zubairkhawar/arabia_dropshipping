@@ -148,6 +148,50 @@ class TurnResult:
     fallback_reason: Optional[str] = None
 
 
+def _load_recent_conversation_history(db: Session, conversation_id: Optional[int], limit: int = 8) -> str:
+    """Pull the last N turns from the DB so the LLM can resolve references
+    like 'tell me order details' (referring to an order id from the
+    previous turn). Without this the orchestrator runs blind and the LLM
+    either calls tools with hallucinated args OR drafts confused 'Store
+    API error' replies from prompt rules that don't actually apply.
+
+    Best-effort: returns "None" if conversation_id is missing or the query
+    fails — never raises.
+    """
+    if not conversation_id:
+        return "None"
+    try:
+        from sqlalchemy import desc
+
+        from models import Message
+
+        rows = (
+            db.query(Message)
+            .filter(Message.conversation_id == conversation_id)
+            .order_by(desc(Message.id))
+            .limit(limit)
+            .all()
+        )
+        rows.reverse()
+        if not rows:
+            return "None"
+        lines = []
+        for m in rows:
+            label = (
+                "Customer"
+                if m.sender_type == "customer"
+                else ("Agent" if m.sender_type == "agent" else "Bot")
+            )
+            body = (m.content or "").strip().replace("\n", " ")
+            if len(body) > 400:
+                body = body[:397] + "..."
+            lines.append(f"{label}: {body}")
+        return "\n".join(lines)
+    except Exception:
+        logger.debug("load_recent_conversation_history failed", exc_info=True)
+        return "None"
+
+
 async def run_one_turn(
     *,
     db: Session,
@@ -191,6 +235,36 @@ async def run_one_turn(
         len(allowed),
     )
 
+    # Build the LLM context blocks. Critically, include recent conversation
+    # history so multi-turn references ('Tell me order details' after the
+    # customer just typed an order id) resolve correctly. Without this, the
+    # LLM runs blind and either calls tools with hallucinated args or drafts
+    # a 'Store API error' message from a prompt rule that doesn't apply.
+    blocks: Dict[str, str] = dict(extra_context_blocks or {})
+    if "conversation_history" not in blocks:
+        blocks["conversation_history"] = _load_recent_conversation_history(db, conversation_id)
+    # Include a brief identity hint so the LLM knows the customer is verified
+    # and which seller scope is active, without re-fetching all orders/invoices.
+    if "customer_context" not in blocks and bool(bot_flow.get("verified")):
+        sid = bot_flow.get("seller_id")
+        cust_name = (
+            (bot_flow.get("verified_customer") or {}).get("name")
+            if isinstance(bot_flow.get("verified_customer"), dict)
+            else None
+        )
+        identity_lines = ["Customer verification status: VERIFIED."]
+        if sid:
+            identity_lines.append(f"Seller scope: seller_id={sid}.")
+        if cust_name:
+            identity_lines.append(f"Customer/store name: {cust_name}.")
+        identity_lines.append(
+            "When the customer references an order id from earlier in the conversation, "
+            "call lookup_order with that id. If they ask 'tell me order details' or "
+            "similar without naming a new id, look at conversation_history above for the "
+            "most recent order id mentioned and use that."
+        )
+        blocks["customer_context"] = "\n".join(identity_lines)
+
     orch_result: OrchestratorResult = await run_turn(
         db=db,
         tenant_id=tenant_id,
@@ -201,7 +275,7 @@ async def run_one_turn(
         bot_flow=bot_flow,
         store_client=store_client,
         allowed_tools=allowed,
-        extra_context_blocks=extra_context_blocks,
+        extra_context_blocks=blocks,
     )
 
     redacted = redact_pii(
