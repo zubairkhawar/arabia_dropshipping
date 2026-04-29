@@ -403,7 +403,24 @@ def _existing_identity_entry(
 ) -> Tuple[Dict[str, Any], str]:
     """
     Start existing-customer identity using verification-first flow.
+
+    The message is the short ``ask_email`` template — the verbose
+    account_verify_intro / order_verify_intro intros were removed per
+    request 2026-04-29 (the menu before this step already explained the
+    1/2 choice; adding a 200-word intro before asking for the email
+    just delays the flow). The expired-reverify intro is kept because
+    customers who came back after expiry need to know why they are
+    being re-prompted; it's still concise.
     """
+    if intro_key == "verification_expired_reverify":
+        # Concise expired-reverify message + email ask, separated by blank line.
+        message = (
+            _t(flow_lang, MSGS["verification_expired_reverify"]).strip()
+            + "\n\n"
+            + _t(flow_lang, MSGS["ask_email"]).strip()
+        )
+    else:
+        message = _t(flow_lang, MSGS["ask_email"])
     return (
         {
             **flow,
@@ -413,7 +430,7 @@ def _existing_identity_entry(
             "verify_reason": verify_reason,
             "pending_order_ref": pending_order_ref or None,
         },
-        _t(flow_lang, MSGS[intro_key]),
+        message,
     )
 
 
@@ -4767,7 +4784,18 @@ async def process_customer_bot_message(
         order_escape = _maybe_escape_trending_for_order_intent(text)
         if order_escape is not None:
             return order_escape
-        llm_res = await _try_trending_llm()
+
+        # Pagination short-circuit: if the customer's message is unambiguously
+        # 'show more' / 'aur dikhao' / 'next' / etc., DO NOT invoke the LLM
+        # trending runner — pagination is a pure cursor advance. Calling the
+        # LLM here is wasteful AND brittle: a transient rate limit on the
+        # trending runner caused 'Hamare server par mukhtasar technical
+        # masla' to surface to a customer who just typed 'Aur dikhao'
+        # (transcript 2026-04-29 14:28). Falling through to the existing
+        # `_wants_trending_more(text)` branch below handles it deterministically.
+        _is_pagination_only = _wants_trending_more(text)
+
+        llm_res = None if _is_pagination_only else await _try_trending_llm()
         if llm_res is not None:
             return llm_res
         cache_raw = flow.get("trending_products_cache")
@@ -5078,14 +5106,21 @@ async def process_customer_bot_message(
             nf = {**_bail_to_conversational(flow, flow_lang), "customer_kind": "new"}
             return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
 
-        # 1) Short-circuit: if the user just shares an order id, look it up
-        #    without requiring email verification. Possession of the order id
-        #    is itself proof enough for a single-order lookup.
+        # 1) Short-circuit: if the user just shares an order id, try a scoped
+        #    lookup. WITHOUT a seller_id (i.e. before verification finishes)
+        #    the upstream API can't resolve the order to a customer, so we
+        #    must NOT show "order not found" — that's misleading. Instead we
+        #    stash the ref in pending_order_ref and continue asking for email;
+        #    the post-verification path will look it up once seller_id is set.
         maybe_ref = ""
         if _is_likely_order_id_only(text):
             maybe_ref = re.sub(r"[^\d\-#]", "", (text or "").strip()) or (text or "").strip()
         else:
             maybe_ref = (_extract_order_id_from_message(text, phone) or "").strip()
+        if maybe_ref and not _flow_merchant_seller_id(flow):
+            # Pre-verification: stash the ref and keep asking for email.
+            nf = {**flow, "pending_order_ref": maybe_ref}
+            return save(nf, _t(flow_lang, MSGS["ask_email"]))
         if maybe_ref:
             order, src = await _lookup_order(
                 db, tenant_id, maybe_ref, store_client,
