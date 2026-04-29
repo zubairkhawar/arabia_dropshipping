@@ -102,6 +102,55 @@ async def handle_lookup_order(args: S.LookupOrderArgs, ctx: ToolContext) -> Tool
 # ─────────────────────────────────────────────────────────────────────────────
 # Handler: lookup_orders_by_range
 # ─────────────────────────────────────────────────────────────────────────────
+def _aggregate_order_stats(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compact stats over a list of orders so the LLM can answer
+    'profit of last 30 days' / 'tracking numbers of last 30 days orders'
+    without needing the full list (which can be hundreds of rows)."""
+    total_profit = 0.0
+    total_shipping = 0.0
+    total_qty = 0
+    by_status: Dict[str, int] = {}
+    tracking_numbers: List[str] = []
+    delivered = 0
+    returned = 0
+    pending = 0
+    cancelled = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        total_profit += _safe_float(row.get("profit"))
+        total_shipping += _safe_float(row.get("shipping_charges"))
+        try:
+            total_qty += int(row.get("qty") or 0)
+        except (TypeError, ValueError):
+            pass
+        status_raw = (row.get("tracking_result") or row.get("status") or "").strip() or "Unknown"
+        by_status[status_raw] = by_status.get(status_raw, 0) + 1
+        s_low = status_raw.lower()
+        if "deliver" in s_low:
+            delivered += 1
+        elif "return" in s_low:
+            returned += 1
+        elif "cancel" in s_low:
+            cancelled += 1
+        else:
+            pending += 1
+        tn = (row.get("shipped_ref") or "").strip()
+        if tn:
+            tracking_numbers.append(tn)
+    return {
+        "total_profit": round(total_profit, 2),
+        "total_shipping": round(total_shipping, 2),
+        "total_qty": total_qty,
+        "delivered": delivered,
+        "returned": returned,
+        "pending_or_other": pending,
+        "cancelled": cancelled,
+        "by_status": by_status,
+        "tracking_numbers": tracking_numbers,
+    }
+
+
 async def handle_lookup_orders_by_range(
     args: S.LookupOrdersByRangeArgs, ctx: ToolContext
 ) -> ToolResult:
@@ -118,6 +167,9 @@ async def handle_lookup_orders_by_range(
         )
         rows = list(rows or [])
         truncated = len(rows) > 5
+        agg = _aggregate_order_stats(rows)
+        # Cap tracking_numbers list to avoid blowing the LLM context for huge ranges.
+        tracking_capped = agg["tracking_numbers"][:50]
         return ToolResult(
             ok=True,
             data={
@@ -127,6 +179,18 @@ async def handle_lookup_orders_by_range(
                 "total_count": len(rows),
                 "sample": rows[:5],
                 "truncated": truncated,
+                "aggregate": {
+                    "total_profit": agg["total_profit"],
+                    "total_shipping": agg["total_shipping"],
+                    "total_qty": agg["total_qty"],
+                    "delivered": agg["delivered"],
+                    "returned": agg["returned"],
+                    "pending_or_other": agg["pending_or_other"],
+                    "cancelled": agg["cancelled"],
+                    "by_status": agg["by_status"],
+                },
+                "tracking_numbers": tracking_capped,
+                "tracking_numbers_truncated": len(agg["tracking_numbers"]) > len(tracking_capped),
             },
         )
     except Exception as exc:  # noqa: BLE001
@@ -142,13 +206,22 @@ def _is_paid(status: Any) -> bool:
     return s in ("yes", "paid", "true", "1")
 
 
+_WIDE_RANGE_FROM = "2020-01-01"
+
+
+def _wide_today() -> str:
+    return date.today().isoformat()
+
+
 async def handle_list_invoices(args: S.ListInvoicesArgs, ctx: ToolContext) -> ToolResult:
     guard = _require_verified(ctx, "list_invoices")
     if guard:
         return guard
     try:
-        df = args.date_from.isoformat() if args.date_from else None
-        dt = args.date_to.isoformat() if args.date_to else None
+        # Without dates the upstream API returns only the single latest invoice;
+        # use a wide range so 'list invoices' / 'kitni invoices' is accurate.
+        df = args.date_from.isoformat() if args.date_from else _WIDE_RANGE_FROM
+        dt = args.date_to.isoformat() if args.date_to else _wide_today()
         rows = await ctx.store_client.get_invoice_by_seller_id(
             seller_id=ctx.seller_id,
             date_from=df,
@@ -186,19 +259,30 @@ async def handle_get_total_paid(args: S.GetTotalPaidArgs, ctx: ToolContext) -> T
     if guard:
         return guard
     try:
-        rows = await ctx.store_client.get_invoice_by_seller_id(seller_id=ctx.seller_id)
-        rows = rows or []
+        rows = await ctx.store_client.get_invoice_by_seller_id(
+            seller_id=ctx.seller_id,
+            date_from=_WIDE_RANGE_FROM,
+            date_to=_wide_today(),
+        )
+        rows = [r for r in (rows or []) if isinstance(r, dict)]
         total = 0.0
         currency = None
+        unpaid_amount = 0.0
         for r in rows:
-            if not isinstance(r, dict):
-                continue
+            payable = _safe_float(r.get("payable") or r.get("net_total"))
             if _is_paid(r.get("pay_status")):
-                total += _safe_float(r.get("payable") or r.get("net_total"))
+                total += payable
                 currency = currency or r.get("currency")
+            else:
+                unpaid_amount += payable
         return ToolResult(
             ok=True,
-            data={"total_paid": round(total, 2), "currency": currency or "AED", "invoice_count": len(rows)},
+            data={
+                "total_paid": round(total, 2),
+                "total_unpaid": round(unpaid_amount, 2),
+                "currency": currency or "AED",
+                "invoice_count": len(rows),
+            },
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("get_total_paid failed")
@@ -213,7 +297,11 @@ async def handle_get_total_orders(args: S.GetTotalOrdersArgs, ctx: ToolContext) 
     if guard:
         return guard
     try:
-        invoices = await ctx.store_client.get_invoice_by_seller_id(seller_id=ctx.seller_id)
+        invoices = await ctx.store_client.get_invoice_by_seller_id(
+            seller_id=ctx.seller_id,
+            date_from=_WIDE_RANGE_FROM,
+            date_to=_wide_today(),
+        )
         ids: set[str] = set()
         for inv in invoices or []:
             if not isinstance(inv, dict):
@@ -222,6 +310,19 @@ async def handle_get_total_orders(args: S.GetTotalOrdersArgs, ctx: ToolContext) 
                 sid = str(oid or "").strip().lstrip("#")
                 if sid:
                     ids.add(sid)
+        # Cross-check with /orders/all for orders not yet on any invoice.
+        try:
+            all_orders = await ctx.store_client.get_orders_all(
+                seller_id=ctx.seller_id,
+                date_from=_WIDE_RANGE_FROM,
+                date_to=_wide_today(),
+            )
+            for row in all_orders or []:
+                oid = str(row.get("id") or "").strip().lstrip("#")
+                if oid:
+                    ids.add(oid)
+        except Exception:
+            logger.debug("get_total_orders: /orders/all sweep failed; falling back to invoice ids only")
         return ToolResult(ok=True, data={"total_orders": len(ids)})
     except Exception as exc:  # noqa: BLE001
         logger.exception("get_total_orders failed")

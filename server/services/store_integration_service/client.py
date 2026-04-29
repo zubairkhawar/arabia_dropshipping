@@ -423,22 +423,29 @@ class StoreIntegrationClient:
         date_to: Optional[str] = None,
         all_invoices: bool = False,
         invoice_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> List[Dict[str, Any]]:
         """
         GET /customers/invoice?seller_id={seller_id}
             [&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD]
             [&all=1]
             [&invoice_id={id}]
 
-        Returns the raw invoice payload. When `all_invoices` is True the
-        response typically carries `invoices: [...]` with `total` count;
-        otherwise it's a single latest-invoice object under `invoice`.
+        Returns a normalized **list** of invoice dicts. The upstream API
+        response shape varies by params:
+
+          * with date range or all=1 → ``data.invoices: [...]`` (array)
+          * without date range       → ``data.invoice: {...}`` (single object)
+
+        We normalize both shapes into a list so callers don't need to know.
+        Pass a wide date range (or ``all_invoices=True``) when you want the
+        full history; passing nothing returns at most the single most-recent
+        invoice the API surfaces.
         """
         if not self.base_url:
-            return {}
+            return []
         sid = (seller_id or "").strip()
         if not sid and not (invoice_id or "").strip():
-            return {}
+            return []
         params: Dict[str, Any] = {}
         if sid:
             params["seller_id"] = sid
@@ -455,18 +462,28 @@ class StoreIntegrationClient:
             async with httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=10.0) as client:
                 resp = await client.get("/customers/invoice", params=params)
                 if resp.status_code >= 400:
-                    return {}
+                    return []
                 payload = resp.json()
                 if isinstance(payload, dict) and payload.get("success") is False:
-                    return {}
-                if isinstance(payload, dict):
-                    data = payload.get("data")
-                    if isinstance(data, dict):
-                        return data
-                    return payload
-                return {}
+                    return []
+                if not isinstance(payload, dict):
+                    return []
+                data = payload.get("data")
+                if isinstance(data, list):
+                    return [x for x in data if isinstance(x, dict)]
+                if not isinstance(data, dict):
+                    return []
+                # Plural array form
+                arr = data.get("invoices")
+                if isinstance(arr, list):
+                    return [x for x in arr if isinstance(x, dict)]
+                # Singular form
+                single = data.get("invoice")
+                if isinstance(single, dict):
+                    return [single]
+                return []
         except httpx.HTTPError:
-            return {}
+            return []
 
     async def get_order_invoice_mapping(
         self, order_id: str
