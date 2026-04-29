@@ -515,9 +515,15 @@ class StoreIntegrationClient:
         """
         GET /orders/{order_id}/invoice
 
-        Returns the invoice that contains the given order, or None.
-        The payload mirrors a single invoice object: typically
-        `{"invoice": {date, payable, pay_status, order_ids, ...}}`.
+        Returns the invoice that contains the given order, or None when:
+          - the order isn't on any invoice yet (still pending the next cycle)
+          - the API returns HTTP 404 OR HTTP 200 with ``success: false``
+
+        The Arabia API uses HTTP 200 + ``{"success": false, "error": {...}}``
+        for "no invoice found" (it doesn't return 404 for this case). Without
+        this normalization the error payload would leak into the tool result
+        and the LLM might draft a misleading 'data fetch failed' message for
+        an order that legitimately has no invoice yet.
         """
         if not self.base_url:
             return None
@@ -531,8 +537,13 @@ class StoreIntegrationClient:
                 resp = await client.get(f"/orders/{oid}/invoice")
                 if resp.status_code == 404:
                     return None
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    return None
                 payload = resp.json()
+                # API returns HTTP 200 with success:false for 'no invoice yet' —
+                # treat that as None so callers can render gracefully.
+                if isinstance(payload, dict) and payload.get("success") is False:
+                    return None
                 if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
                     return payload.get("data")
                 return payload if isinstance(payload, dict) else None
