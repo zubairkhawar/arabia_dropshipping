@@ -3497,137 +3497,13 @@ def _looks_like_orders_in_period(text: str) -> bool:
     return looks_like_orders_in_period_message(text)
 
 
-def _wants_orders_csv_file(text: str) -> bool:
-    t = (text or "").lower()
-    if "csv" in t or "spreadsheet" in t:
-        return True
-    if "export" in t and "order" in t:
-        return True
-    if "download" in t and "order" in t:
-        return True
-    if "excel" in t and ("file" in t or "sheet" in t):
-        return True
-    # Follow-up: "also include tracking/status…" without repeating the word "csv"
-    if "include" in t and any(
-        x in t for x in ("track", "status", "invoice", "column", "awb", "shipment")
-    ):
-        return True
-    if any(x in t for x in ("tracking", "awb", "delivery status")) and any(
-        x in t for x in ("csv", "export", "spreadsheet", "excel", "sheet", "file", "download")
-    ):
-        return True
-    return False
-
-
-def _wants_invoice_csv_file(text: str) -> bool:
-    """
-    Detect invoice-specific CSV/download asks so we do not accidentally send a
-    generic orders export file.
-    """
-    t = (text or "").lower()
-    if not t:
-        return False
-    asks_file = any(x in t for x in ("csv", "excel", "spreadsheet", "export", "download", "file"))
-    if not asks_file:
-        return False
-    if "invoice" in t or "فاتور" in t or "فاتورة" in t:
-        return True
-    # Roman Urdu variants often mention only "invoice" shorthand + date words.
-    return ("invoice" in t and any(m in t for m in ("april", "march", "22", "date", "wali", "waali")))
-
-
-def _looks_like_csv_file_followup(text: str) -> bool:
-    t = (text or "").lower().strip()
-    if not t:
-        return False
-    asks_file = any(x in t for x in ("csv", "excel", "spreadsheet", "export", "download", "file"))
-    if not asks_file:
-        return False
-    # Follow-up asks like "file dedo" / "send file" after invoice date/id was already shared.
-    return any(
-        x in t
-        for x in (
-            "file do",
-            "file dedo",
-            "send file",
-            "bhejo",
-            "bhej do",
-            "send csv",
-            "csv bhejo",
-            "download",
-            "export",
-        )
-    )
-
-
-def _extract_invoice_csv_date(text: str) -> Optional[str]:
-    """
-    Extract an exact invoice date (YYYY-MM-DD) from free text when possible.
-    Supports ISO and simple ``22 april 2026`` / ``22 april`` variants.
-    """
-    t = (text or "").strip().lower()
-    if not t:
-        return None
-    m_iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", t)
-    if m_iso:
-        return m_iso.group(1)
-    month_map = {
-        "jan": 1, "january": 1,
-        "feb": 2, "february": 2,
-        "mar": 3, "march": 3,
-        "apr": 4, "april": 4,
-        "may": 5,
-        "jun": 6, "june": 6,
-        "jul": 7, "july": 7,
-        "aug": 8, "august": 8,
-        "sep": 9, "sept": 9, "september": 9,
-        "oct": 10, "october": 10,
-        "nov": 11, "november": 11,
-        "dec": 12, "december": 12,
-    }
-    m = re.search(
-        r"\b([0-3]?\d)\s+("
-        r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
-        r"jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
-        r")(?:\s+(\d{4}))?\b",
-        t,
-    )
-    if not m:
-        return None
-    day = int(m.group(1))
-    mon_raw = m.group(2)
-    year = int(m.group(3)) if m.group(3) else datetime.utcnow().year
-    month = month_map.get(mon_raw, None)
-    if not month:
-        return None
-    if day < 1 or day > 31:
-        return None
-    return f"{year:04d}-{month:02d}-{day:02d}"
-
-
-def _csv_user_requests_enriched_export_wording(text: str) -> bool:
-    """True when the user explicitly asks for tracking/status/invoice in the file."""
-    if not _wants_orders_csv_file(text):
-        return False
-    t = (text or "").lower()
-    return any(
-        x in t
-        for x in (
-            "tracking",
-            " awb",
-            "shipment",
-            "delivery status",
-            "invoice",
-            "payable",
-            "payment status",
-            "also include",
-            "add column",
-            "include status",
-            "updated csv",
-            "new csv",
-            "regenerate",
-        )
-    )
+# CSV intent detection moved to the `generate_csv` LLM tool. The
+# deterministic helpers (_wants_orders_csv_file, _wants_invoice_csv_file,
+# _looks_like_csv_file_followup, _extract_invoice_csv_date,
+# _csv_user_requests_enriched_export_wording) were deleted on 2026-04-30
+# along with the awaiting_invoice_csv_ref state machine step. The LLM
+# now drives intent + date-range extraction; _dispatch_csv_signal in
+# process_message runs the exporter from the tool args.
 
 
 def _safe_int(value: Any) -> int:
@@ -3957,55 +3833,48 @@ async def process_customer_bot_message(
             suppress_kb_wrap=suppress_kb_wrap,
         )
 
-    if (
-        channel == "whatsapp"
-        and mem_id
-        and flow.get("verified")
-        and (
-            _wants_invoice_csv_file(user_message)
-            or bool(flow.get("awaiting_invoice_csv_ref"))
-            or (
-                _looks_like_csv_file_followup(user_message)
-                and bool(flow.get("last_invoice_csv_date") or flow.get("last_invoice_csv_id"))
-            )
-        )
-    ):
-        sid_csv = _flow_merchant_seller_id(flow)
-        if sid_csv:
-            inv_id = _extract_invoice_id(user_message)
-            inv_date = _extract_invoice_csv_date(user_message)
-            if not inv_id:
-                inv_id = str(flow.get("last_invoice_csv_id") or "").strip() or None
-            if not inv_date:
-                inv_date = str(flow.get("last_invoice_csv_date") or "").strip() or None
+    async def _dispatch_csv_signal(
+        signal: Dict[str, Any], src_flow: Dict[str, Any]
+    ) -> Optional[BotFlowResult]:
+        """Run the CSV exporter from a `generate_csv` LLM tool signal.
+
+        Replaces the prior regex/state-machine intent detection
+        (_wants_invoice_csv_file + awaiting_invoice_csv_ref step). The LLM
+        decides intent and date range via the tool args; this helper does
+        only the file generation + R2 upload + WhatsApp document plumbing.
+
+        Returns ``None`` only when the request can't be honoured here
+        (non-WhatsApp channel, no seller_id) — caller falls back to
+        sending the LLM's reply text.
+        """
+        if (channel or "").strip().lower() != "whatsapp":
+            return None
+        if not src_flow.get("verified"):
+            return None
+        sid_csv = _flow_merchant_seller_id(src_flow)
+        if not sid_csv:
+            return None
+        kind = (signal.get("kind") or "").strip().lower()
+        if kind == "invoice":
+            inv_id = (signal.get("invoice_id") or "").strip() or None
+            inv_date = (signal.get("invoice_date") or "").strip() or None
             if not inv_id and not inv_date:
-                msg = (
-                    "Please share the invoice number or exact invoice date (YYYY-MM-DD), "
-                    "and I will send the invoice CSV."
-                )
-                if flow_lang == "roman_urdu":
-                    msg = (
-                        "Invoice number ya exact invoice date (YYYY-MM-DD) bhejein, "
-                        "main invoice CSV bhej deta hoon."
-                    )
-                elif flow_lang == "arabic":
-                    msg = (
-                        "يرجى إرسال رقم الفاتورة أو تاريخها الدقيق (YYYY-MM-DD)، "
-                        "وسأرسل ملف CSV الخاص بها."
-                    )
-                return save(
-                    {**flow, "step": "conversational", "awaiting_invoice_csv_ref": True},
-                    msg,
-                )
+                # No invoice key supplied — let the LLM ask in its reply.
+                # We return None so the caller uses _lf.reply_text.
+                return None
             try:
-                from services.orders_export_service.csv_builder import object_key_for_invoice_csv
-                from services.orders_export_service.exporter import build_invoice_csv_export_bytes
+                from services.orders_export_service.csv_builder import (
+                    object_key_for_invoice_csv,
+                )
+                from services.orders_export_service.exporter import (
+                    build_invoice_csv_export_bytes,
+                )
 
                 body, n, inv_ref, inv_date_final = await build_invoice_csv_export_bytes(
                     store_client,
                     str(sid_csv),
-                    invoice_id=inv_id or None,
-                    invoice_date=inv_date or None,
+                    invoice_id=inv_id,
+                    invoice_date=inv_date,
                     include_tracking=True,
                 )
                 if n <= 0:
@@ -4015,7 +3884,7 @@ async def process_customer_bot_message(
                         msg = f"Mujhe {miss} ke liye invoice data nahi mila."
                     elif flow_lang == "arabic":
                         msg = f"لم أجد بيانات فاتورة مطابقة لـ {miss}."
-                    return save({**flow, "step": "conversational"}, msg)
+                    return save({**src_flow, "step": "conversational"}, msg)
                 ref_tag = inv_ref or inv_id or inv_date_final or str(sid_csv)
                 fname = f"invoice_{sid_csv}_{ref_tag}.csv".replace(" ", "_")[:180]
                 cap = f"Invoice CSV ({n} orders)"
@@ -4040,20 +3909,21 @@ async def process_customer_bot_message(
                     "mime_type": "text/csv",
                 }
                 try:
-                    from services.media_storage.r2 import is_r2_configured, presign_get, put_bytes
+                    from services.media_storage.r2 import (
+                        is_r2_configured, presign_get, put_bytes,
+                    )
                     if is_r2_configured():
                         key = object_key_for_invoice_csv(str(sid_csv), str(ref_tag))
                         put_bytes(key, body, "text/csv")
                         doc_item["document_url"] = presign_get(key, 86400)
                 except Exception:
-                    logger.warning("Optional R2 presign for invoice CSV skipped", exc_info=True)
+                    logger.warning("R2 presign for invoice CSV skipped", exc_info=True)
                 return save(
                     {
-                        **flow,
+                        **src_flow,
                         "step": "conversational",
                         "last_invoice_csv_id": (inv_ref or inv_id or ""),
                         "last_invoice_csv_date": (inv_date_final or inv_date or ""),
-                        "awaiting_invoice_csv_ref": False,
                     },
                     reply,
                     wa_documents=[doc_item],
@@ -4066,142 +3936,113 @@ async def process_customer_bot_message(
                         f"Mujhe {miss} ki invoice nahi mili. Please date ya invoice number dobara check karein."
                     )
                 elif flow_lang == "arabic":
-                    msg = (
-                        f"لم أجد فاتورة لـ {miss}. يرجى التحقق من التاريخ أو رقم الفاتورة."
-                    )
-                return save({**flow, "step": "conversational"}, msg)
+                    msg = f"لم أجد فاتورة لـ {miss}. يرجى التحقق من التاريخ أو رقم الفاتورة."
+                return save({**src_flow, "step": "conversational"}, msg)
             except Exception:
-                logger.exception("WhatsApp invoice CSV export failed")
+                logger.exception("WhatsApp invoice CSV export failed (LLM path)")
                 err = "Sorry, I could not generate that invoice CSV right now. Please try again."
                 if flow_lang == "roman_urdu":
                     err = "Maazrat, abhi invoice CSV generate nahi ho saki. Please dobara try karein."
                 elif flow_lang == "arabic":
                     err = "عذرًا، تعذر إنشاء ملف CSV للفاتورة الآن. حاول مرة أخرى."
-                return save({**flow, "step": "conversational"}, err)
+                return save({**src_flow, "step": "conversational"}, err)
+        # kind == "orders" (default)
+        df = (signal.get("date_from") or "").strip()
+        dt = (signal.get("date_to") or "").strip()
+        if not df or not dt:
+            return None
+        try:
+            from services.orders_export_service.csv_builder import (
+                export_options_fingerprint,
+                normalize_export_column_keys,
+                object_key_for_orders_csv,
+                resolve_include_tracking_flag,
+            )
+            from services.orders_export_service.exporter import (
+                build_orders_csv_export_bytes,
+            )
 
-    if (
-        channel == "whatsapp"
-        and mem_id
-        and flow.get("verified")
-        and _wants_orders_csv_file(user_message)
-    ):
-        sid_csv = _flow_merchant_seller_id(flow)
-        if sid_csv:
-            win = ConversationMemory.get_orders_export_window(mem_id)
-            if not win:
-                pr = _parse_date_range(user_message)
-                if pr:
-                    win = {
-                        "date_from": pr.get("date_from"),
-                        "date_to": pr.get("date_to"),
-                        "label": pr.get("label"),
-                    }
-            if not win:
-                # Customer asked for a CSV with no explicit date range
-                # ("saare orders de do" / "send csv of all my orders" — TCL).
-                # Default to the last 365 days so the request still succeeds
-                # rather than silently falling through to the LLM.
-                from datetime import timedelta as _td
-                _today = datetime.utcnow().date()
-                _from = _today - _td(days=365)
-                win = {
-                    "date_from": _from.isoformat(),
-                    "date_to": _today.isoformat(),
-                    "label": "last 365 days",
-                }
-            if win and win.get("date_from") and win.get("date_to"):
-                df = str(win["date_from"])[:10]
-                dt = str(win["date_to"])[:10]
-                try:
-                    from services.orders_export_service.csv_builder import (
-                        export_options_fingerprint,
-                        normalize_export_column_keys,
-                        object_key_for_orders_csv,
-                        resolve_include_tracking_flag,
-                    )
-                    from services.orders_export_service.exporter import build_orders_csv_export_bytes
+            column_keys = normalize_export_column_keys(None)
+            do_track = resolve_include_tracking_flag(column_keys, None)
+            body, n, trunc = await build_orders_csv_export_bytes(
+                store_client,
+                str(sid_csv),
+                df,
+                dt,
+                column_keys=column_keys,
+                include_tracking=None,
+            )
+            if n <= 0:
+                msg = "I could not find any orders in that date range to export."
+                if flow_lang == "roman_urdu":
+                    msg = "Is date range mein export ke liye koi order nahi mila."
+                elif flow_lang == "arabic":
+                    msg = "لم أجد أي طلبات في هذا النطاق الزمني للتصدير."
+                return save({**src_flow, "step": "conversational"}, msg)
+            max_wa = 100 * 1024 * 1024
+            if len(body) > max_wa:
+                msg = (
+                    "The export is too large to send on WhatsApp (over 100 MB). "
+                    "Please ask support for a split export or a shorter date range."
+                )
+                return save({**src_flow, "step": "conversational"}, msg)
+            opt_fp = export_options_fingerprint(column_keys, do_track)
+            fname = f"orders_{sid_csv}_{df}_to_{dt}_{opt_fp}.csv".replace(" ", "_")[:200]
+            cap = f"Orders export ({n} orders)"
+            if trunc:
+                cap += " (capped at 5000 rows)"
+            reply = (
+                "I have prepared a CSV with your orders (including tracking status and invoice "
+                "columns where the store provides them). Tap the file below to open it in WhatsApp."
+            )
+            if flow_lang == "roman_urdu":
+                reply = (
+                    "Main ne CSV bana di hai jisme tracking, status, aur invoice ki fields shamil "
+                    "hain jahan data mojood ho. Neeche file par tap kar ke WhatsApp mein khol lein."
+                )
+            elif flow_lang == "arabic":
+                reply = (
+                    "جهزت لك ملف CSV يتضمن حالة التتبع والفاتورة حيثما توفرت البيانات. "
+                    "اضغط على الملف أدناه لفتحه في واتساب."
+                )
+            doc_item = {
+                "content_bytes": body,
+                "filename": fname,
+                "caption": cap,
+                "mime_type": "text/csv",
+            }
+            try:
+                from services.media_storage.r2 import (
+                    is_r2_configured, presign_get, put_bytes,
+                )
+                if is_r2_configured():
+                    key = object_key_for_orders_csv(str(sid_csv), opt_fp)
+                    put_bytes(key, body, "text/csv")
+                    doc_item["document_url"] = presign_get(key, 86400)
+            except Exception:
+                logger.warning("R2 presign for orders CSV skipped", exc_info=True)
+            return save(
+                {**src_flow, "step": "conversational"},
+                reply,
+                wa_documents=[doc_item],
+            )
+        except Exception:
+            logger.exception("WhatsApp orders CSV export failed (LLM path)")
+            msg = "Sorry, I could not generate the file. Please try again in a moment."
+            if flow_lang == "roman_urdu":
+                msg = "Maazrat, abhi file generate nahi ho saki. Thori dair baad try karein."
+            elif flow_lang == "arabic":
+                msg = "عذرًا، تعذر إنشاء الملف الآن. الرجاء المحاولة بعد قليل."
+            return save({**src_flow, "step": "conversational"}, msg)
 
-                    column_keys = normalize_export_column_keys(None)
-                    do_track = resolve_include_tracking_flag(column_keys, None)
-                    body, n, trunc = await build_orders_csv_export_bytes(
-                        store_client,
-                        str(sid_csv),
-                        df,
-                        dt,
-                        column_keys=column_keys,
-                        include_tracking=None,
-                    )
-                    if n <= 0:
-                        return save(
-                            {**flow, "step": "conversational"},
-                            "I could not find any orders in that date range to export.",
-                        )
-                    max_wa = 100 * 1024 * 1024
-                    if len(body) > max_wa:
-                        return save(
-                            {**flow, "step": "conversational"},
-                            "The export is too large to send on WhatsApp (over 100 MB). Please ask support for a split export or a shorter date range.",
-                        )
-                    opt_fp = export_options_fingerprint(column_keys, do_track)
-                    fname = f"orders_{sid_csv}_{df}_to_{dt}_{opt_fp}.csv".replace(" ", "_")[:200]
-                    cap = f"Orders export ({n} orders)"
-                    if trunc:
-                        cap += " (capped at 5000 rows)"
-                    reply = (
-                        "I have prepared a CSV with your orders (including tracking status and invoice "
-                        "columns where the store provides them). Tap the file below to open it in WhatsApp."
-                    )
-                    if _csv_user_requests_enriched_export_wording(user_message):
-                        reply = (
-                            "Sure — here is a fresh CSV with tracking numbers, order status, and invoice "
-                            "fields filled in wherever our systems have that data. Tap the file below."
-                        )
-                    if flow_lang == "roman_urdu":
-                        reply = (
-                            "Main ne CSV bana di hai jisme tracking, status, aur invoice ki fields shamil "
-                            "hain jahan data mojood ho. Neeche file par tap kar ke WhatsApp mein khol lein."
-                        )
-                        if _csv_user_requests_enriched_export_wording(user_message):
-                            reply = (
-                                "Bilkul — yeh nayi CSV hai jisme tracking number, status, aur invoice details "
-                                "shamil hain jahan mojood hon. Neeche file par tap karein."
-                            )
-                    elif flow_lang == "arabic":
-                        reply = (
-                            "جهزت لك ملف CSV يتضمن حالة التتبع والفاتورة حيثما توفرت البيانات. "
-                            "اضغط على الملف أدناه لفتحه في واتساب."
-                        )
-                        if _csv_user_requests_enriched_export_wording(user_message):
-                            reply = (
-                                "حسناً — إليك ملف CSV محدث يتضمن أرقام التتبع والحالة وتفاصيل الفاتورة "
-                                "عند توفرها. اضغط على الملف أدناه."
-                            )
-                    doc_item: Dict[str, Any] = {
-                        "content_bytes": body,
-                        "filename": fname,
-                        "caption": cap,
-                        "mime_type": "text/csv",
-                    }
-                    try:
-                        from services.media_storage.r2 import is_r2_configured, presign_get, put_bytes
-
-                        if is_r2_configured():
-                            key = object_key_for_orders_csv(str(sid_csv), opt_fp)
-                            put_bytes(key, body, "text/csv")
-                            doc_item["document_url"] = presign_get(key, 86400)
-                    except Exception:
-                        logger.warning("Optional R2 presign for CSV fallback skipped", exc_info=True)
-                    return save(
-                        {**flow, "step": "conversational"},
-                        reply,
-                        wa_documents=[doc_item],
-                    )
-                except Exception:
-                    logger.exception("WhatsApp orders CSV export failed")
-                    return save(
-                        {**flow, "step": "conversational"},
-                        "Sorry, I could not generate the file. Please try again in a moment.",
-                    )
+    # CSV intent detection migrated to the `generate_csv` LLM tool +
+    # _dispatch_csv_signal helper above. The deterministic regex blocks
+    # (_wants_invoice_csv_file / _wants_orders_csv_file / awaiting_invoice_csv_ref
+    # step) that used to live here were deleted on 2026-04-30; the LLM
+    # extracts kind/date_from/date_to/invoice_id/invoice_date via the
+    # tool args, which is more flexible than the regex (handles "April
+    # ki invoice ki csv", "send orders for last week", "csv from 2026-04-01
+    # to 2026-04-22", and HOW questions distinctly).
 
     # Cap how many times the customer can retry email+mobile before we
     # hand them to a support agent. Three attempts strikes a balance
@@ -4878,10 +4719,21 @@ async def process_customer_bot_message(
                     flow.get("customer_email") if isinstance(flow, dict) else None
                 ),
             )
+            # CSV signal: LLM called generate_csv. Dispatch to the
+            # exporter pipeline now so the customer gets the WhatsApp
+            # document this turn (vs. the old behaviour where the signal
+            # was dropped and the regex layer had to re-detect intent).
+            if not _lf.fell_back and _lf.csv_signal:
+                csv_res = await _dispatch_csv_signal(_lf.csv_signal, nf)
+                if csv_res is not None:
+                    return csv_res
+                # Dispatcher returned None → no seller_id, missing args,
+                # or non-WhatsApp channel. Fall through to the LLM's
+                # reply_text so the customer sees the LLM's clarifier
+                # (e.g. "which date range?").
             if (
                 not _lf.fell_back
                 and _lf.reply_text
-                and not _lf.csv_signal
                 and not _lf.trending_signal
             ):
                 _f_after = {**nf}
