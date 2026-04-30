@@ -4392,21 +4392,25 @@ async def process_customer_bot_message(
         # Handoff bucket
         "awaiting_agent",
     }
-    # Verification ENTRY is also deterministic. The LLM-first orchestrator
-    # was unreliable at calling the start_verification tool — live transcript
-    # on 2026-04-29 showed the LLM drafting the verification dialogue itself
-    # ('Theek hai, pehle main aap ki verification kar leta hoon.') without
-    # actually calling the tool, so step never advanced. Restoring the
-    # deterministic bootstrap so the verification BUCKET truly owns its entry.
-    needs_verification_bootstrap = (
+    # The deterministic verification bootstrap that fired on order /
+    # invoice / account / order-id intent (`needs_verification_bootstrap`)
+    # was deleted on 2026-04-30. The LLM-first orchestrator now calls
+    # `start_verification` for those messages — guarded by the strict
+    # "VERIFICATION GATE — TOOL ONLY, NEVER DRAFT" rule in the system
+    # prompt. The verification_signal handler below advances the step
+    # to existing_awaiting_email when the tool is called.
+    #
+    # Two narrow fast-paths remain deterministic, because they're
+    # high-signal and there's no value spending an LLM call on them:
+    #   1. Customer types a bare email address — definitively wants to
+    #      start (or continue) verification.
+    #   2. Customer explicitly consents ("yes verify me", "haan kar do
+    #      verify") — also unambiguous.
+    bare_email_or_consent = (
         step == "conversational"
         and not bool(flow.get("verified"))
         and (
-            _looks_like_order_status_question(text)
-            or _is_likely_order_id_only(text)
-            or _looks_like_account_question(text)
-            or _looks_like_invoice_for_order(text)
-            or _is_explicit_verification_consent(text)
+            _is_explicit_verification_consent(text)
             or bool(_extract_standalone_email(text))
         )
     )
@@ -4414,7 +4418,7 @@ async def process_customer_bot_message(
     # go through the deterministic trending flow handler which queries the DB
     # and maintains a pagination cursor in Redis.
     wants_trending_now = _wants_trending_products(text) or _wants_non_trending_products(text)
-    if step not in otp_guard_steps and not needs_verification_bootstrap and not wants_trending_now:
+    if step not in otp_guard_steps and not bare_email_or_consent and not wants_trending_now:
         nf = {
             **flow,
             "step": "conversational",
