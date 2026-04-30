@@ -366,9 +366,35 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "roman_urdu": "Mobile number format ghalat lag raha hai. Pakistan ke liye 11 digits 03 se start hone chahiye (misal: 03474685920), ya 923... / +923... . UAE (+971...) aur Saudi (+966...) numbers bhi supported hain.",
     },
     "customer_not_found_after_verify": {
-        "english": "We could not find an account with this email and mobile. Please check your details or contact support.",
-        "arabic": "لم نعثر على حساب بهذا البريد والجوال. يرجى التحقق من التفاصيل أو التواصل مع الدعم.",
-        "roman_urdu": "Is email aur mobile par account nahi mila. Details check karein ya support se rabta karein.",
+        "english": (
+            "We couldn't find an account matching that email and mobile. "
+            "Please re-enter your registered email so we can try again, "
+            "or type \"agent\" to speak with support."
+        ),
+        "arabic": (
+            "لم نعثر على حساب يطابق هذا البريد والجوال. "
+            "يرجى إعادة إدخال البريد الإلكتروني المسجّل لنحاول مرة أخرى، "
+            "أو اكتب \"agent\" للتواصل مع الدعم."
+        ),
+        "roman_urdu": (
+            "Is email aur mobile par account nahi mila. "
+            "Apna registered email dobara bhejein taakay phir try karein, "
+            "ya \"agent\" likhein support se baat karne ke liye."
+        ),
+    },
+    "customer_not_found_max_attempts": {
+        "english": (
+            "We've tried a few times but couldn't match an account. "
+            "I'll connect you with a support agent who can help directly."
+        ),
+        "arabic": (
+            "لقد حاولنا عدة مرات لكننا لم نتمكن من إيجاد الحساب. "
+            "سأقوم بتحويلك إلى مسؤول الدعم لمساعدتك مباشرة."
+        ),
+        "roman_urdu": (
+            "Kuch dafa try karne ke baad bhi account nahi mila. "
+            "Main aap ko support agent se connect kar deta hoon."
+        ),
     },
     "verification_success": {
         "english": "✅ Verified!",

@@ -40,7 +40,8 @@ PROTOCOL_WHITELIST: dict[str, str] = {
     "verify_send_error": "distinct from wrong/expired code",
     "verify_invalid_code": "distinct from send-error",
     "verification_expired_reverify": "re-entry trigger; flow re-arms here",
-    "customer_not_found_after_verify": "terminal verification failure",
+    "customer_not_found_after_verify": "verification mismatch — invites retry (re-enter email)",
+    "customer_not_found_max_attempts": "verification capped after 3 retries — hands off to support agent",
     # flow milestone marker — flow transitions on this exact text
     "email_verified_success": "flow milestone marker",
     # command literal

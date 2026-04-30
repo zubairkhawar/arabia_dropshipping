@@ -421,9 +421,9 @@ def _extract_standalone_email(text: str) -> Optional[str]:
         return None
     parts = raw.split()
     if len(parts) == 1 and _is_likely_email(parts[0]):
-        return parts[0].strip().lower()
+        return _strip_url_scheme(parts[0]).strip().lower()
     if len(parts) == 2 and _is_likely_email(parts[1]):
-        return parts[1].strip().lower()
+        return _strip_url_scheme(parts[1]).strip().lower()
     return None
 
 
@@ -1178,8 +1178,20 @@ def _is_likely_order_id_only(text: str) -> bool:
     return True
 
 
+def _strip_url_scheme(text: str) -> str:
+    """Strip ``mailto:`` / ``tel:`` / ``sms:`` URL prefixes that mobile
+    keyboards auto-prepend when the user taps an autocompleted email or
+    phone (transcript 2026-04-30 17:15: customer typed
+    ``mailto:Urbanmart097@gmail.com`` and the bot accepted the malformed
+    string instead of normalising it to the email)."""
+    s = (text or "").strip()
+    if not s:
+        return s
+    return re.sub(r"^(?:mailto|tel|sms|callto):\s*", "", s, flags=re.IGNORECASE).strip()
+
+
 def _is_likely_email(text: str) -> bool:
-    s = (text or "").strip().lower()
+    s = _strip_url_scheme(text or "").lower()
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", s))
 
 
@@ -4191,9 +4203,86 @@ async def process_customer_bot_message(
                         "Sorry, I could not generate the file. Please try again in a moment.",
                     )
 
+    # Cap how many times the customer can retry email+mobile before we
+    # hand them to a support agent. Three attempts strikes a balance
+    # between recovering from typos (mailto: prefix, wrong country code)
+    # and not letting a misconfigured account spin forever.
+    _VERIFY_MAX_ATTEMPTS = 3
+
+    def _verification_match_failed(
+        flow_in: Dict[str, Any],
+        lang: str,
+        *,
+        mobile: Optional[str],
+        reason: str,
+    ) -> BotFlowResult:
+        """Verification email+mobile lookup failed. Bump the attempt
+        counter and either let the customer retry (re-enter email) or
+        hand them to support after the cap.
+
+        WhatsApp transcript 2026-04-30 17:15: customer typed
+        ``mailto:Urbanmart097@gmail.com`` (mobile auto-link prefix),
+        the lookup failed, and the bot dumped them to conversational
+        with a 'contact support' message. With the prefix-strip in
+        _strip_url_scheme this specific typo is now caught earlier;
+        but real typos (wrong domain, wrong country mobile) still
+        deserve a retry instead of a dead-end.
+        """
+        attempts = int(flow_in.get("verify_attempts") or 0) + 1
+        logger.info(
+            "verification match failed: reason=%s attempt=%d/%d",
+            reason, attempts, _VERIFY_MAX_ATTEMPTS,
+        )
+        if attempts >= _VERIFY_MAX_ATTEMPTS:
+            # Hand off to a support agent.
+            team = TEAM_NEW_CUSTOMER
+            online = _any_online_agent_for_handoff(db, tenant_id, team=team)
+            if online:
+                nf = {
+                    **flow_in,
+                    "step": "awaiting_agent",
+                    "pending_handoff_team": team,
+                    "pending_email": None,
+                    "pending_mobile": mobile,
+                    "verify_attempts": 0,
+                    "verify_reason": flow_in.get("verify_reason"),
+                    "lang": lang,
+                }
+                return save(
+                    nf,
+                    _t(lang, MSGS["customer_not_found_max_attempts"]),
+                    team=team,
+                    esc=True,
+                )
+            # No agent online — drop to conversational with the cap message.
+            nf = {
+                **flow_in,
+                "step": "conversational",
+                "customer_kind": "existing",
+                "pending_email": None,
+                "pending_mobile": mobile,
+                "verify_reason": None,
+                "verify_attempts": 0,
+                "lang": lang,
+            }
+            return save(nf, _t(lang, MSGS["customer_not_found_max_attempts"]))
+        # Retry: keep them on the email-asking step (carrying verify_reason
+        # and pending_order_ref so the eventual lookup still answers their
+        # original question).
+        nf = {
+            **flow_in,
+            "step": "existing_awaiting_email",
+            "customer_kind": "existing",
+            "pending_email": None,
+            "pending_mobile": None,
+            "verify_attempts": attempts,
+            "lang": lang,
+        }
+        return save(nf, _t(lang, MSGS["customer_not_found_after_verify"]))
+
     async def submit_existing_email(flow_in: Dict[str, Any], email_in: str) -> BotFlowResult:
         """Send OTP (or jump to mobile) after the customer supplies a registration email."""
-        email_norm = (email_in or "").strip().lower()
+        email_norm = _strip_url_scheme(email_in or "").strip().lower()
         if not _is_likely_email(email_norm):
             return save(
                 {**flow_in, "step": "existing_awaiting_email", "customer_kind": "existing"},
@@ -5589,18 +5678,9 @@ async def process_customer_bot_message(
             pending_email, mobile_raw
         )
         if not customer:
-            # Do not loop on the same mobile prompt; end verification step with a
-            # clear fallback path.
-            nf = {
-                **flow,
-                "step": "conversational",
-                "customer_kind": "existing",
-                "pending_email": None,
-                "pending_mobile": mobile,
-                "verify_reason": None,
-                "lang": flow_lang,
-            }
-            return save(nf, _t(flow_lang, MSGS["customer_not_found_after_verify"]))
+            return _verification_match_failed(
+                flow, flow_lang, mobile=mobile, reason="no_customer"
+            )
         verified_at = _verified_at_iso()
         reason = flow.get("verify_reason")
         oref_raw = flow.get("pending_order_ref")
@@ -5609,18 +5689,9 @@ async def process_customer_bot_message(
         merchant_sid = merchant_seller_scope_from_row(customer)
         if not merchant_sid:
             # Verification is only complete when seller scope is available.
-            nf = {
-                **flow,
-                "step": "conversational",
-                "customer_kind": "existing",
-                "verified": False,
-                "seller_id": None,
-                "pending_email": None,
-                "pending_mobile": mobile,
-                "verify_reason": None,
-                "lang": flow_lang,
-            }
-            return save(nf, _t(flow_lang, MSGS["customer_not_found_after_verify"]))
+            return _verification_match_failed(
+                flow, flow_lang, mobile=mobile, reason="no_seller_scope"
+            )
         base_f: Dict[str, Any] = {
             **flow,
             "verified": True,
@@ -5634,6 +5705,7 @@ async def process_customer_bot_message(
             "pending_email": None,
             "verify_reason": None,
             "pending_order_ref": None,
+            "verify_attempts": 0,
             "lang": flow_lang,
         }
         if mem_id and merchant_sid:
