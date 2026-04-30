@@ -318,6 +318,40 @@ def _is_natural_language(text: str) -> bool:
     return alpha > len(s) * 0.4
 
 
+_PURE_ACK_RE = re.compile(
+    # Pure acknowledgement / thanks. Used to decide whether the trending
+    # runner's one-liner is the final word, vs whether we should forward
+    # the question to ai_forward (KB-aware) for an actual answer.
+    # WhatsApp transcript 2026-04-30 17:13: customer asked "arabia delivery
+    # and return charges" inside the trending flow; the runner has no KB so
+    # it deflected to "sales team". Real informational questions must NOT
+    # be treated like acks.
+    r"^\s*("
+    r"ok|okay|okk|kk|"
+    r"thanks?|thank\s*you|thx|tnx|ty|"
+    r"shukria|shukriya|shukran|shukrya|"
+    r"bohat\s*shukriya|bohat\s*shukria|"
+    r"theek\s*hai|theek|teek\s*hai|sahi|"
+    r"got\s*it|cool|nice|great|"
+    r"alright|fine|"
+    r"acha|achha|accha|acha\s*ji|"
+    r"شكرا|شكراً|شكرا\s*لك|"
+    r"تمام|طيب|حسنا|حسناً"
+    r")\s*[!\.\?]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_pure_ack_or_thanks(text: str) -> bool:
+    """True for short pure acknowledgements ("ok", "thanks", "shukriya",
+    "theek hai", "tamam"). False for any informational question, even one
+    that ends with a thank-you tail."""
+    s = (text or "").strip()
+    if not s or len(s) > 40:
+        return False
+    return bool(_PURE_ACK_RE.match(s))
+
+
 def _conversation_bail_from_trending(flow: Dict[str, Any], lang: str) -> Dict[str, Any]:
     nf = {**flow, "step": "conversational", "lang": lang}
     for k in TRENDING_STATE_KEYS:
@@ -4490,6 +4524,20 @@ async def process_customer_bot_message(
             for k in TRENDING_STATE_KEYS:
                 nf.pop(k, None)
             nf["trending_shown_ids"] = []
+            # Topic change while inside trending: the runner has no KB or
+            # CRITICAL FACTS, so it deflects ("ask sales team") for real
+            # informational questions like "delivery charges" or "payment
+            # method" (transcript 2026-04-30 17:13). When the message is
+            # NOT a pure acknowledgement / thanks, ignore the runner's
+            # reply and route the question to ai_forward so the KB-aware
+            # general LLM can answer with the actual rates from
+            # CRITICAL FACTS.
+            if not _is_pure_ack_or_thanks(text):
+                return ai_forward(
+                    "[Customer question] " + text,
+                    nf,
+                    skip_api=_default_skip_store_api(nf),
+                )
 
         # For active / awaiting states, persist the compact memory.
         if llm_result.state in {"trending_active", "trending_awaiting_country"}:

@@ -72,7 +72,10 @@ class TestRunnerMirrorsCatalogIntoFlowCache:
         text = _service_text()
         i = text.find("def _build_botflowresult_from_llm")
         assert i > 0
-        block = text[i: i + 3500]
+        # Read until the next sibling fn definition rather than a
+        # fixed-size window — the body has grown.
+        end = text.find("\n    def ", i + 50)
+        block = text[i:end] if end > i else text[i:]
         # We refetch and store the full catalogue.
         assert 'nf["trending_products_all"]' in block
         assert "list_active_trending_for_country(" in block
