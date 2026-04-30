@@ -1231,7 +1231,11 @@ def _default_skip_store_api(f: Dict[str, Any]) -> bool:
     return True
 
 
-TRENDING_PAGE_SIZE = 5
+# Customer expects "trending products" to mean ALL of them in one batch
+# (transcript 2026-04-30 15:25). Set high enough to cover real catalogues
+# in a single page; the pagination machinery still works for the rare
+# tenant that exceeds this cap.
+TRENDING_PAGE_SIZE = 50
 TRENDING_STATE_KEYS = (
     "trending_country",
     "trending_products_cache",
@@ -4495,6 +4499,41 @@ async def process_customer_bot_message(
             if mem_patch.get("trending_country"):
                 nf["trending_country"] = mem_patch["trending_country"]
             nf["trending_mode"] = mem_patch.get("trending_mode") or "trending"
+            # Mirror the rendered products into the deterministic cache so
+            # the next turn's pagination ("Aur dikhao") can lift items out
+            # of the cache instead of falling through to ai_forward (which
+            # used to hallucinate "next page" products). Refetching the
+            # full catalogue is cheap and keeps shown_ids meaningful when
+            # the customer eventually pages past everything we surfaced.
+            try:
+                cc_for_cache = (mem_patch.get("trending_country") or "").strip().upper()
+                mode_for_cache = mem_patch.get("trending_mode") or "trending"
+                if cc_for_cache in {"UAE", "KSA", "PK"}:
+                    if mode_for_cache == "non_trending":
+                        items_all = list_active_non_trending_for_country(
+                            db, tenant_id, cc_for_cache
+                        )
+                    else:
+                        items_all = list_active_trending_for_country(
+                            db, tenant_id, cc_for_cache
+                        )
+                    if items_all:
+                        nf["trending_products_all"] = items_all
+                        # The cache is what's currently 'on screen'. We mirror
+                        # the IDs the LLM said it just showed.
+                        shown_ids = set(int(x) for x in (mem_patch.get("trending_shown_ids") or []))
+                        nf["trending_products_cache"] = [
+                            it for it in items_all
+                            if "id" in it and int(it["id"]) in shown_ids
+                        ] or list(llm_result.shown_products or [])
+                        nf["trending_offset"] = 0
+            except Exception:  # noqa: BLE001 — caching is best-effort
+                logger.exception(
+                    "trending_llm: post-render catalogue cache failed "
+                    "(country=%s mode=%s)",
+                    mem_patch.get("trending_country"),
+                    mem_patch.get("trending_mode"),
+                )
 
         # Compose the outgoing reply block. On web/portal we inline the
         # suggestions; on WhatsApp we split them into a second bubble so
@@ -5023,9 +5062,22 @@ async def process_customer_bot_message(
             # ai_forward — the general LLM will hallucinate plausible-sounding
             # dropshipping categories ("Smart Watches & Fitness Bands…") that
             # aren't in our DB. WhatsApp transcript 2026-04-30 12:14 showed
-            # exactly this. Instead: if the message is a fresh trending ask,
-            # re-enter the deterministic flow (DB-backed); otherwise ask for
-            # a country and let the next turn drive _show_trending_for_country.
+            # exactly this.
+            #
+            # Pagination ("Aur dikhao") with a known country also lands here
+            # when the LLM runner rendered the previous turn but didn't
+            # mirror the catalogue back into flow. Refetch from the DB so we
+            # can answer with real images (transcript 2026-04-30 15:25).
+            wants_more = _is_pagination_only or _wants_trending_more(text)
+            cc_known = str(flow.get("trending_country") or "").strip().upper()
+            mode_known = _trending_mode(flow)
+            if wants_more and cc_known in {"UAE", "KSA", "PK"}:
+                return _show_trending_for_country(
+                    cc_known,
+                    {**flow, "lang": flow_lang},
+                    text,
+                    mode=mode_known,
+                )
             base = {
                 **flow,
                 "intro_shown": bool(flow.get("intro_shown")),

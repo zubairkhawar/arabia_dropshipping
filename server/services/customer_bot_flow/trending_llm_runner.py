@@ -54,10 +54,16 @@ logger = logging.getLogger(__name__)
 # Public contract
 # ---------------------------------------------------------------------------
 
-TRENDING_LLM_MAX_OUTPUT_TOKENS = 600
-TRENDING_LLM_TIMEOUT_SECONDS = 12.0
-TRENDING_LLM_PAGE_SIZE = 5
-TRENDING_LLM_MAX_PRODUCTS_IN_CONTEXT = 25
+TRENDING_LLM_MAX_OUTPUT_TOKENS = 1500
+TRENDING_LLM_TIMEOUT_SECONDS = 18.0
+# Customer feedback (transcript 2026-04-30 15:25): "trending/winning means
+# ALL the trending products" — so we render the entire catalogue on the
+# first page rather than paging 5 at a time. The output budget and
+# context cap are sized to comfortably hold ~50 products with their
+# captions and images metadata. If a tenant ever exceeds this we'll
+# still paginate via memory.shown_ids.
+TRENDING_LLM_PAGE_SIZE = 50
+TRENDING_LLM_MAX_PRODUCTS_IN_CONTEXT = 60
 
 COUNTRY_ALIASES: Dict[str, str] = {
     "ksa": "KSA",
@@ -302,11 +308,14 @@ conversation.
    doesn't name one, ask which country. state="trending_awaiting_country".
    Offer the three countries as "1️⃣ KSA   2️⃣ UAE   3️⃣ Pakistan". No banned
    footers.
-3. FIRST PAGE: show up to 5 unseen products (ids NOT in memory.shown_ids).
-   state="trending_active".
-4. "Show more" / "aur dikhao" / "المزيد": show the next up-to-5 unseen. If
-   none remain, say so and suggest another country or switching mode. Do
-   NOT repeat the same ids.
+3. FIRST PAGE: show ALL unseen products in `available_products` (ids NOT in
+   memory.shown_ids), up to 50 per turn. The customer expects the full
+   trending list — do NOT artificially limit to 5. If `available_products`
+   has 12 entries, render all 12. state="trending_active".
+4. "Show more" / "aur dikhao" / "المزيد": show every remaining unseen
+   product (up to 50 more). Often this turn won't run because the first
+   page already covered everything. If nothing remains, say so once and
+   suggest another country or switching mode. Do NOT repeat the same ids.
 5. PICK BY NUMBER / NAME: ("tell me about 3", "the necklace", "3")
    surface JUST that product from available_products — name, price,
    category, a short description — and set product_ids_shown=[that_one_id].
