@@ -100,23 +100,34 @@ class TestRunnerMirrorsCatalogIntoFlowCache:
 
 class TestEmptyCacheRefetchesOnAurDikhao:
     def test_empty_cache_refetches_when_country_known(self) -> None:
-        """When step="trending_showing_products" and the cache is empty but
-        the flow already carries a known trending_country, "Aur dikhao"
-        must trigger a fresh DB fetch via _show_trending_for_country —
-        NOT bail to ai_forward (which used to hallucinate the next page)."""
+        """When step="trending_showing_products", the cache is empty,
+        and the runner returned None (degraded mode), the empty-cache
+        branch must refetch from the DB via _show_trending_for_country
+        when the country is still on file — NOT bail to ai_forward
+        (which used to hallucinate the next page).
+
+        The deterministic _wants_trending_more pagination check inside
+        this branch was removed on 2026-04-30 along with the rest of
+        that regex; the refetch now triggers on any non-greeting message
+        with a known country (the runner already filtered out topic
+        changes via state="done" → ai_forward bail)."""
         text = _service_text()
         anchor = 'if step == "trending_showing_products":'
         i = text.find(anchor)
         assert i > 0
-        # Find the empty-cache branch and read up to the next sibling.
+        # The empty-cache branch lives between `if not cache:` and the
+        # next sibling marker (`if _wants_non_trending_products` is
+        # what comes after it now that the pagination block is gone).
         j = text.find("if not cache:", i)
-        end = text.find("if _wants_trending_more(text)", j)
+        end = text.find("if _wants_non_trending_products(text)", j)
         block = text[j:end]
-        assert "_wants_trending_more(text)" in block, (
-            "empty-cache branch must check for pagination intent so we can "
-            "refetch the catalogue instead of bailing to ai_forward"
-        )
-        # And we must refetch via the deterministic flow, which is DB-backed.
+        # Must refetch via the DB-backed renderer.
         assert "_show_trending_for_country(" in block
-        # The known-country guard prevents fetching with a bogus code.
+        # Known-country guard prevents fetching with a bogus code.
         assert '"UAE", "KSA", "PK"' in block or "'UAE', 'KSA', 'PK'" in block
+        # No CODE call to the deleted helper. Comment mentions are OK.
+        # We assert non-importability instead of a substring check that
+        # would also trip on the deletion comment.
+        from services.customer_bot_flow import service as svc
+
+        assert not hasattr(svc, "_wants_trending_more")

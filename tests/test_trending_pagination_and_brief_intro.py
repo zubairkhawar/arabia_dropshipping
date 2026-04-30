@@ -1,12 +1,12 @@
 """
-Regression tests for two fixes from WhatsApp transcript 2026-04-29 14:28-14:30:
+Regression tests for fixes from WhatsApp transcript 2026-04-29 14:28-14:30.
 
-  ① Trending pagination (`Aur dikhao` / `Show more`) hit the LLM-unavailable
-     fallback because `_try_trending_llm` ran BEFORE the deterministic
-     pagination check. When the LLM trending runner failed (rate limit
-     from another job consuming OpenAI quota), the customer saw 'Hamare
-     server par mukhtasar technical masla'. Pagination is a pure cursor
-     advance — it shouldn't go through the LLM at all.
+(Original ① — the pagination short-circuit — was deleted on 2026-04-30
+when `_wants_trending_more` was removed. Pagination is now handled
+naturally by the trending LLM-runner via prompt rule 4 + memory.shown_ids
+tracking, since page-size 50 covers the full catalogue on the first
+turn for typical tenants. The empty-cache branch refetches via
+`_show_trending_for_country` if the runner fails.)
 
   ② The verbose `account_verify_intro` / `order_verify_intro` templates
      (200+ words explaining the verification process) are no longer
@@ -23,46 +23,37 @@ import pytest
 
 from services.customer_bot_flow.service import (
     _existing_identity_entry,
-    _wants_trending_more,
 )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ① Pagination short-circuit
+# ① Pagination handler (deterministic short-circuit deleted 2026-04-30)
 # ─────────────────────────────────────────────────────────────────────────────
-class TestPaginationShortCircuit:
-    """The trending_showing_products handler must skip the LLM trending
-    runner when the customer's message is unambiguously pagination."""
-
-    def test_aur_dikhao_is_pagination(self) -> None:
-        assert _wants_trending_more("Aur dikhao") is True
-
-    def test_show_more_is_pagination(self) -> None:
-        assert _wants_trending_more("Show more") is True
-
-    def test_more_is_pagination(self) -> None:
-        assert _wants_trending_more("more") is True
-
-    def test_random_message_is_not_pagination(self) -> None:
-        # The bail-to-LLM path should still fire for genuinely off-topic input.
-        assert _wants_trending_more("kya arabia reliable hai") is False
-
-    def test_handler_skips_llm_for_pagination(self) -> None:
-        """Read service.py and assert the handler structure: pagination
-        intent skips the LLM runner."""
-        src = Path(__file__).resolve().parent.parent / "server" / "services" / "customer_bot_flow" / "service.py"
-        text = src.read_text(encoding="utf-8")
-        # Find the trending_showing_products step block
-        i = text.find('if step == "trending_showing_products":')
-        assert i > 0, "trending step handler not found"
-        block = text[i: i + 2000]
-        # Must contain the short-circuit guard before _try_trending_llm
-        assert "_is_pagination_only = _wants_trending_more(text)" in block, (
-            "trending_showing_products must compute a pagination-only flag "
-            "BEFORE invoking the LLM trending runner"
+class TestPaginationHandledByLLMRunner:
+    def test_handler_always_calls_llm_runner(self) -> None:
+        """The trending_showing_products handler now calls
+        `_try_trending_llm()` unconditionally — there's no longer a
+        pagination short-circuit that bypasses the runner."""
+        src = (
+            Path(__file__).resolve().parent.parent
+            / "server" / "services" / "customer_bot_flow" / "service.py"
         )
-        assert "if _is_pagination_only else await _try_trending_llm()" in block, (
-            "the LLM trending runner must be skipped when pagination_only is True"
+        text = src.read_text(encoding="utf-8")
+        i = text.find('if step == "trending_showing_products":')
+        assert i > 0
+        block = text[i: i + 2000]
+        # New shape: unconditional `await _try_trending_llm()`.
+        assert "llm_res = await _try_trending_llm()" in block
+        # Old shape (no longer present).
+        assert "_wants_trending_more(text)" not in block
+        assert "_is_pagination_only" not in block
+
+    def test_wants_trending_more_helper_deleted(self) -> None:
+        from services.customer_bot_flow import service as svc
+
+        assert not hasattr(svc, "_wants_trending_more"), (
+            "_wants_trending_more was supposed to be deleted along with the "
+            "deterministic pagination branch on 2026-04-30"
         )
 
 

@@ -1485,117 +1485,16 @@ def _trending_list_line(rank: int, it: Dict[str, Any]) -> str:
     return f"{bullet} {nm}"
 
 
-# Short single/double-word pagination triggers. Matched on whole-token basis so
-# unrelated words containing these letters (e.g. "more expensive") don't fire.
-_TRENDING_MORE_TOKEN_PHRASES: tuple[tuple[str, ...], ...] = (
-    # English
-    ("more",),
-    ("m",),
-    ("next",),
-    ("continue",),
-    ("go",),
-    ("yes",),
-    ("ya",),
-    # Arabic
-    ("مزيد",),
-    ("المزيد",),
-    ("التالي",),
-    ("أكثر",),
-    ("اكثر",),
-    ("كمان",),
-    ("كمل",),
-    ("زيد",),
-    ("استمر",),
-    # Roman Urdu / Urdu
-    ("aur",),
-    ("aage",),
-    ("mazeed",),
-    ("mazid",),
-    ("mazyed",),
-    ("zyada",),
-    ("ziada",),
-    ("chalao",),
-    # Two-token acks
-    ("yes", "more"),
-    ("show", "more"),
-    ("see", "more"),
-    ("give", "more"),
-    ("load", "more"),
-    ("more", "please"),
-    ("next", "page"),
-)
-
-# Multi-word pagination phrases. Substring match on the normalised text.
-_TRENDING_MORE_PHRASES: tuple[str, ...] = (
-    # English
-    "show me more",
-    "show some more",
-    "show more",
-    "see more",
-    "see some more",
-    "give me more",
-    "send more",
-    "load more",
-    "keep going",
-    "more products",
-    "more items",
-    "more trending",
-    "next page",
-    "anything else",
-    "what else",
-    # Arabic — "more", "show me more", "more products", etc.
-    "المزيد",
-    "مزيد",
-    "اعرض المزيد",
-    "أعرض المزيد",
-    "اظهر المزيد",
-    "أظهر المزيد",
-    "ارسل المزيد",
-    "أرسل المزيد",
-    "ورني المزيد",
-    "منتجات اكثر",
-    "منتجات أكثر",
-    "التالي",
-    "كمل",
-    "كمان",
-    "استمر",
-    # Roman Urdu
-    "aur dikhao",
-    "aur dikha",
-    "aur dikha do",
-    "aur dikhaiye",
-    "aur dekhna",
-    "aur products",
-    "aur product",
-    "aur items",
-    "aur batao",
-    "aur cheezen",
-    "aur cheezain",
-    "mazeed dikhao",
-    "mazid dikhao",
-    "mazyed dikhao",
-    "zyada dikhao",
-    "ziada dikhao",
-    "aage dikhao",
-    "aage dikha",
-    "continue karo",
-    "agay dikhao",
-)
-
-
-def _wants_trending_more(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    flat = unicodedata.normalize("NFKC", t).translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
-    # Strip common ending punctuation/emoji so "more?" / "more!" still match.
-    flat = re.sub(r"[\.!\?،,؟]+$", "", flat).strip()
-    tokens = [x for x in re.split(r"\s+", flat) if x]
-    if 1 <= len(tokens) <= 2:
-        tup = tuple(tokens)
-        if tup in _TRENDING_MORE_TOKEN_PHRASES:
-            return True
-    return any(p in flat for p in _TRENDING_MORE_PHRASES)
+# `_TRENDING_MORE_TOKEN_PHRASES`, `_TRENDING_MORE_PHRASES`, and
+# `_wants_trending_more()` were deleted on 2026-04-30. The pagination
+# short-circuit they fed (skipping the LLM trending runner for "aur
+# dikhao" / "show more" / "المزيد" replies) became redundant once
+# TRENDING_PAGE_SIZE was bumped to 50: the LLM runner shows the full
+# catalogue on the first page, and rule 4 of the runner's system
+# prompt instructs it to acknowledge "I've already shown you all the
+# trending products" when the customer asks for more. The
+# deterministic pagination branch in the trending_showing_products
+# handler was deleted alongside.
 
 
 def _trending_footer_template_key(
@@ -1752,10 +1651,12 @@ def _select_trending_product_from_list(
     ord_m = re.search(r"(?i)^(\d{1,3})\s*(?:st|nd|rd|th)\b", query)
     if ord_m and len(query) <= 14:
         query = ord_m.group(1)
-    # Reuse the pagination detector so *every* variant of "show me more" we now
-    # understand is prevented from being read as a product name.
-    if _wants_trending_more(query):
-        return None
+    # The deterministic "_wants_trending_more" guard that used to live
+    # here was deleted on 2026-04-30. With page-size 50 covering most
+    # catalogues in one batch, the LLM trending-runner now handles
+    # "show more" / "aur dikhao" naturally via its prompt rule 4 —
+    # this deterministic name-matching path is rarely reached for
+    # pagination phrasings any more.
 
     if re.fullmatch(r"\d+", query):
         idx = int(query) - 1
@@ -4641,17 +4542,13 @@ async def process_customer_bot_message(
         if order_escape is not None:
             return order_escape
 
-        # Pagination short-circuit: if the customer's message is unambiguously
-        # 'show more' / 'aur dikhao' / 'next' / etc., DO NOT invoke the LLM
-        # trending runner — pagination is a pure cursor advance. Calling the
-        # LLM here is wasteful AND brittle: a transient rate limit on the
-        # trending runner caused 'Hamare server par mukhtasar technical
-        # masla' to surface to a customer who just typed 'Aur dikhao'
-        # (transcript 2026-04-29 14:28). Falling through to the existing
-        # `_wants_trending_more(text)` branch below handles it deterministically.
-        _is_pagination_only = _wants_trending_more(text)
-
-        llm_res = None if _is_pagination_only else await _try_trending_llm()
+        # The trending LLM runner handles ALL turns inside this step,
+        # including pagination ("aur dikhao" / "show more"). The
+        # deterministic short-circuit + regex pagination branch were
+        # deleted on 2026-04-30 once page-size 50 made multi-page
+        # catalogues rare. Runner prompt rule 4 covers the
+        # "I've already shown you all" case naturally.
+        llm_res = await _try_trending_llm()
         if llm_res is not None:
             return llm_res
         cache_raw = flow.get("trending_products_cache")
@@ -4668,20 +4565,18 @@ async def process_customer_bot_message(
             return save(nf, greet_reply, skip_api=False)
         if not cache:
             # The cache being empty here usually means the trending session
-            # was reset between turns. We must NOT hand a trending request to
+            # was reset between turns AND the LLM runner returned None
+            # (mode=off / failure). We must NOT hand a trending request to
             # ai_forward — the general LLM will hallucinate plausible-sounding
             # dropshipping categories ("Smart Watches & Fitness Bands…") that
             # aren't in our DB. WhatsApp transcript 2026-04-30 12:14 showed
-            # exactly this.
-            #
-            # Pagination ("Aur dikhao") with a known country also lands here
-            # when the LLM runner rendered the previous turn but didn't
-            # mirror the catalogue back into flow. Refetch from the DB so we
-            # can answer with real images (transcript 2026-04-30 15:25).
-            wants_more = _is_pagination_only or _wants_trending_more(text)
+            # exactly this. So when the country is still on file and the
+            # message looks like a trending continuation (anything that
+            # isn't a topic change), refetch from the DB via the
+            # deterministic renderer.
             cc_known = str(flow.get("trending_country") or "").strip().upper()
             mode_known = _trending_mode(flow)
-            if wants_more and cc_known in {"UAE", "KSA", "PK"}:
+            if cc_known in {"UAE", "KSA", "PK"} and not _looks_like_greeting(text):
                 return _show_trending_for_country(
                     cc_known,
                     {**flow, "lang": flow_lang},
@@ -4717,76 +4612,14 @@ async def process_customer_bot_message(
                 suppress_kb_wrap=True,
             )
 
-        if _wants_trending_more(text):
-            off_raw = flow.get("trending_offset")
-            try:
-                offset = int(off_raw) if off_raw is not None else 0
-            except (TypeError, ValueError):
-                offset = 0
-            new_offset = offset + TRENDING_PAGE_SIZE
-            if new_offset >= len(visible):
-                no_more_key = _trending_tpl(mode, "trending_no_more_pages")
-                return save(
-                    flow,
-                    _t(flow_lang, MSGS[no_more_key]).format(
-                        country=_trending_footer_country_label(cc)
-                    ),
-                )
-            page = visible[new_offset : new_offset + TRENDING_PAGE_SIZE]
-            has_more = new_offset + len(page) < len(visible)
-            fk, needs_c = _trending_footer_template_key(
-                first_batch=False, has_more=has_more, mode=mode,
-            )
-            footer = (
-                _t(flow_lang, MSGS[fk]).format(country=_trending_footer_country_label(cc))
-                if needs_c
-                else _t(flow_lang, MSGS[fk])
-            )
-            nf = {
-                **flow,
-                "step": "trending_showing_products",
-                "lang": flow_lang,
-                "trending_products_cache": page,
-                "trending_offset": new_offset,
-                "trending_mode": mode,
-            }
-            body = _trending_inbox_and_web_body(
-                flow_lang,
-                cc,
-                page,
-                category=flow_cat if isinstance(flow_cat, str) and flow_cat.strip() else None,
-                start_rank=new_offset + 1,
-                is_more_batch=True,
-                mode=mode,
-            )
-            base_reply2 = f"{body}\n\n{footer}".strip()
-            followup2 = _trending_followup_block(flow_lang, cc, mode=mode).lstrip()
-            full_reply = f"{base_reply2}\n\n{followup2}".strip() if followup2 else base_reply2
-            if ch == "whatsapp":
-                wa_list2: List[Dict[str, str]] = []
-                no_url2: List[str] = []
-                for i, it in enumerate(page):
-                    row_imgs = _wa_images_for_trending_row(it, rank=new_offset + i + 1)
-                    logger.info(
-                        "trending WA images (more): country=%s product=%s images=%d",
-                        cc,
-                        (it.get("product_name") or "")[:40],
-                        len(row_imgs),
-                    )
-                    if row_imgs:
-                        wa_list2.extend(row_imgs)
-                    else:
-                        cap = _wa_caption_for_trending_row(it, rank=new_offset + i + 1)
-                        no_url2.append(f"{cap}\n(no image URL — open chat on web for full list)")
-                if wa_list2:
-                    first_bubble2 = (
-                        "\n\n".join([*no_url2, base_reply2]).strip() if no_url2 else base_reply2
-                    )
-                    wa_after2: Union[str, List[str]] = (
-                        [first_bubble2, followup2] if followup2 else [first_bubble2]
-                    )
-                    return save(nf, full_reply, wa_images=wa_list2, wa_text_after=wa_after2)
-            return save(nf, full_reply)
+        # The deterministic `if _wants_trending_more(text):` pagination
+        # block (which advanced trending_offset by TRENDING_PAGE_SIZE,
+        # rebuilt the body, attached WhatsApp images, and saved) was
+        # deleted on 2026-04-30. The trending LLM-runner now handles
+        # all pagination via its prompt rule 4 + memory.shown_ids
+        # tracking. This branch is now reached only when the runner
+        # returned None (rare degraded mode) — the next branches
+        # (fresh-trending detect / category filter) cover those cases.
 
         if _wants_non_trending_products(text):
             inline_cc = _detect_trending_country(text)

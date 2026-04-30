@@ -46,22 +46,31 @@ class TestRunnerPromptDoesNotSuggestShowMore:
 
 
 class TestDeterministicNoMorePagesFiresOnAurDikhao:
-    def test_no_more_pages_branch_present(self) -> None:
-        """The deterministic flow's pagination branch checks
-        `new_offset >= len(visible)` and returns the no_more_pages
-        template. Confirm that branch is wired."""
+    def test_runner_handles_pagination(self) -> None:
+        """The deterministic `_wants_trending_more` regex branch was
+        deleted on 2026-04-30. Pagination is now handled by the
+        trending LLM-runner via prompt rule 4 ("acknowledge full
+        coverage") + memory.shown_ids tracking. The handler's job in
+        the trending_showing_products step is just to call
+        `_try_trending_llm()` unconditionally."""
         src = (
             Path(__file__).resolve().parent.parent
             / "server" / "services" / "customer_bot_flow" / "service.py"
         )
         text = src.read_text(encoding="utf-8")
-        # Find the _wants_trending_more branch inside trending_showing_products.
         i = text.find('if step == "trending_showing_products":')
-        end = text.find("if step ==", i + 50)  # next step branch
+        end = text.find("if step ==", i + 50)
         block = text[i:end] if end > i else text[i: i + 8000]
-        assert "if _wants_trending_more(text):" in block
-        assert "if new_offset >= len(visible):" in block
-        assert "trending_no_more_pages" in block
+        # No CODE call to the deleted helper (deletion-comment mentions
+        # are fine). The simplest check: the helper is no longer
+        # importable from service.
+        from services.customer_bot_flow import service as svc
+
+        assert not hasattr(svc, "_wants_trending_more"), (
+            "_wants_trending_more was supposed to be deleted on 2026-04-30"
+        )
+        # The runner still drives this step.
+        assert "_try_trending_llm()" in block
 
     def test_template_says_no_more_to_show(self) -> None:
         src = (
