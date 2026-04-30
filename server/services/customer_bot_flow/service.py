@@ -5018,14 +5018,38 @@ async def process_customer_bot_message(
             nf, greet_reply = _exit_trending_for_greeting(flow, flow_lang)
             return save(nf, greet_reply, skip_api=False)
         if not cache:
+            # The cache being empty here usually means the trending session
+            # was reset between turns. We must NOT hand a trending request to
+            # ai_forward — the general LLM will hallucinate plausible-sounding
+            # dropshipping categories ("Smart Watches & Fitness Bands…") that
+            # aren't in our DB. WhatsApp transcript 2026-04-30 12:14 showed
+            # exactly this. Instead: if the message is a fresh trending ask,
+            # re-enter the deterministic flow (DB-backed); otherwise ask for
+            # a country and let the next turn drive _show_trending_for_country.
+            base = {
+                **flow,
+                "intro_shown": bool(flow.get("intro_shown")),
+                "lang": flow_lang,
+            }
+            for k in TRENDING_STATE_KEYS:
+                base.pop(k, None)
+            wants_non = _wants_non_trending_products(text)
+            wants_t = _wants_trending_products(text)
+            if wants_non or wants_t:
+                resolved_mode = "non_trending" if wants_non else "trending"
+                base["trending_mode"] = resolved_mode
+                inline_cc = _parse_trending_country_reply(text)
+                if inline_cc:
+                    return _show_trending_for_country(
+                        inline_cc, base, text, mode=resolved_mode
+                    )
+                base["step"] = "trending_awaiting_country"
+                return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
+            # Not a trending ask any more — bail to conversational and let the
+            # normal step="conversational" routing handle it on the same turn.
             nf = _conversation_bail_from_trending(flow, flow_lang)
-            hint = (
-                "[Context: Trending product list was not available in session. "
-                "Help them choose a country for trending products or answer their message naturally. "
-                'Do not end with a website URL, "type support", or any boilerplate sign-off.]\n'
-            )
             return ai_forward(
-                hint + text,
+                text,
                 nf,
                 skip_api=_default_skip_store_api(nf),
                 suppress_kb_wrap=True,
