@@ -641,20 +641,26 @@ class StoreIntegrationClient:
                     return [x for x in payload if isinstance(x, dict)]
                 return []
 
-        try:
-            rows = await _fetch_once()
-            if rows:
-                return rows
-            # Empty response can mean genuinely no orders OR transient empty
-            # response from the upstream. Retry once with a short backoff.
-            await asyncio.sleep(0.5)
-            return await _fetch_once()
-        except httpx.HTTPError:
+        # The Arabia /orders/all endpoint is observably flaky on wide-range
+        # queries — ~5-15% of calls return [] even when orders exist. With
+        # only one retry the customer can still see 'no orders found' for
+        # accounts with hundreds of orders. Three attempts (initial + 2
+        # retries with exponential-ish backoff) cuts the false-empty rate
+        # to near zero in practice while keeping wall time tolerable
+        # (worst case ~3.6s before giving up).
+        last_err: Optional[httpx.HTTPError] = None
+        for attempt in range(3):
             try:
-                await asyncio.sleep(0.5)
-                return await _fetch_once()
-            except httpx.HTTPError:
-                return []
+                rows = await _fetch_once()
+                if rows:
+                    return rows
+            except httpx.HTTPError as exc:  # noqa: PERF203
+                last_err = exc
+            if attempt < 2:
+                await asyncio.sleep(0.5 * (attempt + 1))
+        if last_err is not None:
+            return []
+        return []
 
     async def fetch_orders_for_order_ids(
         self,

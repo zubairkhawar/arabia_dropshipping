@@ -39,6 +39,11 @@ class TestCoreRulesPresent:
             # Patterns
             "not found",                   # wrong order # handling (TCH)
             "csv",                         # CSV offer (TCG, TCL)
+            # "How do I get a CSV?" must NOT trigger generate_csv directly —
+            # it's a HOW question. Bot should explain the trigger word instead.
+            "How do I get a CSV",
+            "DO NOT call `generate_csv`",
+            "These are HOW questions".lower(),
         ],
     )
     def test_rule_phrases_in_prompt(self, system_prompt: str, phrase: str) -> None:

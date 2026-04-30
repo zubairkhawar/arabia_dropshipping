@@ -2121,6 +2121,39 @@ def _wants_trending_products(text: str) -> bool:
     return any(m in flat for m in markers) or any(m in flat_singular for m in markers)
 
 
+_ANALYTICS_RE = re.compile(
+    # Stats / aggregate questions that must never route to the trending
+    # browse flow. WhatsApp transcript 2026-04-30 03:25 showed
+    # "Pakistan me delivery ratio kia hy" returning Pakistan trending
+    # *product images* because the trending step intercepted it on the
+    # country word. These phrases are answered by lookup_orders_by_range /
+    # get_total_orders in the LLM-first orchestrator, not by the trending
+    # catalog.
+    r"\b("
+    r"delivery\s+ratio|return\s+ratio|deliver(?:y|ed)\s+(?:percent(?:age)?|rate|%)|"
+    r"return\s+(?:percent(?:age)?|rate|%)|"
+    r"top\s+cit(?:y|ies)|top\s+selling|"
+    r"(?:avg|average)\s+profit|profit\s+(?:per|by)\s+(?:order|month)|"
+    r"how\s+many\s+orders|kitne?\s+orders?|kitni\s+orders?|"
+    r"orders?\s+ka\s+(?:percent|ratio|stats?|breakdown)|"
+    r"ratio\s+(?:kia|kya|kitna|kitni)|"
+    r"(?:kia|kya)\s+(?:hai|hy|h)\s*(?:mer[ai]|meri)?\s*(?:delivery|return)\s+ratio"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_analytics_question(text: str) -> bool:
+    """Detect aggregate-stats questions like delivery ratio, return ratio,
+    top cities, top selling, avg profit per order. These must never route
+    to the trending catalog browse flow even if the message also names a
+    country (e.g. "Pakistan me delivery ratio kia hy")."""
+    t = (text or "").strip()
+    if not t or len(t) > 220:
+        return False
+    return bool(_ANALYTICS_RE.search(t))
+
+
 def _looks_like_account_question(text: str) -> bool:
     """Invoice / account area — requires verification like order lookups."""
     t = (text or "").strip().lower()
@@ -4181,7 +4214,21 @@ async def process_customer_bot_message(
              prompt. This mirrors the same branch used by the conversational
              handler so behavior is consistent regardless of where the user
              triggered the escape from.
+
+        Analytics questions ("delivery ratio kia hy", "kitne orders deliver
+        hue") also escape — they're not trending browse requests even if
+        they happen to mention a country. They go to the conversational /
+        LLM-first path which has stats tools (lookup_orders_by_range,
+        get_total_orders) that produce delivery_ratio_pct etc.
         """
+        if _looks_like_analytics_question(msg_text):
+            base = _conversation_bail_from_trending(flow, flow_lang)
+            return ai_forward(
+                "[Customer question] " + (msg_text or ""),
+                base,
+                skip_api=_default_skip_store_api(base),
+                suppress_kb_wrap=True,
+            )
         if not (
             _looks_like_order_status_question(msg_text)
             or _is_likely_order_id_only(msg_text)
