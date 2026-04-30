@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     r2_access_key_id: Optional[str] = None
     r2_secret_access_key: Optional[str] = None
     r2_bucket_name: Optional[str] = None
+    r2_endpoint: Optional[str] = None  # e.g. https://<account>.r2.cloudflarestorage.com
     r2_presign_put_seconds: int = 60
     r2_presign_get_seconds: int = 3600
     # Optional public base for R2 (e.g. https://pub-xxxxx.r2.dev or custom domain). Used for stored image URLs.
