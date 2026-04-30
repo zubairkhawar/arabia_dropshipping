@@ -45,8 +45,8 @@ class TestOtpGuardSteps:
         block = text[i:end + 1]
 
         for required in (
-            # verification
-            "awaiting_customer_type",
+            # verification (awaiting_customer_type was deleted on 2026-04-30
+            # along with the 1/2 menu)
             "awaiting_resume_choice",
             "existing_awaiting_email",
             "existing_awaiting_verification_code",

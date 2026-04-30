@@ -27,7 +27,8 @@ from langchain_bot.tools import TOOL_REGISTRY, ToolCategory
 # ─────────────────────────────────────────────────────────────────────────────
 DETERMINISTIC_VERIFICATION_STEPS = frozenset(
     {
-        "awaiting_customer_type",
+        # `awaiting_customer_type` (1/2 new/existing menu) was deleted on
+        # 2026-04-30. The LLM-first path now decides routing implicitly.
         "awaiting_resume_choice",
         "existing_awaiting_email",
         "existing_awaiting_verification_code",
@@ -144,7 +145,6 @@ class TestDeterministicBuckets:
         # so we assert the snapshot constant matches the documented set.
         # If service.py changes its set, this will diverge — fix the snapshot.
         assert DETERMINISTIC_VERIFICATION_STEPS == {
-            "awaiting_customer_type",
             "awaiting_resume_choice",
             "existing_awaiting_email",
             "existing_awaiting_verification_code",

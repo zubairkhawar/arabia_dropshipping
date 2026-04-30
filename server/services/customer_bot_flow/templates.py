@@ -55,31 +55,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         "arabic": "مرحبًا! كيف يمكنني مساعدتك اليوم؟",
         "roman_urdu": "Hello! Aaj kya madad karoon?",
     },
-    "customer_type_menu_reminder": {
-        "english": "To continue, reply **1** if you are a new customer or **2** if you are an existing customer.",
-        "arabic": "للمتابعة، أجب بـ **1** إذا كنت عميلاً جديداً أو **2** إذا كنت عميلاً حالياً.",
-        "roman_urdu": "Aage barhne ke liye **1** likhein agar new customer, **2** likhein agar existing customer.",
-    },
-    "customer_type_unclear": {
-        "english": (
-            "No problem! To help you better, please let me know:\n\n"
-            "**1** — I'm a new customer\n"
-            "**2** — I'm an existing customer\n\n"
-            "Just reply with 1 or 2."
-        ),
-        "arabic": (
-            "لا مشكلة! لمساعدتك بشكل أفضل، يرجى إخباري:\n\n"
-            "**1** — أنا عميل جديد\n"
-            "**2** — أنا عميل حالي\n\n"
-            "فقط أرسل 1 أو 2."
-        ),
-        "roman_urdu": (
-            "Koi masla nahi! Aapki behtar madad ke liye batayein:\n\n"
-            "**1** — Main new customer hoon\n"
-            "**2** — Main existing customer hoon\n\n"
-            "Sirf 1 ya 2 likhein."
-        ),
-    },
     "greeting": {
         "english": (
             "Hey 👋 Welcome to ArabiaDropshipping!\n\n"
@@ -131,11 +106,6 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         ),
     },
     "new_customer_welcome": {
-        "english": "Great! How can I help you? Feel free to ask anything.",
-        "arabic": "رائع! كيف يمكنني مساعدتك؟ لا تتردد في طرح أي سؤال.",
-        "roman_urdu": "Zabardast! Main kaise madad kar sakta hoon? Koi bhi sawal pooch sakte hain.",
-    },
-    "existing_customer_welcome": {
         "english": "Great! How can I help you? Feel free to ask anything.",
         "arabic": "رائع! كيف يمكنني مساعدتك؟ لا تتردد في طرح أي سؤال.",
         "roman_urdu": "Zabardast! Main kaise madad kar sakta hoon? Koi bhi sawal pooch sakte hain.",

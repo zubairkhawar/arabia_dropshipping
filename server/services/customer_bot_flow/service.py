@@ -86,42 +86,11 @@ def _memory_apply_entities(mem_id: Optional[str], text: str) -> None:
         ConversationMemory.store_last_intent(mem_id, _intent)
 
 
-def _memory_store_pending_entry_menu(mem_id: Optional[str], text: str) -> None:
-    """Remember topic keywords before new/existing clarifying reply."""
-    if not mem_id:
-        return
-    t = (text or "").strip()
-    tl = t.lower()
-    if tl in {"1", "2", "n", "e", "y", "yes", "no", "haan", "nahi", "ji"}:
-        return
-    if len(t) < 2:
-        return
-    topic, intent_type = IntentDetector.detect_topic_and_intent(t)
-    if intent_type in ("general_question", "escalation"):
-        return
-    if intent_type == "verification" and "existing" not in tl and "verify" not in tl:
-        return
-    ConversationMemory.store_pending_intent(
-        mem_id,
-        topic or "general",
-        intent_type,
-        t,
-        confidence=0.8,
-    )
-
-
-def _memory_pending_ai_prefix(mem_id: Optional[str]) -> str:
-    if not mem_id:
-        return ""
-    p = ConversationMemory.get_pending_intent(mem_id)
-    if not p:
-        return ""
-    return (
-        "[Customer memory: They asked about "
-        f"{p.get('topic')} ({p.get('intent_type')}) earlier. "
-        f"Original message: {p.get('original_question', '')}. "
-        "Answer that topic first, helpfully and accurately.]\n\n"
-    )
+# `_memory_store_pending_entry_menu` and `_memory_pending_ai_prefix`
+# helpers were deleted on 2026-04-30 along with the awaiting_customer_type
+# 1/2 menu they served. Pending-intent stashing for the verification path
+# is done inline by ConversationMemory.store_pending_intent at the call
+# site.
 
 BOT_FLOW_KEY = "bot_flow"
 
@@ -636,53 +605,10 @@ def _should_bail_from_verification(text: str, current_step: str) -> bool:
     return False
 
 
-def _looks_like_free_text_question(text: str) -> bool:
-    """
-    Detect likely FAQ/free-text requests at the entry step so we don't hard-loop
-    on the 1/2 qualifier menu for real questions.
-    """
-    s = (text or "").strip().lower()
-    if not s:
-        return False
-    if _looks_like_greeting(s):
-        return False
-    if solo_menu_digit(s, "12"):
-        return False
-    if _parse_choice(
-        s,
-        {"1": "new", "new": "new", "n": "new", "2": "existing", "existing": "existing", "old": "existing", "e": "existing"},
-    ):
-        return False
-    if "?" in s:
-        return True
-    # Topic keywords the customer can ask about without needing new/existing selection.
-    # Includes Arabia service topics and common FAQ entry points.
-    topic_keywords = (
-        "dropshipping", "dropship", "fulfillment", "fulfilment",
-        "3pl", "courier", "whatsapp order", "agency", "partnership",
-        "profit", "payment", "commission", "sourcing", "china sourcing",
-        "store creation", "store setup", "marketing", "shipping",
-        "return", "refund", "policy", "policies", "price", "pricing",
-        "services", "service", "how", "help", "support",
-        "register", "sign up", "start", "begin",
-        # Urdu/Roman Urdu topic starters
-        "kya hai", "kya hota", "service", "charges", "fee", "cost",
-    )
-    if any(s == kw or s.startswith(kw) for kw in topic_keywords):
-        return True
-    faq_markers = (
-        "tell me",
-        "about",
-        "what is",
-        "who are",
-        "dropship arabia",
-        "maloomat",
-        "btao",
-        "batao",
-        "kya",
-        "ka btao",
-    )
-    return any(m in s for m in faq_markers) and len(s) >= 8
+# `_looks_like_free_text_question` was deleted on 2026-04-30. It was
+# only used by the awaiting_customer_type step to decide whether to
+# re-prompt the 1/2 menu vs. let the LLM answer; with the menu gone,
+# the LLM-first orchestrator answers free-text directly.
 
 
 def _deterministic_kb_answer(text: str, lang: str) -> Optional[str]:
@@ -2343,7 +2269,7 @@ def _flow_is_tabula_rasa(flow: Dict[str, Any]) -> bool:
         return False
     if step == "conversational":
         return True
-    if step in ("awaiting_customer_type", "entry"):
+    if step == "entry":
         return True
     return False
 
@@ -2368,82 +2294,11 @@ def _parse_choice(text: str, mapping: Dict[str, str]) -> Optional[str]:
     return None
 
 
-async def _classify_entry_menu_intent_llm(user_message: str) -> str:
-    """
-    When the new/existing menu text does not match keywords/digits, classify with the LLM.
-
-    Returns one of: new | existing | agent_hours | other
-    - agent_hours: asking when support/agents are online, working hours, availability.
-    - other: general FAQ / unrelated (route to main AI).
-    On failure or missing API key, returns \"other\".
-    """
-    msg = (user_message or "").strip()
-    if not msg or len(msg) > 500:
-        return "other"
-    key = get_openai_api_key()
-    if not key:
-        logger.warning("entry_menu intent LLM: no OpenAI API key configured")
-        return "other"
-    system = (
-        "You classify one user message at the Arabia Dropshipping bot ENTRY step "
-        "(the bot just showed a welcome menu with topics and options **1** new / **2** existing).\n"
-        "Choose exactly ONE label:\n"
-        "- new — user indicates they are NEW (first time, sign up, register, typos like neww).\n"
-        "- existing — user indicates EXISTING (already have account, login, old customer, "
-        "typos like existinf/exsisting).\n"
-        "- agent_hours — user asks when human agents/support are AVAILABLE, working hours, "
-        "online time, office hours, schedule, kab online, agents available, 24/7 question, etc. "
-        "(NOT choosing new vs existing).\n"
-        "- other — general questions, shipping, products, unrelated text, or impossible to tell.\n"
-        "Output exactly one lowercase word: new OR existing OR agent_hours OR other. No punctuation."
-    )
-    human = f"User message:\n{msg}"
-    try:
-        llm = ChatOpenAI(
-            model_name=settings.openai_model,
-            temperature=0,
-            openai_api_key=key,
-            max_tokens=12,
-        )
-        resp = await llm.ainvoke(
-            [SystemMessage(content=system), HumanMessage(content=human)]
-        )
-        text_out = (getattr(resp, "content", None) or str(resp) or "").strip().lower()
-        if re.search(r"\bagent_hours\b", text_out) or (
-            re.search(r"\bagent\b", text_out) and re.search(r"\bhours?\b", text_out)
-        ):
-            return "agent_hours"
-        first = (text_out.split() or [""])[0]
-        token = re.sub(r"[^a-z]", "", first)
-        if token.startswith("exist") or token == "existing":
-            return "existing"
-        if token.startswith("new"):
-            return "new"
-        if token == "other":
-            return "other"
-        return "other"
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("entry_menu intent LLM classification failed: %s", exc)
-        return "other"
-
-
-def _entry_menu_agent_hours_reply(db: Session, tenant_id: int, lang: str) -> str:
-    sched = (
-        db.query(TenantSchedule)
-        .filter(TenantSchedule.tenant_id == tenant_id)
-        .first()
-    )
-    if not sched:
-        body = _t(lang, _AGENT_SCHEDULE_UNKNOWN_MSGS)
-    else:
-        body = format_tenant_schedule_for_customer(
-            lang,
-            working_days=sched.working_days,
-            start_time=sched.start_time,
-            end_time=sched.end_time,
-        )
-    hint = _t(lang, MSGS["customer_type_menu_reminder"])
-    return f"{body}\n\n{hint}".strip()
+# `_classify_entry_menu_intent_llm` and `_entry_menu_agent_hours_reply`
+# were deleted on 2026-04-30. They existed solely to drive the
+# awaiting_customer_type 1/2 menu, which itself was deleted. Agent-hours
+# questions are now answered through search_kb / ai_forward like any
+# other policy question.
 
 
 def _pick(data: Dict[str, Any], *keys: str) -> str:
@@ -4645,7 +4500,6 @@ async def process_customer_bot_message(
     # 4 deterministic buckets (verification, pagination, sourcing, handoff).
     otp_guard_steps = {
         # Verification bucket
-        "awaiting_customer_type",
         "awaiting_resume_choice",
         "existing_awaiting_email",
         "existing_awaiting_verification_code",
@@ -4770,224 +4624,16 @@ async def process_customer_bot_message(
         return save(wb, _t(flow_lang, _RESUME_CHOICE_MSGS))
 
     # --- New / Existing customer selection ---
-    if step == "awaiting_customer_type":
-        if mem_id:
-            _memory_store_pending_entry_menu(mem_id, text)
-        choice = _parse_choice(
-            text,
-            {
-                "1": "new", "new": "new", "new customer": "new", "n": "new",
-                "first time": "new", "naya": "new", "naya customer": "new",
-                "naya hun": "new", "pehli baar": "new", "pehli dafa": "new",
-                "sign up": "new", "register": "new",
-                "2": "existing", "existing": "existing", "old": "existing",
-                "existing customer": "existing", "e": "existing",
-                "old customer": "existing", "purana": "existing",
-                "purana customer": "existing", "already": "existing",
-                "already registered": "existing", "already have account": "existing",
-                "sign in": "existing", "login": "existing", "log in": "existing",
-                "returning": "existing", "returning customer": "existing",
-                "pehle se hun": "existing", "account hai": "existing",
-            },
-        )
-        if choice == "new":
-            if mem_id:
-                ConversationMemory.store_bot_customer_kind(mem_id, "new")
-            nf = {
-                **flow,
-                "step": "conversational",
-                "customer_kind": "new",
-                "intro_shown": True,
-                "lang": flow_lang,
-            }
-            pref = _memory_pending_ai_prefix(mem_id) if mem_id else ""
-            if pref:
-                if mem_id:
-                    ConversationMemory.clear_pending_intent(
-                        mem_id, promote_from_queue=True
-                    )
-                return ai_forward(pref + text, nf, skip_api=True)
-            return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
-        if choice == "existing":
-            if mem_id:
-                ConversationMemory.store_bot_customer_kind(mem_id, "existing")
-            # Carry the original question's reason into verify_reason. Otherwise
-            # the post-verification path can't tell the customer's original ask
-            # was about orders, defaults reason to None / "account", and routes
-            # through ai_forward — which surfaces 'data fetch failed' on any
-            # transient API blip. Reading from pending_intent keeps the
-            # verification-bucket flow deterministic end to end.
-            existing_reason: Optional[str] = None
-            existing_pre_ref: Optional[str] = None
-            if mem_id:
-                _pinfo = ConversationMemory.get_pending_intent(mem_id) or {}
-                _orig_q = (str(_pinfo.get("original_question") or "")).strip()
-                if _orig_q:
-                    if (
-                        _looks_like_order_status_question(_orig_q)
-                        or _is_likely_order_id_only(_orig_q)
-                        or _looks_like_invoice_for_order(_orig_q)
-                    ):
-                        existing_reason = "order"
-                    elif _looks_like_account_question(_orig_q):
-                        existing_reason = "account"
-                    extracted = _extract_order_id_from_message(_orig_q, phone) or ""
-                    extracted = extracted.strip()
-                    if extracted:
-                        existing_pre_ref = extracted
-            f_ex, msg_ex = _existing_identity_entry(
-                flow,
-                flow_lang,
-                verify_reason=existing_reason,
-                pending_order_ref=existing_pre_ref,
-                intro_key="ask_email",
-            )
-            return save(f_ex, msg_ex)
-        # Trending / sourcing before the entry LLM so phrases like "Give me trending products"
-        # are never treated as an unclear 1/2 menu reply.
-        if _wants_non_trending_products(text):
-            llm_res = await _try_trending_llm(entry_intent="non_trending")
-            if llm_res is not None:
-                return llm_res
-            inline_cc = _parse_trending_country_reply(text)
-            base = {
-                **flow,
-                "customer_kind": flow.get("customer_kind") or "new",
-                "intro_shown": True,
-                "lang": flow_lang,
-            }
-            for k in TRENDING_STATE_KEYS:
-                base.pop(k, None)
-            base["trending_mode"] = "non_trending"
-            if inline_cc:
-                return _show_trending_for_country(inline_cc, base, text, mode="non_trending")
-            base["step"] = "trending_awaiting_country"
-            return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
-        if _wants_trending_products(text):
-            llm_res = await _try_trending_llm(entry_intent="trending")
-            if llm_res is not None:
-                return llm_res
-            inline_cc = _parse_trending_country_reply(text)
-            base = {
-                **flow,
-                "customer_kind": flow.get("customer_kind") or "new",
-                "intro_shown": True,
-                "lang": flow_lang,
-            }
-            for k in TRENDING_STATE_KEYS:
-                base.pop(k, None)
-            base["trending_mode"] = "trending"
-            if inline_cc:
-                return _show_trending_for_country(inline_cc, base, text)
-            base["step"] = "trending_awaiting_country"
-            return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
-        if _wants_product_sourcing(text):
-            product_hint = _extract_sourcing_product_name(text)
-            has_bulk = bool(
-                re.search(
-                    r"\b\d{2,}\s*(?:piece|pieces|pcs|unit|units|qty)\b",
-                    text.lower(),
-                )
-            )
-            if has_bulk:
-                nf = {
-                    **flow,
-                    "step": "awaiting_agent",
-                    "customer_kind": "new",
-                    "intro_shown": True,
-                    "pending_handoff_team": TEAM_NEW_CUSTOMER,
-                    "sourcing_product_name": product_hint,
-                    "lang": flow_lang,
-                }
-                return save(
-                    nf,
-                    _t(flow_lang, MSGS["sourcing_bulk_handoff"]),
-                    team=TEAM_NEW_CUSTOMER,
-                    esc=True,
-                )
-            nf = {
-                **flow,
-                "step": "sourcing_collecting_details",
-                "customer_kind": "new",
-                "intro_shown": True,
-                "sourcing_product_name": product_hint,
-                "lang": flow_lang,
-            }
-            if product_hint:
-                return save(
-                    nf,
-                    _t(flow_lang, MSGS["sourcing_with_product"]).format(product=product_hint),
-                )
-            return save(nf, _t(flow_lang, MSGS["sourcing_collect_details"]))
-        # Simple acknowledgments (okay, good, fine, hmm, etc.) — just re-prompt the menu
-        _ack_words = {
-            "ok", "okay", "okey", "oki", "oki doki", "k",
-            "good", "fine", "nice", "great", "cool", "alright", "right",
-            "yes", "yeah", "yep", "yea", "yah", "haan", "han", "ji",
-            "hmm", "hm", "hmmmm", "achha", "acha", "accha", "theek",
-            "theek hai", "thik", "thik hai", "sahi", "sahi hai",
-            "thanks", "thank you", "shukriya", "shukria",
-            "no", "nahi", "nhi", "na",
-        }
-        if text.strip().lower() in _ack_words:
-            return save(flow, _t(flow_lang, MSGS["customer_type_unclear"]))
-
-        # Typo / FAQ on the 1–2 menu: LLM classifies new vs existing vs agent hours vs other.
-        entry_intent = await _classify_entry_menu_intent_llm(text)
-        if entry_intent == "agent_hours":
-            sched_body = _entry_menu_agent_hours_reply(db, tenant_id, flow_lang)
-            return save(flow, format_kb_reply(flow_lang, sched_body), skip_api=True)
-        if entry_intent == "new":
-            if mem_id:
-                ConversationMemory.store_bot_customer_kind(mem_id, "new")
-            nf = {
-                **flow,
-                "step": "conversational",
-                "customer_kind": "new",
-                "intro_shown": True,
-                "lang": flow_lang,
-            }
-            pref = _memory_pending_ai_prefix(mem_id) if mem_id else ""
-            if pref:
-                if mem_id:
-                    ConversationMemory.clear_pending_intent(
-                        mem_id, promote_from_queue=True
-                    )
-                return ai_forward(pref + text, nf, skip_api=True)
-            return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
-        if entry_intent == "existing":
-            if mem_id:
-                ConversationMemory.store_bot_customer_kind(mem_id, "existing")
-            f_ex2, msg_ex2 = _existing_identity_entry(
-                flow,
-                flow_lang,
-                verify_reason=None,
-                pending_order_ref=None,
-                intro_key="ask_email",
-            )
-            return save(f_ex2, msg_ex2)
-        # Short menu-ish input but classifier could not decide — ask again (avoid empty LLM reply / fallback).
-        if entry_intent == "other" and len(text.strip()) <= 48 and not _looks_like_free_text_question(text):
-            if mem_id and ConversationMemory.get_pending_intent(mem_id):
-                return save(flow, _t(flow_lang, MSGS["customer_type_menu_reminder"]))
-            return save(flow, _t(flow_lang, MSGS["customer_type_unclear"]))
-
-        # Free-text that isn't a choice → treat as new customer and answer directly
-        nf = {
-            **flow,
-            "step": "conversational",
-            "customer_kind": "new",
-            "intro_shown": True,
-            "lang": flow_lang,
-        }
-        if mem_id:
-            ConversationMemory.store_bot_customer_kind(mem_id, "new")
-        pref = _memory_pending_ai_prefix(mem_id) if mem_id else ""
-        if pref:
-            if mem_id:
-                ConversationMemory.clear_pending_intent(mem_id, promote_from_queue=True)
-            return ai_forward(pref + text, nf, skip_api=True)
-        return ai_forward(text, nf, skip_api=True)
+    # `awaiting_customer_type` step + the 1/2 (new/existing) menu were
+    # deleted on 2026-04-30. The LLM-first orchestrator decides routing
+    # implicitly: order/account questions go to the verification bucket
+    # (which sets customer_kind="existing"); how-to / dropshipping
+    # questions go straight to ai_forward / KB. The classifier helpers
+    # (_classify_entry_menu_intent_llm, _memory_store_pending_entry_menu,
+    # _memory_pending_ai_prefix, _looks_like_free_text_question,
+    # _entry_menu_agent_hours_reply) and templates (customer_type_menu_reminder,
+    # customer_type_unclear, new_customer_welcome, existing_customer_welcome)
+    # were also removed.
 
     if step == "trending_awaiting_country":
         # Order / account intent always beats trending — even mid-country-pick.
@@ -5856,15 +5502,20 @@ async def process_customer_bot_message(
                 skip_api=not bool(flow.get("verified")),
             )
 
-        # --- Unverified: order/account questions start existing-customer identity (or bypass order-id path) ---
+        # --- Unverified: order/account questions go straight into the
+        # existing-customer identity entry. The 1/2 (new/existing) menu was
+        # deleted on 2026-04-30 — anyone asking about an order/invoice has,
+        # by definition, an account already. New customers asking how-to /
+        # service questions don't hit this branch (the LLM-first path
+        # answers them directly).
         if _needs_account_verification(flow) and (
             _looks_like_order_status_question(text)
             or _looks_like_account_question(text)
             or _looks_like_invoice_for_order(text)
         ):
-            # Fresh state after reset: do not force "existing" immediately.
-            # Ask new/existing first, then continue with the appropriate path.
             if not (flow.get("customer_kind") or "").strip():
+                # Stash the original question so the verification flow can
+                # answer it once the customer clears email + mobile.
                 if mem_id and (text or "").strip():
                     ConversationMemory.store_pending_intent(
                         mem_id,
@@ -5873,13 +5524,6 @@ async def process_customer_bot_message(
                         (text or "").strip(),
                         queue_previous=False,
                     )
-                nf = {
-                    **flow,
-                    "step": "awaiting_customer_type",
-                    "intro_shown": True,
-                    "lang": flow_lang,
-                }
-                return save(nf, _t(flow_lang, MSGS["customer_type_menu_reminder"]))
 
             flow = {**flow, "customer_kind": "existing"}
             if mem_id:

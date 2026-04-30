@@ -25,8 +25,7 @@ PROTOCOL_WHITELIST: dict[str, str] = {
     # branded contract — exact welcome menu
     "greeting": "branded welcome menu — marketing/legal contract",
     "entry": "branded welcome menu (alias of greeting)",
-    # next-turn parser contracts — flow expects literal '1'/'2', email shape, phone shape
-    "customer_type_menu_reminder": "parser expects literal '1' or '2' reply",
+    # next-turn parser contracts — flow expects email shape, phone shape, etc.
     "ask_email": "next reply must be email-shaped",
     "ask_mobile": "next reply must be phone-shaped",
     "ask_order": "next reply must be order-id-shaped",
@@ -51,9 +50,7 @@ PROTOCOL_WHITELIST: dict[str, str] = {
     # legacy structured renderers (trending, sourcing, handoff) — kept until
     # Phase 4.x migrates them; explicit reason logged for each below.
     "hello_ack": "legacy helper return-string contract; remove after helper refactor",
-    "new_customer_welcome": "legacy state-machine reply",
-    "existing_customer_welcome": "legacy state-machine reply",
-    "customer_type_unclear": "next-turn parser expects 1/2 — keep until LLM-first owns the customer-type flow",
+    "new_customer_welcome": "legacy state-machine reply (still used when customer switches from existing→new mid-verification)",
     "existing_switch_verify": "legacy state-machine intro for existing-customer verification",
     "order_verify_intro": "legacy state-machine intro",
     "account_verify_intro": "legacy state-machine intro",
