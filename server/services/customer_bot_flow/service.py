@@ -5101,6 +5101,40 @@ async def process_customer_bot_message(
 
     if step == "existing_awaiting_order_id":
         raw = (text or "").strip()
+        # Topic-change escape: when the customer asks something other
+        # than an order id at this step (a KB question, a comparison, a
+        # greeting, a thank-you), DO NOT pass the message through as if
+        # it were an order id — that produces "order not found" replies
+        # for clearly-non-order text. WhatsApp transcript 2026-04-30
+        # 21:06: customer asked "arabia dropship zambeel say kesay
+        # behtar hai" (Zambeel comparison) at this step and the bot
+        # replied "Mujhe aapke account mein yeh order nahi mila".
+        # Bail to LLM-first / ai_forward instead.
+        looks_like_order_ask = (
+            _is_likely_order_id_only(raw)
+            or _looks_like_order_status_question(raw)
+            or _looks_like_tracking_by_id(raw)
+            or _looks_like_invoice_by_id(raw)
+            or _looks_like_invoice_for_order(raw)
+            or bool(_extract_order_id_from_message(raw, phone))
+        )
+        if not looks_like_order_ask:
+            # Greeting / ack / topic-change → exit the order-id step into
+            # conversational and let the LLM-first orchestrator handle it.
+            nf = {**flow, "step": "conversational", "lang": flow_lang}
+            if _looks_like_greeting(raw) or _is_pure_ack_or_thanks(raw):
+                # Send a short pivot back to "what would you like next?"
+                pivot = "Sure — what would you like to ask?"
+                if flow_lang == "roman_urdu":
+                    pivot = "Theek hai — aap kya poochna chahte hain?"
+                elif flow_lang == "arabic":
+                    pivot = "بالتأكيد — ماذا تريد أن تسأل؟"
+                return save(nf, pivot, skip_api=True)
+            # Real informational question — forward to ai_forward (which
+            # has KB + tools via the orchestrator's verified-customer
+            # path) so the customer gets an actual answer.
+            return ai_forward("[Customer question] " + raw, nf, skip_api=False)
+
         ref = raw if _is_likely_order_id_only(raw) else (_extract_order_id_from_message(raw, phone) or raw)
         order, src = await _lookup_order(
             db, tenant_id, ref, store_client,
