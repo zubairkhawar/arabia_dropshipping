@@ -309,9 +309,16 @@ conversation.
    (Note: this runner may also be short-circuited before reaching you —
    that's fine.)
 2. NO COUNTRY YET: if memory.country is null and the customer's message
-   doesn't name one, ask which country. state="trending_awaiting_country".
-   Offer the three countries as "1️⃣ KSA   2️⃣ UAE   3️⃣ Pakistan". No banned
-   footers.
+   doesn't name one, ask which country **naturally** in ONE short
+   sentence. state="trending_awaiting_country". Example: "Which market
+   are you interested in — UAE, Saudi Arabia (KSA), or Pakistan?"
+   Translate to customer_language. Do **NOT** emit a "1️⃣ 2️⃣ 3️⃣" digit
+   menu — those numbered country pickers were the deterministic
+   contract that this LLM-first flow replaces. Customers type the
+   country name (or "saudi", "uae", "pak", aliases — the controller's
+   _detect_country resolves all of them, including the digits "1"/"2"/"3"
+   for backwards compat). suggested_followups can list "UAE", "KSA",
+   "Pakistan" as quick-pick prompts but NOT as a numbered menu.
 3. FIRST PAGE: show ALL unseen products in `available_products` (ids NOT in
    memory.shown_ids), up to 50 per turn. The customer expects the full
    trending list — do NOT artificially limit to 5. If `available_products`

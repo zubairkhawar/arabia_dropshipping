@@ -52,6 +52,7 @@ from services.intent_detector import IntentDetector
 from services.memory_service import ConversationMemory, normalize_memory_scope_id
 from services.customer_bot_flow.trending_llm_runner import (
     TrendingLLMResult,
+    _detect_country as _detect_trending_country,
     memory_to_flow_patch,
     run_trending_llm,
 )
@@ -1618,38 +1619,12 @@ def _trending_footer_template_key(
     return (_trending_tpl(mode, base), True)
 
 
-def _parse_trending_country_reply(text: str) -> Optional[str]:
-    raw = (text or "").strip()
-    if not raw:
-        return None
-    t = unicodedata.normalize("NFKC", raw).lower()
-    t = t.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
-    # Menu order: 1 = KSA, 2 = UAE, 3 = Pakistan
-    if t == "1":
-        return "KSA"
-    if t == "2":
-        return "UAE"
-    if t == "3":
-        return "PK"
-    if t in ("971",):
-        return "UAE"
-    if t in ("966",):
-        return "KSA"
-    if t in ("92",):
-        return "PK"
-    if t in ("uae",):
-        return "UAE"
-    if t in ("ksa", "pk"):
-        return t.upper()
-    if "uae" in t or "emirates" in t or "dubai" in t or "abu dhabi" in t:
-        return "UAE"
-    if "ksa" in t or "saudi" in t or "riyadh" in t or "jeddah" in t:
-        return "KSA"
-    if "pakistan" in t or "lahore" in t or "karachi" in t:
-        return "PK"
-    if t == "sa" and len(t) <= 3:
-        return "KSA"
-    return None
+# `_parse_trending_country_reply` was deleted on 2026-04-30. Country
+# detection for trending picks goes through `_detect_trending_country`
+# (re-exported from trending_llm_runner) which handles a wider alias
+# set including Arabic forms, "saudia", "emirates", "pakistani" — and
+# still maps the bare digits "1"/"2"/"3" for backwards compatibility
+# with customers who learned the old menu.
 
 
 def _trending_price_bit(it: Dict[str, Any]) -> str:
@@ -4648,7 +4623,7 @@ async def process_customer_bot_message(
         if _looks_like_greeting(text):
             nf, greet_reply = _exit_trending_for_greeting(flow, flow_lang)
             return save(nf, greet_reply, skip_api=False)
-        if _is_natural_language(text) and _parse_trending_country_reply(text) is None:
+        if _is_natural_language(text) and _detect_trending_country(text) is None:
             nf = _bail_to_conversational(flow, flow_lang)
             return ai_forward(
                 text,
@@ -4656,7 +4631,7 @@ async def process_customer_bot_message(
                 skip_api=_default_skip_store_api(nf),
                 suppress_kb_wrap=True,
             )
-        cc = _parse_trending_country_reply(text)
+        cc = _detect_trending_country(text)
         if not cc:
             return save(flow, _t(flow_lang, MSGS["trending_country_retry"]))
         return _show_trending_for_country(cc, flow, text, mode=_trending_mode(flow))
@@ -4725,7 +4700,7 @@ async def process_customer_bot_message(
             if wants_non or wants_t:
                 resolved_mode = "non_trending" if wants_non else "trending"
                 base["trending_mode"] = resolved_mode
-                inline_cc = _parse_trending_country_reply(text)
+                inline_cc = _detect_trending_country(text)
                 if inline_cc:
                     return _show_trending_for_country(
                         inline_cc, base, text, mode=resolved_mode
@@ -4814,7 +4789,7 @@ async def process_customer_bot_message(
             return save(nf, full_reply)
 
         if _wants_non_trending_products(text):
-            inline_cc = _parse_trending_country_reply(text)
+            inline_cc = _detect_trending_country(text)
             base = {**flow, "lang": flow_lang}
             for k in TRENDING_STATE_KEYS:
                 base.pop(k, None)
@@ -4824,7 +4799,7 @@ async def process_customer_bot_message(
             base["step"] = "trending_awaiting_country"
             return save(base, _t(flow_lang, MSGS["trending_ask_country"]))
         if _wants_trending_products(text):
-            inline_cc = _parse_trending_country_reply(text)
+            inline_cc = _detect_trending_country(text)
             base = {**flow, "lang": flow_lang}
             for k in TRENDING_STATE_KEYS:
                 base.pop(k, None)
@@ -5391,7 +5366,7 @@ async def process_customer_bot_message(
             llm_res = await _try_trending_llm(entry_intent="non_trending")
             if llm_res is not None:
                 return llm_res
-            inline_cc = _parse_trending_country_reply(text)
+            inline_cc = _detect_trending_country(text)
             base = {
                 **flow,
                 "intro_shown": bool(flow.get("intro_shown")),
@@ -5408,7 +5383,7 @@ async def process_customer_bot_message(
             llm_res = await _try_trending_llm(entry_intent="trending")
             if llm_res is not None:
                 return llm_res
-            inline_cc = _parse_trending_country_reply(text)
+            inline_cc = _detect_trending_country(text)
             base = {
                 **flow,
                 "intro_shown": bool(flow.get("intro_shown")),

@@ -536,32 +536,19 @@ BOT_FLOW_TEMPLATES: Dict[str, Dict[str, str]] = {
         ),
     },
     "trending_ask_country": {
-        "english": (
-            "Which country's trending products would you like to see?\n\n"
-            "1️⃣ 🇸🇦 KSA (Saudi Arabia)\n"
-            "2️⃣ 🇦🇪 UAE\n"
-            "3️⃣ 🇵🇰 Pakistan\n\n"
-            "Reply with the number (1–3) or the country name."
-        ),
-        "arabic": (
-            "ما هي دولة المنتجات الرائجة التي تريد رؤيتها؟\n\n"
-            "1️⃣ 🇸🇦 السعودية (KSA)\n"
-            "2️⃣ 🇦🇪 الإمارات (UAE)\n"
-            "3️⃣ 🇵🇰 باكستان (Pakistan)\n\n"
-            "أرسل الرقم (1–3) أو اسم الدولة."
-        ),
-        "roman_urdu": (
-            "Aap kis country ke trending products dekhna chahte hain?\n\n"
-            "1️⃣ 🇸🇦 KSA (Saudi Arabia)\n"
-            "2️⃣ 🇦🇪 UAE\n"
-            "3️⃣ 🇵🇰 Pakistan\n\n"
-            "1–3 mein se number ya country name likhein."
-        ),
+        # Natural-language fallback used only when the trending LLM runner
+        # is unavailable. The 1/2/3 emoji menu was deleted on 2026-04-30
+        # — the LLM now asks naturally and resolves customer replies via
+        # _detect_country (which still maps "1"/"2"/"3" → ISO codes for
+        # backwards compatibility).
+        "english": "Which market — UAE 🇦🇪, Saudi Arabia (KSA) 🇸🇦, or Pakistan 🇵🇰?",
+        "arabic": "أي سوق — الإمارات 🇦🇪 أم السعودية 🇸🇦 أم باكستان 🇵🇰؟",
+        "roman_urdu": "Kis market ke products — UAE 🇦🇪, Saudi Arabia (KSA) 🇸🇦, ya Pakistan 🇵🇰?",
     },
     "trending_country_retry": {
-        "english": "Please choose one: 1 = KSA 🇸🇦, 2 = UAE 🇦🇪, 3 = Pakistan 🇵🇰 (or type KSA / UAE / PK).",
-        "arabic": "يرجى اختيار: 1 = السعودية 🇸🇦، 2 = الإمارات 🇦🇪، 3 = باكستان 🇵🇰 (أو اكتب KSA / UAE / PK).",
-        "roman_urdu": "Please choose: 1 = KSA 🇸🇦, 2 = UAE 🇦🇪, 3 = Pakistan 🇵🇰 (ya KSA / UAE / PK likhein).",
+        "english": "I didn't catch that — please type UAE, KSA, or Pakistan.",
+        "arabic": "لم أفهم — يرجى كتابة UAE أو KSA أو Pakistan.",
+        "roman_urdu": "Samajh nahi aya — UAE, KSA, ya Pakistan likhein.",
     },
     "trending_intro_first": {
         "english": "Here are the trending products in {country}:",
