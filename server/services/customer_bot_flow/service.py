@@ -2009,10 +2009,23 @@ def _looks_like_analytics_question(text: str) -> bool:
 def _looks_like_account_question(text: str) -> bool:
     """Invoice / account area — requires verification like order lookups."""
     t = (text or "").strip().lower()
+    raw = (text or "").strip()  # keep original case for Arabic matching
     if len(t) < 6:
         return False
     if _looks_like_order_status_question(text):
         return False
+    # Arabic: "أين فاتورتي" / "فاتورتي" / "فواتيري" — direct invoice asks.
+    # Lowercasing is a no-op for Arabic so we match against `t` for these.
+    arabic_invoice_markers = (
+        "فاتور",       # invoice (root)
+        "فواتير",      # invoices (plural)
+        "حسابي",       # my account
+        "تفاصيل حسابي", # my account details
+        "كم فاتور",    # how much invoice
+        "أين فاتور",   # where is my invoice
+    )
+    if any(m in raw for m in arabic_invoice_markers):
+        return True
     # General payment/service FAQs must NOT trigger account verification.
     # These are policy questions about HOW Arabia works, not about a specific account.
     payment_policy_markers = (
