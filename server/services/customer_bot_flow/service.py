@@ -1074,6 +1074,15 @@ def _looks_like_order_status_question(text: str) -> bool:
             "janna", "jaanna",
             "pooch", "puchh",
             "tell", "explain",
+            # Aggregate / count phrasings — "total kitnay orders hain" /
+            # "how many orders do I have" / "orders ki count" — these are
+            # account questions too and need verification (transcript
+            # 2026-05-01 12:10 missed this and routed to LLM-first which
+            # can't fetch account data unverified).
+            "total ", "kitne", "kitni", "kitna", "kitnay", "kul ",
+            "saare", "saari", "saaray",
+            "how many", "count",
+            "ratio", "percentage", "average",
         )
     )
     if has_order_domain and is_asking:
@@ -4431,6 +4440,7 @@ async def process_customer_bot_message(
             or _looks_like_account_question(text)
             or _looks_like_invoice_for_order(text)
             or _is_explicit_verification_consent(text)
+            or _looks_like_analytics_question(text)
             or bool(_extract_standalone_email(text))
         )
     )
@@ -5104,10 +5114,43 @@ async def process_customer_bot_message(
             oid_flow = {**base_f, "step": "existing_awaiting_order_id"}
             return save(oid_flow, "\n\n".join([intro_line, ask_line]))
 
-        # Case C: pending non-order question — forward to LLM with full context.
+        # Case C: pending non-order question — route through the LLM-first
+        # orchestrator (run_one_turn) so the resume question gets the
+        # modern tool path with per-tool retry. The legacy ai_forward()
+        # alternative surfaces "Store API error" to the customer on any
+        # transient API blip during fetch_customer_context (transcript
+        # 2026-05-01 12:11 hit this — verification succeeded but
+        # the resume reply was the canned data-fetch error).
         if resume_q:
             if mem_id:
                 ConversationMemory.clear_pending_intent(mem_id, promote_from_queue=False)
+            try:
+                from langchain_bot.control_plane import run_one_turn as _llm_first_run
+
+                _lf = await _llm_first_run(
+                    db=db,
+                    tenant_id=tenant_id,
+                    customer_phone=phone or "",
+                    conversation_id=conversation.id if conversation else None,
+                    user_message=resume_q,
+                    language=flow_lang,
+                    bot_flow=base_f,
+                    store_client=store_client,
+                    agent_assigned=False,
+                    customer_email=base_f.get("customer_email"),
+                )
+                if not _lf.fell_back and _lf.csv_signal:
+                    csv_res = await _dispatch_csv_signal(_lf.csv_signal, base_f)
+                    if csv_res is not None:
+                        return csv_res
+                if not _lf.fell_back and _lf.reply_text and not _lf.trending_signal:
+                    parts = [intro_line, _lf.reply_text]
+                    return save(base_f, "\n\n".join(parts), skip_api=True)
+            except Exception:
+                logger.exception(
+                    "post-verification LLM-first resume failed; "
+                    "falling through to ai_forward",
+                )
             return ai_forward("[Customer question] " + resume_q, base_f, skip_api=False)
 
         # Case D: no pending intent — generic welcome.
