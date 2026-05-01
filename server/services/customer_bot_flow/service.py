@@ -4392,25 +4392,32 @@ async def process_customer_bot_message(
         # Handoff bucket
         "awaiting_agent",
     }
-    # The deterministic verification bootstrap that fired on order /
-    # invoice / account / order-id intent (`needs_verification_bootstrap`)
-    # was deleted on 2026-04-30. The LLM-first orchestrator now calls
-    # `start_verification` for those messages — guarded by the strict
-    # "VERIFICATION GATE — TOOL ONLY, NEVER DRAFT" rule in the system
-    # prompt. The verification_signal handler below advances the step
-    # to existing_awaiting_email when the tool is called.
+    # Verification bootstrap (RESTORED 2026-05-01 after a transcript bug):
+    # the bootstrap was deleted in commit 75fb86a in favour of letting the
+    # LLM call `start_verification` itself. WhatsApp transcript
+    # 2026-05-01 03:03 showed the LLM still drifting in production:
+    # "Mujhy orders k baray mein jnaa hai" → LLM asked a clarifying
+    # question instead of calling the tool. Then "Han kro verification"
+    # → LLM said "Theek hai, pehle main aap ki verification kar leta
+    # hoon" but the step never advanced. Then "Kro bhi" → LLM
+    # *hallucinated* a verification-failed result without ever calling
+    # the store API. Customer rightly called the bot out.
     #
-    # Two narrow fast-paths remain deterministic, because they're
-    # high-signal and there's no value spending an LLM call on them:
-    #   1. Customer types a bare email address — definitively wants to
-    #      start (or continue) verification.
-    #   2. Customer explicitly consents ("yes verify me", "haan kar do
-    #      verify") — also unambiguous.
-    bare_email_or_consent = (
+    # The strict VERIFICATION GATE prompt rule isn't enough on its own.
+    # The LLM still drafts the verification dialogue or fabricates
+    # results. This regex acts as a safety net so the deterministic
+    # state machine ALWAYS owns the transition into the verification
+    # bucket on order / invoice / account intent. The LLM-first path
+    # still gets every other turn.
+    needs_verification_bootstrap = (
         step == "conversational"
         and not bool(flow.get("verified"))
         and (
-            _is_explicit_verification_consent(text)
+            _looks_like_order_status_question(text)
+            or _is_likely_order_id_only(text)
+            or _looks_like_account_question(text)
+            or _looks_like_invoice_for_order(text)
+            or _is_explicit_verification_consent(text)
             or bool(_extract_standalone_email(text))
         )
     )
@@ -4418,7 +4425,7 @@ async def process_customer_bot_message(
     # go through the deterministic trending flow handler which queries the DB
     # and maintains a pagination cursor in Redis.
     wants_trending_now = _wants_trending_products(text) or _wants_non_trending_products(text)
-    if step not in otp_guard_steps and not bare_email_or_consent and not wants_trending_now:
+    if step not in otp_guard_steps and not needs_verification_bootstrap and not wants_trending_now:
         nf = {
             **flow,
             "step": "conversational",
