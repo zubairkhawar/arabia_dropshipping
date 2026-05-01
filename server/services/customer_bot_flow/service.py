@@ -5187,40 +5187,19 @@ async def process_customer_bot_message(
 
     if step == "conversational":
         kind = flow.get("customer_kind")
-        if kind == "new" and _wants_existing_customer_path(text):
-            flow = {**flow, "customer_kind": "existing"}
-            kind = "existing"
-            if mem_id:
-                ConversationMemory.store_bot_customer_kind(mem_id, "existing")
-            f_sw, msg_sw = _existing_identity_entry(
-                flow,
-                flow_lang,
-                verify_reason=None,
-                pending_order_ref=None,
-                intro_key="existing_switch_verify",
-            )
-            return save(f_sw, msg_sw)
-
-        if kind == "new" and (
-            _looks_like_order_status_question(text)
-            or _is_likely_order_id_only(text)
-            or _looks_like_invoice_for_order(text)
-        ):
-            msg = (
-                "As a new customer, you haven't placed any orders yet. "
-                "Would you like to learn how to start?"
-            )
-            if flow_lang == "roman_urdu":
-                msg = (
-                    "New customer hone ki wajah se abhi aap ka koi order place nahi hua. "
-                    "Kya aap chahtay hain main aap ko start karne ka tareeqa bataun?"
-                )
-            elif flow_lang == "arabic":
-                msg = (
-                    "بصفتك عميلاً جديداً، لا توجد لديك طلبات بعد. "
-                    "هل ترغب أن أشرح لك كيف تبدأ؟"
-                )
-            return save({**flow, "step": "conversational"}, msg, skip_api=True)
+        # The kind="new" branches that used to live here (the
+        # "existing-customer-path-switch" handler and the
+        # "as a new customer you have no orders" responder) were
+        # deleted on 2026-05-01. WhatsApp transcript 2026-05-01 11:26
+        # showed these branches hijacking legitimate order intent for
+        # any customer who'd been stamped customer_kind="new" earlier:
+        # the bootstrap regex correctly detected order intent but the
+        # kind="new" branch fired first and dead-ended with "you have
+        # no orders". The bootstrap-driven verification entry (further
+        # below in this handler) now owns order/account intent for
+        # ALL unverified customers regardless of any "kind" flag.
+        # The flag itself stays for back-compat with stored flow
+        # state, but no new branching reads it.
 
         if not flow.get("verified"):
             em_only = _extract_standalone_email(text)
@@ -5330,10 +5309,10 @@ async def process_customer_bot_message(
                 )
             return save(nf, _t(flow_lang, MSGS["sourcing_collect_details"]))
 
-        # Let customer switch to "new" path at any time
-        if kind == "existing" and not flow.get("verified") and _wants_new_customer_path(text):
-            nf = {**flow, "step": "conversational", "customer_kind": "new", "lang": flow_lang}
-            return save(nf, _t(flow_lang, MSGS["new_customer_welcome"]))
+        # The "switch to new path" handler that used to live here was
+        # deleted on 2026-05-01 along with the rest of the customer_kind
+        # branching. The LLM answers "I'm new" naturally without needing
+        # a flag flip.
 
         # Greeting: just acknowledge — do NOT re-show the new/existing menu here.
         # The welcome menu is only shown on fresh entry or /reset; mid-conversation
@@ -5428,36 +5407,22 @@ async def process_customer_bot_message(
                 )
             return save(f_iv, msg_iv)
 
-        # customer_kind not set yet — first real message without a greeting
-        # Treat as implicit new customer and answer directly (non-order/account intent).
-        if not kind:
-            nf = {
-                **flow,
-                "step": "conversational",
-                "customer_kind": "new",
-                "intro_shown": True,
-                "lang": flow_lang,
-            }
-            return ai_forward(text, nf, skip_api=True)
-
-        # --- Existing customer (verified) path ---
-        # Route ALL verified-customer queries through the LLM with full
-        # store-API context.  fetch_customer_context() in the orchestrator
-        # already fetches orders, tracking, invoices, and FAQs using the
-        # seller_id — the LLM formulates a natural-language answer.
+        # --- Final fall-through: no order/account intent, no trending,
+        # no sourcing, no greeting/ack. Send the message to the LLM with
+        # the verified-or-not state already encoded in the flow. The
+        # orchestrator picks the right tool path (search_kb for service
+        # questions, lookup_order/list_invoices for verified customers
+        # asking about their data, etc.).
         if flow.get("verified"):
             return ai_forward(
                 "[Customer question] " + text,
                 {**flow, "step": "conversational"},
                 skip_api=False,
             )
-
-        # --- New customer or existing with general questions: answer from KB directly ---
-        skip = not flow.get("verified")
         return ai_forward(
-            "[Customer question] " + text if kind else text,
+            text,
             {**flow, "step": "conversational", "intro_shown": True},
-            skip_api=skip,
+            skip_api=True,
         )
 
     if step == "awaiting_agent":
