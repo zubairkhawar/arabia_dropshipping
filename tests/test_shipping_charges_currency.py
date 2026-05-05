@@ -95,3 +95,74 @@ class TestKSAUsesSAR:
         assert "Shipping UAE: Delivered 18 AED · Returned 5 AED" in text
         assert "TCS 250 PKR" in text
         assert "Other couriers (Leopard/Postex/Trax) 200 PKR" in text
+
+
+class TestDeterministicShippingTemplate:
+    """server/services/customer_bot_flow/service.py has a deterministic
+    FAQ template (asks_shipping branch) that pre-empts the LLM for any
+    shipping-charges question. WhatsApp transcript 2026-05-05 20:39 hit
+    this template — it said "Returned: 10 AED" for KSA in all three
+    language variants (English / Arabic / Roman Urdu). The prompt fix
+    alone wasn't enough because the template runs FIRST."""
+
+    SERVICE = (
+        Path(__file__).resolve().parent.parent
+        / "server" / "services" / "customer_bot_flow" / "service.py"
+    )
+
+    def _service(self) -> str:
+        return self.SERVICE.read_text(encoding="utf-8")
+
+    def test_template_branch_uses_sar_for_ksa_english(self) -> None:
+        text = self._service()
+        # Find the asks_shipping branch and look at its English variant.
+        i = text.find("if asks_shipping:")
+        assert i > 0
+        # English block runs through to the next 'if lang ==' or end.
+        end = text.find("if lang == \"arabic\":", i)
+        block = text[i:end] if end > i else text[i: i + 2000]
+        # KSA Returned line must use SAR.
+        assert "🇸🇦 KSA:" in block
+        assert "  • Returned: 10 SAR\\n" in block, (
+            "KSA returned charge in the English shipping template must "
+            "be in SAR, not AED. The transcript 2026-05-05 20:39 caught "
+            "the AED variant."
+        )
+
+    def test_template_branch_uses_sar_for_ksa_arabic(self) -> None:
+        text = self._service()
+        i = text.find('if lang == "arabic":', text.find("if asks_shipping:"))
+        end = text.find('return (', i)
+        end = text.find('return (', end + 1)  # second `return` = roman_urdu
+        block = text[i:end] if end > i else text[i: i + 2000]
+        # Arabic KSA returned must be in ريال (riyal), not دراهم (dirhams).
+        assert "🇸🇦 السعودية" in block
+        assert "10 ريال" in block, "Arabic KSA returned must use riyal"
+        # The wrong "10 دراهم" (dirhams) must not appear in the KSA block.
+        # We can't simply check absence of "10 دراهم" globally because
+        # the UAE penalty / fulfillment templates legitimately use it.
+        ksa_idx = block.find("🇸🇦 السعودية")
+        # The KSA block ends at the next country flag.
+        ksa_end = block.find("🇵🇰", ksa_idx)
+        ksa_block = block[ksa_idx:ksa_end] if ksa_end > ksa_idx else block[ksa_idx:]
+        assert "10 دراهم" not in ksa_block, (
+            "Arabic KSA returned must not say '10 دراهم' (dirhams)"
+        )
+
+    def test_template_branch_uses_sar_for_ksa_roman_urdu(self) -> None:
+        text = self._service()
+        # Find the LAST return inside asks_shipping (roman_urdu fallback).
+        i = text.find("if asks_shipping:")
+        end = text.find("# ── Payment Day", i)
+        block = text[i:end] if end > i else text[i: i + 5000]
+        # Find the LAST "🇸🇦 KSA:" in this block — that's the roman_urdu one.
+        last_ksa = block.rfind("🇸🇦 KSA:")
+        assert last_ksa > 0
+        # Read until the next country flag.
+        ksa_end = block.find("🇵🇰", last_ksa)
+        ksa_block = block[last_ksa:ksa_end] if ksa_end > last_ksa else block[last_ksa:]
+        assert "  • Returned: 10 SAR\\n" in ksa_block
+        assert "10 AED" not in ksa_block, (
+            "Roman Urdu KSA returned charge must be in SAR, not AED — "
+            "the WhatsApp transcript 2026-05-05 20:39 saw '10 AED' here."
+        )
