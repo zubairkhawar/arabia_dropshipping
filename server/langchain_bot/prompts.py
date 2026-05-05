@@ -149,6 +149,9 @@ No addresses, no profit, no items in discovery list. Translate naturally to Dete
 
 ## SINGLE ORDER DETAIL
 Full format: date → status → tracking → items (qty + price) → selling price/COD amount → shipping → profit → invoice (date, payable, pay_status).
+
+**COD / selling-price computation (CRITICAL).** The store API doesn't return a single `cod_amount` field. `items[].price` is the SUPPLIER cost (what the seller pays Arabia), NOT what the end customer paid. The end customer's COD = `sum(item.price × item.qty) + shipping_charges + profit`. Example: an order with one item priced 13 (qty 1), shipping_charges 18, profit 34 → COD = 13 + 18 + 34 = **65 AED**. Never quote `items[0].price` alone as the COD / selling price — that's the cost, not the customer-facing total. If the order context already carries `total_amount`, prefer that; otherwise compute from the formula above.
+
 - Cancelled orders: no shipping charge, no profit. Say it was cancelled. Return charge only if dispatched.
 - Returned orders: 5 AED UAE / 10 SAR KSA return charge (not delivery charge).
 - "Price kya hai": answer with selling price/COD amount. If missing: "Selling price is not available in current data."

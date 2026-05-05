@@ -2219,6 +2219,52 @@ def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
     have to re-call lookup_order via the LLM (and fail on transient blips).
     Now they're carried through.
     """
+    # COD amount derivation. The Arabia API doesn't return a single
+    # cod_amount / total_amount field per order — `items[].price` is the
+    # SUPPLIER cost (what the seller pays Arabia), `profit` is the
+    # seller's markup, and `shipping_charges` is the courier fee. The
+    # customer pays the courier the SUM of all three on delivery.
+    # When the LLM or the deterministic formatter looks up "Selling
+    # price / COD amount", it must see the SUM, not the supplier price.
+    # WhatsApp transcript 2026-05-05 03:50 hit this — the bot replied
+    # "Selling price/COD amount: 13 AED" for an order whose actual COD
+    # was 13 (cost) + 18 (shipping) + 34 (profit) = 65 AED.
+    def _derive_cod_amount(r: Dict[str, Any]) -> str:
+        # Honour any explicit field first (covers the Arabia-DB rows
+        # that already carry total_amount / invoice_payable).
+        explicit = _pick(
+            r,
+            "total_amount", "amount", "invoice_net_total",
+            "invoice_payable", "total", "grand_total", "cod_amount",
+        )
+        if explicit:
+            return explicit
+        # Fallback: sum items × qty + shipping + profit.
+        items_raw = r.get("items") if isinstance(r.get("items"), list) else []
+        item_total = 0.0
+        for it in items_raw:
+            if not isinstance(it, dict):
+                continue
+            try:
+                p = float(str(it.get("price") or 0).strip() or 0)
+                q = float(str(it.get("qty") or it.get("quantity") or 1).strip() or 1)
+            except (TypeError, ValueError):
+                continue
+            item_total += p * q
+        try:
+            ship = float(str(r.get("shipping_charges") or r.get("shipping") or r.get("shipping_fee") or 0).strip() or 0)
+        except (TypeError, ValueError):
+            ship = 0.0
+        try:
+            prof = float(str(r.get("profit") or r.get("seller_profit") or 0).strip() or 0)
+        except (TypeError, ValueError):
+            prof = 0.0
+        cod = item_total + ship + prof
+        if cod <= 0:
+            return ""
+        # Drop trailing .0 so "65 AED" not "65.0 AED".
+        return str(int(cod)) if cod == int(cod) else f"{cod:.2f}"
+
     return {
         "order_number": _pick(raw, "order_number", "order_id", "id") or ref,
         "order_date": _pick(
@@ -2250,9 +2296,7 @@ def _extract_order_fields(raw: Dict[str, Any], ref: str) -> Dict[str, Any]:
         "return_reason": _pick(raw, "return_reason"),
         "cancellation_type": _pick(raw, "cancellation_type"),
         "cancellation_reason": _pick(raw, "cancellation_reason"),
-        "total_amount": _pick(
-            raw, "total_amount", "amount", "invoice_net_total", "invoice_payable", "total", "grand_total", "cod_amount"
-        ),
+        "total_amount": _derive_cod_amount(raw),
         "currency": _pick(raw, "currency"),
         # Full-details fields — needed for the comprehensive order-detail reply.
         "profit": _pick(raw, "profit", "seller_profit"),
