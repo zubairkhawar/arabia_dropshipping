@@ -18,6 +18,7 @@ import {
   AlertCircle,
   Users,
   User,
+  ChevronLeft,
   ChevronRight,
   Info,
   Image as ImageIcon,
@@ -190,6 +191,10 @@ export interface ChatWindowProps {
   readOnly?: boolean;
   /** When true, show broadcast input so admin can send messages and tag agents with @. */
   broadcastMode?: boolean;
+  /** Mobile only (<426px): handler for the back button shown in the header. */
+  onMobileBack?: () => void;
+  /** Mobile only (<426px): handler for the info/details button shown in the header. */
+  onOpenMobileDetails?: () => void;
 }
 
 const defaultCustomerMessages: Message[] = [
@@ -286,6 +291,8 @@ export function ChatWindow({
   teamEvents = [],
   readOnly = false,
   broadcastMode = false,
+  onMobileBack,
+  onOpenMobileDetails,
 }: ChatWindowProps) {
   const pathname = usePathname();
   const { timeZone } = useTenantTimezone();
@@ -3208,9 +3215,19 @@ export function ChatWindow({
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Header */}
-      <div className="h-chat-header border-b border-border px-6 flex items-center justify-between bg-white shrink-0">
+      <div className="h-chat-header border-b border-border px-3 xs:px-6 flex items-center justify-between bg-white shrink-0 gap-2">
+        {onMobileBack && (
+          <button
+            type="button"
+            onClick={onMobileBack}
+            className="xs:hidden -ml-1 mr-1 p-2 rounded-lg text-text-secondary hover:bg-panel hover:text-text-primary transition-colors"
+            aria-label="Back"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+        )}
         <div
-          className={isTeamChannel ? 'cursor-pointer' : isDmPage ? 'cursor-pointer' : undefined}
+          className={`min-w-0 flex-1 ${isTeamChannel ? 'cursor-pointer' : isDmPage ? 'cursor-pointer' : ''}`.trim()}
           onClick={isTeamChannel ? () => setShowGroupInfo(true) : isDmPage ? () => setShowAgentProfile(true) : undefined}
         >
           {isInternalChat && !isTeamChannel && !isDmPage && !readOnly && (
@@ -3218,7 +3235,7 @@ export function ChatWindow({
               Internal Chat
             </span>
           )}
-          <h3 className="font-medium text-text-primary">
+          <h3 className="font-medium text-text-primary truncate">
             {headerTitle}
           </h3>
           <p className="text-xs text-text-secondary flex items-center gap-2 flex-wrap">
@@ -3230,9 +3247,19 @@ export function ChatWindow({
             ) : null}
           </p>
         </div>
-        <div className="relative flex items-center gap-2">
+        <div className="relative flex items-center gap-1 xs:gap-2 shrink-0">
           {!isInternalChat && (
-            <span className="text-xs px-2 py-1 bg-status-success text-white rounded">WhatsApp</span>
+            <span className="hidden xs:inline-flex text-xs px-2 py-1 bg-status-success text-white rounded">WhatsApp</span>
+          )}
+          {onOpenMobileDetails && (
+            <button
+              type="button"
+              onClick={onOpenMobileDetails}
+              className="xs:hidden p-2 rounded-lg text-text-secondary hover:bg-panel hover:text-text-primary transition-colors"
+              aria-label="Open details"
+            >
+              <Info className="h-5 w-5" />
+            </button>
           )}
           {!isTeamChannel && !isDmPage && (
             <>

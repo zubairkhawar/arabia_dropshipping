@@ -2,6 +2,7 @@
 
 import { AgentSidebar } from '@/components/layout/agent-sidebar';
 import { AgentHeader } from '@/components/layout/agent-header';
+import { AgentMobileTabBar } from '@/components/layout/agent-mobile-tabbar';
 import { AgentPortalShellSkeleton } from '@/components/layout/agent-portal-shell-skeleton';
 import { SidebarProvider } from '@/contexts/SidebarContext';
 import { AgentProfileProvider } from '@/contexts/AgentProfileContext';
@@ -20,7 +21,17 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
   const { isCollapsed } = useSidebar();
   const router = useRouter();
   const [authChecked, setAuthChecked] = useState(false);
-  const sidebarWidth = isCollapsed ? 80 : 256;
+  const [isMobile, setIsMobile] = useState(false);
+  const sidebarWidth = isMobile ? 0 : isCollapsed ? 80 : 256;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 425px)');
+    const update = () => setIsMobile(mql.matches);
+    update();
+    mql.addEventListener('change', update);
+    return () => mql.removeEventListener('change', update);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,12 +90,14 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
         className="flex min-w-0 flex-col transition-all duration-300"
         style={{
           marginLeft: `${sidebarWidth}px`,
-          width: `calc(100vw - ${sidebarWidth}px)`,
+          width: isMobile ? '100vw' : `calc(100vw - ${sidebarWidth}px)`,
+          paddingBottom: isMobile ? 64 : 0,
         }}
       >
         <AgentHeader />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-scaffold">{children}</main>
       </div>
+      <AgentMobileTabBar />
     </div>
   );
 }

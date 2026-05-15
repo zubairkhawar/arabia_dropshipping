@@ -159,8 +159,25 @@ export function ChatList() {
   const inboxConv = useInboxConversations();
   const [localSelectedId, setLocalSelectedId] = useState<number | null>(1);
   const [localConversations] = useState<Conversation[]>(defaultConversations);
-  const [liveOpen, setLiveOpen] = useState(true);
-  const [closedOpen, setClosedOpen] = useState(true);
+  const [liveOpenState, setLiveOpenState] = useState(true);
+  const [closedOpenState, setClosedOpenState] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobileTab, setMobileTab] = useState<'live' | 'closed'>('live');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 425px)');
+    const update = () => setIsMobile(mql.matches);
+    update();
+    mql.addEventListener('change', update);
+    return () => mql.removeEventListener('change', update);
+  }, []);
+
+  // Mobile: segmented [Live][Closed] forces exactly one bucket open.
+  const liveOpen = isMobile ? mobileTab === 'live' : liveOpenState;
+  const closedOpen = isMobile ? mobileTab === 'closed' : closedOpenState;
+  const setLiveOpen = setLiveOpenState;
+  const setClosedOpen = setClosedOpenState;
   const { inboxQuery } = useAgentSearch();
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<InboxSearchResult[]>([]);
@@ -353,6 +370,30 @@ export function ChatList() {
             )}
             {!activeSearch && (
               <>
+            {isAgentInbox && isMobile && (
+              <div className="mb-2 inline-flex w-full rounded-full border border-border bg-white p-0.5 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setMobileTab('live')}
+                  className={`flex-1 rounded-full px-3 py-1.5 transition-colors ${
+                    mobileTab === 'live' ? 'bg-primary text-white' : 'text-text-secondary'
+                  }`}
+                  aria-pressed={mobileTab === 'live'}
+                >
+                  Live ({liveConversations.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileTab('closed')}
+                  className={`flex-1 rounded-full px-3 py-1.5 transition-colors ${
+                    mobileTab === 'closed' ? 'bg-primary text-white' : 'text-text-secondary'
+                  }`}
+                  aria-pressed={mobileTab === 'closed'}
+                >
+                  Closed ({closedConversations.length})
+                </button>
+              </div>
+            )}
             {isAgentInbox && inboxConv?.isLoading ? (
               <div className="space-y-2 px-1">
                 {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -370,7 +411,7 @@ export function ChatList() {
               <div className="space-y-1">
                 <button
                   type="button"
-                  className="w-full px-1 py-1 flex items-center justify-between hover:bg-panel rounded"
+                  className="max-[425px]:hidden w-full px-1 py-1 flex items-center justify-between hover:bg-panel rounded"
                   onClick={() => setLiveOpen((open) => !open)}
                 >
                     <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">
@@ -455,7 +496,7 @@ export function ChatList() {
               <div className="space-y-1">
                 <button
                   type="button"
-                  className="w-full px-1 py-1 flex items-center justify-between mt-2 hover:bg-panel rounded"
+                  className="max-[425px]:hidden w-full px-1 py-1 flex items-center justify-between mt-2 hover:bg-panel rounded"
                   onClick={() => setClosedOpen((open) => !open)}
                 >
                   <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">

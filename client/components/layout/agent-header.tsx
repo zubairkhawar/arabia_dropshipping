@@ -78,6 +78,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [showProfilePopup, setShowProfilePopup] = useState(false);
   const [showChangePasswordPopup, setShowChangePasswordPopup] = useState(false);
   const [showOfflineConfirm, setShowOfflineConfirm] = useState(false);
@@ -321,11 +322,12 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
   };
 
   return (
-    <div className="h-16 bg-bar border-b border-border flex items-center justify-between px-6 transition-all duration-300 w-full">
-      <div className="flex items-center gap-4 flex-1">
+    <>
+    <div className="h-16 bg-bar border-b border-border flex items-center justify-between px-3 xs:px-6 transition-all duration-300 w-full gap-2">
+      <div className="flex items-center gap-2 xs:gap-4 flex-1 min-w-0">
         <button
           onClick={toggleSidebar}
-          className="p-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors"
+          className="hidden xs:inline-flex p-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors"
           aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {isCollapsed ? (
@@ -334,7 +336,16 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
             <PanelLeftClose className="w-5 h-5 text-text-secondary" />
           )}
         </button>
-        <div className="flex-1 max-w-md">
+        {/* Mobile: search collapses to a toggle icon that expands a full-width bar */}
+        <button
+          type="button"
+          onClick={() => setMobileSearchOpen((v) => !v)}
+          className="xs:hidden p-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors"
+          aria-label="Toggle search"
+        >
+          <Search className="w-5 h-5 text-text-secondary" />
+        </button>
+        <div className="hidden xs:block flex-1 max-w-md">
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-muted" />
@@ -355,17 +366,18 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1.5 xs:gap-3">
         <div className="relative">
           <button
             onClick={() => setShowStatusMenu(!showStatusMenu)}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors min-w-[172px] justify-between"
+            className="flex items-center gap-2 px-2 xs:px-3 py-2 rounded-lg border border-border bg-white hover:bg-panel transition-colors xs:min-w-[172px] justify-between"
+            aria-label={`Status: ${statusConfig[agentStatus].label}`}
           >
             <span className="inline-flex items-center gap-2">
               <span className={`w-2.5 h-2.5 rounded-full ${statusConfig[agentStatus].dotClass}`} />
-              <span className="text-sm font-medium text-text-primary">{statusConfig[agentStatus].label}</span>
+              <span className="hidden xs:inline text-sm font-medium text-text-primary">{statusConfig[agentStatus].label}</span>
             </span>
-            <span className="inline-flex items-center gap-2">
+            <span className="hidden xs:inline-flex items-center gap-2">
               {agentStatus === 'active' && (
                 <span className="text-xs font-medium text-text-muted tabular-nums min-w-[40px] text-right">{activeElapsedLabel}</span>
               )}
@@ -421,7 +433,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
           {showNotifications && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setShowNotifications(false)} />
-              <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-1rem)] overflow-x-hidden bg-white border border-border rounded-lg shadow-xl z-20 flex flex-col max-h-[28rem]">
+              <div className="absolute right-0 mt-2 w-[calc(100vw-1rem)] xs:w-80 max-w-[calc(100vw-1rem)] overflow-x-hidden bg-white border border-border rounded-lg shadow-xl z-20 flex flex-col max-h-[28rem]">
                 <div className="p-4 border-b border-border shrink-0">
                   <h3 className="font-semibold text-text-primary">Notifications</h3>
                 </div>
@@ -470,11 +482,11 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
               )}
             </div>
             {profileNameSkeleton ? (
-              <span className="h-4 w-28 rounded-md bg-border/80 animate-pulse inline-block" />
+              <span className="hidden xs:inline-block h-4 w-28 rounded-md bg-border/80 animate-pulse" />
             ) : (
-              <span className="text-text-primary font-medium text-sm">{displayName}</span>
+              <span className="hidden xs:inline text-text-primary font-medium text-sm">{displayName}</span>
             )}
-            <ChevronDown className="w-4 h-4 text-text-muted" />
+            <ChevronDown className="hidden xs:inline w-4 h-4 text-text-muted" />
           </button>
           {showUserMenu && (
             <>
@@ -816,5 +828,25 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
         </>
       )}
     </div>
+    {mobileSearchOpen && (
+      <div className="xs:hidden border-b border-border bg-bar px-3 py-2">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-muted" />
+          <input
+            type="text"
+            value={searchValue}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (onInboxRoute) setInboxQuery(v);
+              else setHeaderSearchText(v);
+            }}
+            placeholder={onInboxRoute ? 'Search my chats...' : 'Search...'}
+            className="w-full pl-10 pr-4 py-2 bg-panel border border-border rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-primary focus:bg-white text-sm"
+            autoFocus
+          />
+        </div>
+      </div>
+    )}
+    </>
   );
 }

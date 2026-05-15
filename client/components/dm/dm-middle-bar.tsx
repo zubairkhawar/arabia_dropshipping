@@ -184,7 +184,7 @@ export function DmMiddleBar() {
 
   return (
     <div
-      className="flex flex-col h-full border-r border-border bg-white shrink-0 transition-[width] duration-200"
+      className="flex flex-col h-full border-r border-border bg-white shrink-0 transition-[width] duration-200 max-[425px]:!w-full max-[425px]:!shrink"
       style={{ width }}
     >
       {/* Top row: 64px when expanded (align with chat header); when collapsed allow height for expand + new chat + search */}

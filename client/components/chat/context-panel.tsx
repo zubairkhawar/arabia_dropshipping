@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useInboxPanels } from '@/contexts/InboxPanelsContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useInboxConversations } from '@/contexts/InboxConversationsContext';
-import { PanelRight } from 'lucide-react';
+import { PanelRight, X } from 'lucide-react';
 
 /** Customer and store data (fetched from bot). Null or missing fields = new lead / not available. */
 export interface ContextPanelCustomer {
@@ -25,6 +25,8 @@ interface ContextPanelProps {
   customer?: ContextPanelCustomer | null;
   /** Store details. Omit or pass null/empty when no store. */
   store?: ContextPanelStore | null;
+  /** Mobile drawer mode: render close button + use onClose instead of toggleContext. */
+  onClose?: () => void;
 }
 
 function placehold(value: string | null | undefined): string {
@@ -32,7 +34,7 @@ function placehold(value: string | null | undefined): string {
 }
 
 export function ContextPanel(props: ContextPanelProps = {}) {
-  const { customer: customerProp, store: storeProp } = props;
+  const { customer: customerProp, store: storeProp, onClose } = props;
   const inboxPanels = useInboxPanels();
   const { toast } = useToast();
   const inboxConv = useInboxConversations();
@@ -117,7 +119,16 @@ export function ContextPanel(props: ContextPanelProps = {}) {
         <div>
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-text-primary">Customer Info</h3>
-            {inboxPanels && (
+            {onClose ? (
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded p-1.5 text-text-secondary hover:bg-panel hover:text-primary transition-colors"
+                aria-label="Close details"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            ) : inboxPanels ? (
               <button
                 type="button"
                 onClick={inboxPanels.toggleContext}
@@ -126,7 +137,7 @@ export function ContextPanel(props: ContextPanelProps = {}) {
               >
                 <PanelRight className="h-5 w-5" />
               </button>
-            )}
+            ) : null}
           </div>
           {hasCustomer ? (
             <div className="space-y-3">
