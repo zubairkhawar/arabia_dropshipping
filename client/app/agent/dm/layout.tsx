@@ -12,7 +12,7 @@ export default function DmLayout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const mql = window.matchMedia('(max-width: 425px)');
+    const mql = window.matchMedia('(max-width: 767px)');
     const update = () => setIsMobile(mql.matches);
     update();
     mql.addEventListener('change', update);

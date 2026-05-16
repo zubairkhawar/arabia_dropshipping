@@ -61,7 +61,7 @@ export function AgentSidebar() {
 
   return (
     <div
-      className={`fixed left-0 top-0 h-full bg-sidebar border-r border-border transition-all duration-300 z-50 max-[425px]:hidden ${
+      className={`fixed left-0 top-0 h-full bg-sidebar border-r border-border transition-all duration-300 z-50 max-md:hidden ${
         isCollapsed ? 'w-20' : 'w-64'
       }`}
     >

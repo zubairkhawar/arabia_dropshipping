@@ -166,7 +166,7 @@ export function ChatList() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const mql = window.matchMedia('(max-width: 425px)');
+    const mql = window.matchMedia('(max-width: 767px)');
     const update = () => setIsMobile(mql.matches);
     update();
     mql.addEventListener('change', update);
@@ -314,7 +314,7 @@ export function ChatList() {
   return (
     <div className="flex flex-col h-full">
       <div
-        className={`flex-1 overflow-y-auto${isAdminInbox ? ' admin-no-scrollbar' : ''}`}
+        className={`flex-1 overflow-y-auto${isAdminInbox || isAgentInbox ? ' admin-no-scrollbar' : ''}`}
       >
           <div className="p-2 space-y-3">
             {activeSearch && (
@@ -411,7 +411,7 @@ export function ChatList() {
               <div className="space-y-1">
                 <button
                   type="button"
-                  className="max-[425px]:hidden w-full px-1 py-1 flex items-center justify-between hover:bg-panel rounded"
+                  className="max-md:hidden w-full px-1 py-1 flex items-center justify-between hover:bg-panel rounded"
                   onClick={() => setLiveOpen((open) => !open)}
                 >
                     <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">
@@ -496,7 +496,7 @@ export function ChatList() {
               <div className="space-y-1">
                 <button
                   type="button"
-                  className="max-[425px]:hidden w-full px-1 py-1 flex items-center justify-between mt-2 hover:bg-panel rounded"
+                  className="max-md:hidden w-full px-1 py-1 flex items-center justify-between mt-2 hover:bg-panel rounded"
                   onClick={() => setClosedOpen((open) => !open)}
                 >
                   <span className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">

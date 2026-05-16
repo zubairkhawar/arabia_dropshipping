@@ -3215,12 +3215,12 @@ export function ChatWindow({
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Header */}
-      <div className="h-chat-header border-b border-border px-3 xs:px-6 flex items-center justify-between bg-white shrink-0 gap-2">
+      <div className="h-chat-header border-b border-border px-3 md:px-6 flex items-center justify-between bg-white shrink-0 gap-2">
         {onMobileBack && (
           <button
             type="button"
             onClick={onMobileBack}
-            className="xs:hidden -ml-1 mr-1 p-2 rounded-lg text-text-secondary hover:bg-panel hover:text-text-primary transition-colors"
+            className="md:hidden -ml-1 mr-1 p-2 rounded-lg text-text-secondary hover:bg-panel hover:text-text-primary transition-colors"
             aria-label="Back"
           >
             <ChevronLeft className="h-5 w-5" />
@@ -3247,15 +3247,15 @@ export function ChatWindow({
             ) : null}
           </p>
         </div>
-        <div className="relative flex items-center gap-1 xs:gap-2 shrink-0">
+        <div className="relative flex items-center gap-1 md:gap-2 shrink-0">
           {!isInternalChat && (
-            <span className="hidden xs:inline-flex text-xs px-2 py-1 bg-status-success text-white rounded">WhatsApp</span>
+            <span className="hidden md:inline-flex text-xs px-2 py-1 bg-status-success text-white rounded">WhatsApp</span>
           )}
           {onOpenMobileDetails && (
             <button
               type="button"
               onClick={onOpenMobileDetails}
-              className="xs:hidden p-2 rounded-lg text-text-secondary hover:bg-panel hover:text-text-primary transition-colors"
+              className="md:hidden p-2 rounded-lg text-text-secondary hover:bg-panel hover:text-text-primary transition-colors"
               aria-label="Open details"
             >
               <Info className="h-5 w-5" />

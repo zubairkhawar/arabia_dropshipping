@@ -8,9 +8,6 @@ const config: Config = {
   ],
   theme: {
     extend: {
-      screens: {
-        xs: '426px',
-      },
       colors: {
         // Koru CRM Color Scheme - Light Theme
         primary: {
