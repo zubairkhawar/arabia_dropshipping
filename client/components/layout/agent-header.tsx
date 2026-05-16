@@ -323,6 +323,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
 
   return (
     <>
+    <div className="bg-bar pt-[env(safe-area-inset-top)] md:pt-0">
     <div className="h-16 bg-bar border-b border-border flex items-center justify-between px-3 md:px-6 transition-all duration-300 w-full gap-2">
       <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
         <button
@@ -827,6 +828,7 @@ export function AgentHeader({ userName }: AgentHeaderProps) {
           </div>
         </>
       )}
+    </div>
     </div>
     {mobileSearchOpen && (
       <div className="md:hidden border-b border-border bg-bar px-3 py-2">
