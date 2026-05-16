@@ -4696,7 +4696,7 @@ export function ChatWindow({
                   {showEmojiPicker && (
                     <>
                       <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)} aria-hidden />
-                      <div className="absolute right-0 bottom-full mb-1 w-64 bg-white border border-border rounded-xl shadow-xl z-20 p-3">
+                      <div className="fixed bottom-[10.5rem] left-2 right-2 w-auto md:absolute md:bottom-full md:left-auto md:right-0 md:mb-1 md:w-64 bg-white border border-border rounded-xl shadow-xl z-20 p-3">
                         <p className="text-xs font-medium text-text-muted mb-2">Emoji</p>
                         <div className="grid grid-cols-5 gap-1">
                           {EMOJI_LIST.map((emoji) => (

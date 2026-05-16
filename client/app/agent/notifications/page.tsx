@@ -7,11 +7,13 @@ import {
   ArrowRightLeft,
   Bell,
   Bot,
+  CheckCheck,
   Mail,
   Megaphone,
   MessageCircle,
   MessageSquare,
   Sparkles,
+  Trash2,
   User,
   UserMinus,
   UserPlus,
@@ -68,28 +70,31 @@ export default function AgentNotificationsPage() {
 
   return (
     <div className="flex flex-col h-full bg-white border border-border rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-panel shrink-0">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-2 px-3 md:px-6 py-3 md:py-4 border-b border-border bg-panel shrink-0">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0">
           <Link
             href="/agent/inbox"
-            className="p-2 rounded-lg hover:bg-white border border-border text-text-secondary hover:text-primary transition-colors"
+            className="p-2 rounded-lg hover:bg-white border border-border text-text-secondary hover:text-primary transition-colors shrink-0"
             aria-label="Back to inbox"
           >
             <ArrowLeft className="w-5 h-5" />
           </Link>
-          <div className="flex items-center gap-2">
-            <Bell className="w-6 h-6 text-primary" />
-            <h1 className="text-xl font-semibold text-text-primary">Notifications</h1>
+          <div className="flex items-center gap-2 min-w-0">
+            <Bell className="w-5 h-5 md:w-6 md:h-6 text-primary shrink-0" />
+            <h1 className="text-base md:text-xl font-semibold text-text-primary truncate">Notifications</h1>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1 md:gap-4 shrink-0">
           {list.some((n) => !n.read) && (
             <button
               type="button"
               onClick={markAllAsRead}
-              className="text-sm font-medium text-primary hover:underline"
+              aria-label="Mark all as read"
+              title="Mark all as read"
+              className="p-2 md:p-0 rounded-lg md:rounded-none hover:bg-white md:hover:bg-transparent text-primary md:text-primary md:text-sm md:font-medium md:hover:underline whitespace-nowrap"
             >
-              Mark all as read
+              <CheckCheck className="w-5 h-5 md:hidden" />
+              <span className="hidden md:inline">Mark all as read</span>
             </button>
           )}
           {list.length > 0 && (
@@ -100,9 +105,12 @@ export default function AgentNotificationsPage() {
                   clearAllNotifications();
                 }
               }}
-              className="text-sm font-medium text-red-600 hover:underline"
+              aria-label="Clear all notifications"
+              title="Clear all"
+              className="p-2 md:p-0 rounded-lg md:rounded-none hover:bg-white md:hover:bg-transparent text-red-600 md:text-sm md:font-medium md:hover:underline whitespace-nowrap"
             >
-              Clear all
+              <Trash2 className="w-5 h-5 md:hidden" />
+              <span className="hidden md:inline">Clear all</span>
             </button>
           )}
         </div>
