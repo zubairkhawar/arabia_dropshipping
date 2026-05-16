@@ -84,14 +84,14 @@ function AgentLayoutContent({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen bg-scaffold">
+    <div className="flex h-[100svh] bg-scaffold">
       <AgentSidebar />
       <div
         className="flex min-w-0 flex-col transition-all duration-300"
         style={{
           marginLeft: `${sidebarWidth}px`,
           width: isMobile ? '100vw' : `calc(100vw - ${sidebarWidth}px)`,
-          paddingBottom: isMobile ? 64 : 0,
+          paddingBottom: isMobile ? 'calc(4rem + env(safe-area-inset-bottom))' : 0,
         }}
       >
         <AgentHeader />

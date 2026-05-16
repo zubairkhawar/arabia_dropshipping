@@ -52,7 +52,7 @@ export function AgentMobileTabBar() {
 
   return (
     <nav
-      className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex h-16 items-stretch border-t border-border bg-sidebar pb-[env(safe-area-inset-bottom)]"
+      className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex h-[calc(4rem+env(safe-area-inset-bottom))] items-stretch border-t border-border bg-sidebar pb-[env(safe-area-inset-bottom)]"
       aria-label="Agent navigation"
     >
       {items.map((item) => {
