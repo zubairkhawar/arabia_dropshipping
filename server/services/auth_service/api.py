@@ -92,7 +92,9 @@ async def get_current_user(
         raise credentials_exception
 
     user: User | None = (
-        db.query(User).filter(User.email == token_data.email).first()
+        db.query(User)
+        .filter(func.lower(User.email) == (token_data.email or "").strip().lower())
+        .first()
     )
     if user is None or not user.is_active:
         raise credentials_exception
@@ -120,7 +122,9 @@ async def get_current_user_optional(
         return None
 
     user: User | None = (
-        db.query(User).filter(User.email == token_data.email).first()
+        db.query(User)
+        .filter(func.lower(User.email) == (token_data.email or "").strip().lower())
+        .first()
     )
     if user is None or not user.is_active:
         return None
@@ -134,7 +138,10 @@ async def register(payload: UserCreate, db: Session = Depends(get_db)):
 
     In most deployments this should be admin-protected or invite-only.
     """
-    existing = db.query(User).filter(User.email == payload.email).first()
+    normalized_email = (payload.email or "").strip().lower()
+    existing = (
+        db.query(User).filter(func.lower(User.email) == normalized_email).first()
+    )
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -142,7 +149,7 @@ async def register(payload: UserCreate, db: Session = Depends(get_db)):
         )
 
     user = User(
-        email=payload.email,
+        email=normalized_email,
         full_name=payload.full_name,
         tenant_id=payload.tenant_id,
         role=payload.role,
@@ -169,7 +176,9 @@ async def login(
     - Returns JWT access token with user identity and role.
     """
     user: User | None = (
-        db.query(User).filter(User.email == form_data.username).first()
+        db.query(User)
+        .filter(func.lower(User.email) == (form_data.username or "").strip().lower())
+        .first()
     )
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(

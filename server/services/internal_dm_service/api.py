@@ -6,7 +6,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 from jose import JWTError, jwt
 from pydantic import BaseModel
-from sqlalchemy import or_, desc
+from sqlalchemy import or_, desc, func
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -152,7 +152,10 @@ def _decode_websocket_user(token: str, db: Session) -> Optional[User]:
             return None
         return (
             db.query(User)
-            .filter(User.email == email, User.is_active.is_(True))
+            .filter(
+                func.lower(User.email) == (email or "").strip().lower(),
+                User.is_active.is_(True),
+            )
             .first()
         )
     except JWTError:

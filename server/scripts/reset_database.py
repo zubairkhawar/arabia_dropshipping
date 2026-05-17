@@ -62,14 +62,15 @@ def _ensure_admin_user() -> None:
             db.add(tenant)
             db.commit()
 
-        existing = db.query(User).filter(User.email == settings.admin_email).first()
+        admin_email_norm = (settings.admin_email or "").strip().lower()
+        existing = db.query(User).filter(User.email == admin_email_norm).first()
         if existing:
-            print(f"Admin user already exists: {settings.admin_email}")
+            print(f"Admin user already exists: {admin_email_norm}")
             return
 
         user = User(
             tenant_id=tenant.id,
-            email=settings.admin_email,
+            email=admin_email_norm,
             full_name="Arabia Admin",
             role="admin",
             hashed_password=get_password_hash(settings.admin_password),

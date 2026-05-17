@@ -6,7 +6,7 @@ from models import Tenant, User
 from services.auth_service.services import get_password_hash
 
 
-ADMIN_EMAIL = "arabiadropshipping05@gmail.com"
+ADMIN_EMAIL = "arabiadropshipping05@gmail.com".lower()
 ADMIN_PASSWORD = "arabia@123"
 ADMIN_FULL_NAME = "Arabia Admin"
 

@@ -31,6 +31,7 @@ from database import (
     ensure_trending_product_unit_pieces_column,
     ensure_trending_product_is_trending_column,
     ensure_whatsapp_broadcast_tables,
+    ensure_user_emails_lowercased,
 )
 from models import Tenant, User
 from services.auth_service.services import get_password_hash
@@ -133,13 +134,14 @@ def ensure_admin_user() -> None:
             db.add(tenant)
             db.commit()
 
-        existing = db.query(User).filter(User.email == settings.admin_email).first()
+        admin_email = (settings.admin_email or "").strip().lower()
+        existing = db.query(User).filter(User.email == admin_email).first()
         if existing:
             return
 
         user = User(
             tenant_id=tenant.id,
-            email=settings.admin_email,
+            email=admin_email,
             full_name="Arabia Admin",
             role="admin",
             hashed_password=get_password_hash(settings.admin_password),
@@ -176,6 +178,7 @@ async def lifespan(app: FastAPI):
     ensure_trending_product_unit_pieces_column()
     ensure_trending_product_is_trending_column()
     ensure_whatsapp_broadcast_tables()
+    ensure_user_emails_lowercased()
     ensure_pgvector_extension()
     ensure_admin_user()
     hydrate_openai_api_key_from_db()

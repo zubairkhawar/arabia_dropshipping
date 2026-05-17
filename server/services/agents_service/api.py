@@ -4,6 +4,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -205,12 +206,15 @@ async def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
     """
     Create a new agent (User with role=agent + Agent row).
     """
-    existing = db.query(User).filter(User.email == payload.email).first()
+    normalized_email = (payload.email or "").strip().lower()
+    existing = (
+        db.query(User).filter(func.lower(User.email) == normalized_email).first()
+    )
     if existing:
         raise HTTPException(status_code=400, detail="Email already in use")
 
     user = User(
-        email=payload.email,
+        email=normalized_email,
         full_name=payload.full_name,
         tenant_id=payload.tenant_id,
         role="agent",

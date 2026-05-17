@@ -470,6 +470,40 @@ def ensure_trending_product_is_trending_column() -> None:
         pass
 
 
+def ensure_user_emails_lowercased() -> None:
+    """
+    Normalize ``users.email`` to lowercase. Email addresses are case-insensitive
+    by convention, but PostgreSQL equality is case-sensitive — agents who type
+    their address in lowercase couldn't log in when the admin entered it mixed-
+    case. Run once on startup; safe to run repeatedly.
+
+    If two rows differ only in case the UPDATE fails the unique constraint and
+    the transaction is rolled back; the operator is expected to deduplicate by
+    hand in that (rare) case.
+    """
+    try:
+        insp = inspect(engine)
+        if "users" not in insp.get_table_names():
+            return
+    except Exception:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE users SET email = LOWER(email) WHERE email <> LOWER(email)")
+            )
+    except Exception:
+        # Most likely cause: case-insensitive duplicates. Log and continue —
+        # the app will still run, login is still broken until the admin removes
+        # the duplicate row.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "ensure_user_emails_lowercased: UPDATE failed; "
+            "look for duplicate emails differing only in case."
+        )
+
+
 def ensure_whatsapp_broadcast_tables() -> None:
     """Create whatsapp_templates / broadcast_campaigns / broadcast_recipients if missing."""
     try:
