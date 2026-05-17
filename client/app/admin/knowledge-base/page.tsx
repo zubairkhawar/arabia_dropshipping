@@ -374,15 +374,15 @@ export default function AdminKnowledgeBase() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-text-primary">Knowledge Base</h1>
-        <p className="text-text-secondary mt-1">
+        <h1 className="text-xl md:text-2xl font-bold text-text-primary">Knowledge Base</h1>
+        <p className="text-text-secondary mt-1 text-sm md:text-base">
           Connect documents and websites so the AI bot can answer with up-to-date, brand-specific knowledge.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 md:gap-6">
         {/* Upload / connection column */}
         <div className="space-y-4 xl:col-span-1">
           <div className="bg-card rounded-lg p-5 border border-border space-y-3">

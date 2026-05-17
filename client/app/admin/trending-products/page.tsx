@@ -432,9 +432,9 @@ export default function AdminTrendingProductsPage() {
   const countryLabel = COUNTRY_TABS.find((t) => t.code === country)?.label ?? country;
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto w-full">
-      <div className="rounded-lg border border-border bg-panel p-5 shadow-sm">
-        <h1 className="text-xl font-semibold text-text-primary">Product Management</h1>
+    <div className="flex flex-col gap-4 md:gap-6 p-3 md:p-6 max-w-6xl mx-auto w-full">
+      <div className="rounded-lg border border-border bg-panel p-3 md:p-5 shadow-sm">
+        <h1 className="text-lg md:text-xl font-semibold text-text-primary">Product Management</h1>
       </div>
 
       <div className="flex flex-wrap gap-2 border-b border-border pb-3">

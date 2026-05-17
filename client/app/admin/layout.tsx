@@ -19,17 +19,27 @@ function AdminShell({ children }: { children: React.ReactNode }) {
   const { isCollapsed } = useSidebar();
   const pathname = usePathname();
   const hideMainScrollbar = MAIN_SCROLLBAR_HIDDEN.has(pathname);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 767px)');
+    const update = () => setIsMobile(mql.matches);
+    update();
+    mql.addEventListener('change', update);
+    return () => mql.removeEventListener('change', update);
+  }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-scaffold">
+    <div className="flex h-[100svh] overflow-hidden bg-scaffold">
       <AdminSidebar />
       <div
         className="flex min-h-0 flex-1 flex-col overflow-hidden transition-all duration-300"
-        style={{ marginLeft: isCollapsed ? '80px' : '256px' }}
+        style={{ marginLeft: isMobile ? 0 : isCollapsed ? '80px' : '256px' }}
       >
         <AdminHeader />
         <main
-          className={`min-h-0 flex-1 overflow-y-auto bg-scaffold p-6${hideMainScrollbar ? ' admin-no-scrollbar' : ''}`}
+          className={`min-h-0 flex-1 overflow-y-auto bg-scaffold p-3 md:p-6${hideMainScrollbar ? ' admin-no-scrollbar' : ''}`}
         >
           {children}
         </main>

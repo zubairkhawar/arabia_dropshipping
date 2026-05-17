@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -44,8 +44,21 @@ const bottomSection: SidebarLink[] = [
 
 export function AdminSidebar() {
   const pathname = usePathname();
-  const { isCollapsed } = useSidebar();
+  const { isCollapsed: rawCollapsed, mobileOpen, closeMobileSidebar } = useSidebar();
   const [conversationsOpen, setConversationsOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 767px)');
+    const update = () => setIsMobile(mql.matches);
+    update();
+    mql.addEventListener('change', update);
+    return () => mql.removeEventListener('change', update);
+  }, []);
+
+  // On mobile the sidebar is a drawer at full width; the desktop collapse flag must not apply.
+  const isCollapsed = !isMobile && rawCollapsed;
 
   const linkClass = (path: string, exactOnly = false) => {
     const isActive = exactOnly
@@ -55,6 +68,8 @@ export function AdminSidebar() {
       isActive ? 'bg-primary text-white' : 'text-text-secondary hover:bg-panel hover:text-text-primary'
     }`;
   };
+
+  const handleNav = () => closeMobileSidebar();
 
   /** Conversation views are siblings; only one should be active (exact path match). */
   const conversationLinkClass = (path: string) => linkClass(path, true);
@@ -68,7 +83,7 @@ export function AdminSidebar() {
         {items.map((item) => {
           const Icon = item.icon;
           return (
-            <Link key={item.path} href={item.path} className={linkClass(item.path)}>
+            <Link key={item.path} href={item.path} onClick={handleNav} className={linkClass(item.path)}>
               <Icon className="w-5 h-5 flex-shrink-0" />
               {!isCollapsed && <span className="font-medium text-sm">{item.label}</span>}
             </Link>
@@ -79,9 +94,20 @@ export function AdminSidebar() {
   );
 
   return (
+    <>
+    {/* Mobile scrim */}
     <div
-      className={`fixed left-0 top-0 h-full bg-sidebar border-r border-border transition-all duration-300 z-50 ${
-        isCollapsed ? 'w-20' : 'w-64'
+      className={`md:hidden fixed inset-0 z-40 bg-black/40 transition-opacity duration-200 ${
+        mobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
+      }`}
+      onClick={closeMobileSidebar}
+      aria-hidden
+    />
+    <div
+      className={`fixed left-0 top-0 h-full bg-sidebar border-r border-border transition-all duration-300 z-50 max-md:w-72 max-md:transform max-md:transition-transform ${
+        mobileOpen ? 'max-md:translate-x-0' : 'max-md:-translate-x-full'
+      } ${
+        isCollapsed ? 'md:w-20' : 'md:w-64'
       }`}
     >
       <div className="flex flex-col h-full">
@@ -116,7 +142,7 @@ export function AdminSidebar() {
                 {conversationsViews.map((item) => {
                   const Icon = item.icon;
                   return (
-                    <Link key={item.path} href={item.path} className={conversationLinkClass(item.path)}>
+                    <Link key={item.path} href={item.path} onClick={handleNav} className={conversationLinkClass(item.path)}>
                       <Icon className="w-5 h-5 flex-shrink-0" />
                     </Link>
                   );
@@ -144,7 +170,7 @@ export function AdminSidebar() {
                     {conversationsViews.map((item) => {
                       const Icon = item.icon;
                       return (
-                        <Link key={item.path} href={item.path} className={conversationLinkClass(item.path)}>
+                        <Link key={item.path} href={item.path} onClick={handleNav} className={conversationLinkClass(item.path)}>
                           <Icon className="w-4 h-4 flex-shrink-0" />
                           <span className="font-medium text-sm">{item.label}</span>
                         </Link>
@@ -167,5 +193,6 @@ export function AdminSidebar() {
         )}
       </div>
     </div>
+    </>
   );
 }

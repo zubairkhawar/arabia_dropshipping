@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { ChatList } from '@/components/chat/chat-list';
 import { ChatWindow } from '@/components/chat/chat-window';
 import { InboxPanelsProvider, useInboxPanels } from '@/contexts/InboxPanelsContext';
@@ -98,40 +99,73 @@ function ContextPanel() {
 
 function AdminInboxContent() {
   const { contextCollapsed, setContextCollapsed } = useInboxPanels()!;
+  const inboxConv = useInboxConversations();
+  const selectedId = inboxConv?.selectedId ?? null;
+  const setSelectedId = inboxConv?.setSelectedId ?? (() => {});
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 767px)');
+    const update = () => setIsMobile(mql.matches);
+    update();
+    mql.addEventListener('change', update);
+    return () => mql.removeEventListener('change', update);
+  }, []);
+
+  const mobileShowList = isMobile && selectedId == null;
+  const mobileShowThread = isMobile && selectedId != null;
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      <div className="hidden md:block w-chatlist-tablet lg:w-chatlist-laptop xl:w-chatlist-desktop 2xl:w-chatlist-ultrawide border-r border-border bg-panel shrink-0">
-        <ChatList />
-      </div>
+      {/* List: full width on mobile when no selection; original sidebar on desktop. */}
+      {mobileShowList && (
+        <div className="flex w-full min-w-0 flex-col bg-panel">
+          <ChatList />
+        </div>
+      )}
+      {!isMobile && (
+        <div className="hidden md:block w-chatlist-tablet lg:w-chatlist-laptop xl:w-chatlist-desktop 2xl:w-chatlist-ultrawide border-r border-border bg-panel shrink-0">
+          <ChatList />
+        </div>
+      )}
 
-      <div className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-white">
-          <div className="flex flex-col">
-            <span className="text-xs font-semibold text-text-primary">Monitoring</span>
-            <span className="text-[11px] text-text-secondary">
-              Read-only view of live and historical conversations.
-            </span>
+      {/* Thread + monitoring banner: visible on desktop always, on mobile only when a chat is open. */}
+      {(!isMobile || mobileShowThread) && (
+        <div className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-white">
+            <div className="flex flex-col">
+              <span className="text-xs font-semibold text-text-primary">Monitoring</span>
+              <span className="text-[11px] text-text-secondary">
+                Read-only view of live and historical conversations.
+              </span>
+            </div>
+          </div>
+          <div className="relative flex-1 min-h-0 overflow-hidden">
+            <ChatWindow
+              readOnly
+              onMobileBack={isMobile ? () => setSelectedId(null) : undefined}
+            />
           </div>
         </div>
-        <div className="relative flex-1 min-h-0 overflow-hidden">
-          <ChatWindow readOnly />
-        </div>
-      </div>
+      )}
 
-      {contextCollapsed ? (
-        <div className="hidden lg:flex w-8 shrink-0 flex-col items-center border-l border-border bg-panel pt-4 transition-all duration-300">
-          <button
-            type="button"
-            onClick={() => setContextCollapsed(false)}
-            className="rounded p-2 text-text-secondary hover:bg-white hover:text-primary transition-colors"
-            title="Expand analytics"
-          >
-            <PanelRightOpen className="h-5 w-5" />
-          </button>
-        </div>
-      ) : (
-        <ContextPanel />
+      {/* Right context panel: desktop only (xl+). */}
+      {!isMobile && (
+        contextCollapsed ? (
+          <div className="hidden lg:flex w-8 shrink-0 flex-col items-center border-l border-border bg-panel pt-4 transition-all duration-300">
+            <button
+              type="button"
+              onClick={() => setContextCollapsed(false)}
+              className="rounded p-2 text-text-secondary hover:bg-white hover:text-primary transition-colors"
+              title="Expand analytics"
+            >
+              <PanelRightOpen className="h-5 w-5" />
+            </button>
+          </div>
+        ) : (
+          <ContextPanel />
+        )
       )}
     </div>
   );

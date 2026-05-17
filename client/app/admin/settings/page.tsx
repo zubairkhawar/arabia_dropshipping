@@ -525,15 +525,15 @@ export default function AdminSettings() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-text-primary">Settings</h1>
-        <p className="text-text-secondary mt-1">
+        <h1 className="text-xl md:text-2xl font-bold text-text-primary">Settings</h1>
+        <p className="text-text-secondary mt-1 text-sm md:text-base">
           System configuration and AI behavior controls.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
         <div className="bg-sidebar rounded-lg p-6 border border-border space-y-6">
           <div>
             <h3 className="font-semibold text-text-primary mb-4">System Configuration</h3>

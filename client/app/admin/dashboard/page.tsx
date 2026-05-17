@@ -118,10 +118,10 @@ export default function AdminDashboard() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-text-primary">Dashboard</h1>
-        <p className="text-text-secondary mt-1">System overview and key metrics</p>
+        <h1 className="text-xl md:text-2xl font-bold text-text-primary">Dashboard</h1>
+        <p className="text-text-secondary mt-1 text-sm md:text-base">System overview and key metrics</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

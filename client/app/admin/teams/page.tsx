@@ -33,7 +33,16 @@ export default function AdminTeams() {
   const [activeMemberMenu, setActiveMemberMenu] = useState<string | null>(null);
   const [deleteTeamConfirm, setDeleteTeamConfirm] = useState<{ id: string; name: string } | null>(null);
 
+  // Desktop only: auto-select the first team so the detail panel is never empty.
+  // On mobile (<md) the user must tap a team — that's how push/pop works.
   useEffect(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+      // Still clear stale selection if the team was deleted.
+      if (selectedId && !teams.find((t) => t.id === selectedId)) {
+        setSelectedId(null);
+      }
+      return;
+    }
     if (!selectedId && teams.length > 0) {
       setSelectedId(teams[0].id);
     } else if (selectedId && !teams.find((t) => t.id === selectedId)) {
@@ -123,12 +132,25 @@ export default function AdminTeams() {
   };
 
   const width = listCollapsed ? 64 : 260;
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 767px)');
+    const update = () => setIsMobile(mql.matches);
+    update();
+    mql.addEventListener('change', update);
+    return () => mql.removeEventListener('change', update);
+  }, []);
+
+  const mobileShowList = isMobile && !selectedId;
+  const mobileShowDetail = isMobile && !!selectedId;
 
   return (
     <div className="flex h-full">
       <div
-        className="flex flex-col h-full border-r border-border bg-white shrink-0 transition-[width] duration-200"
-        style={{ width }}
+        className={`${isMobile ? (mobileShowList ? 'flex w-full' : 'hidden') : 'flex'} flex-col h-full border-r border-border bg-white shrink-0 transition-[width] duration-200`}
+        style={isMobile ? undefined : { width }}
       >
         <div
           className={`flex items-center ${
@@ -259,8 +281,8 @@ export default function AdminTeams() {
         )}
       </div>
 
-      <div className="flex-1 min-w-0 flex">
-        <div className="flex min-w-0 flex-[3] flex-col border-r border-border bg-white">
+      <div className={`flex-1 min-w-0 flex ${isMobile && !mobileShowDetail ? 'hidden' : ''}`}>
+        <div className={`${isMobile ? 'hidden' : 'flex'} min-w-0 flex-[3] flex-col border-r border-border bg-white`}>
           {selectedTeam ? (
             <ChatWindow
               isInternalChat
@@ -300,9 +322,20 @@ export default function AdminTeams() {
           )}
         </div>
 
-        <div className="flex-[1.7] min-w-[320px] max-w-md xl:max-w-lg flex flex-col p-6">
+        <div className="flex-[1.7] min-w-0 md:min-w-[320px] max-w-none md:max-w-md xl:max-w-lg flex flex-col p-3 md:p-6 overflow-y-auto">
+          {isMobile && selectedTeam && (
+            <button
+              type="button"
+              onClick={() => setSelectedId(null)}
+              className="md:hidden inline-flex items-center gap-1.5 mb-3 text-sm text-text-secondary hover:text-text-primary"
+              aria-label="Back to teams list"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              Back to teams
+            </button>
+          )}
           <div className="mb-4">
-            <h1 className="text-2xl font-bold text-text-primary">Teams</h1>
+            <h1 className="text-xl md:text-2xl font-bold text-text-primary">Teams</h1>
             <p className="text-text-secondary mt-1 text-sm">
               Organize agents into routing teams. Each team can have its own load, routing rules, and
               internal channel.
@@ -522,7 +555,7 @@ export default function AdminTeams() {
           onClick={() => setDeleteTeamConfirm(null)}
         >
           <div
-            className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6"
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-3 md:mx-4 p-4 md:p-6 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <p className="text-sm font-semibold text-text-primary mb-1">Delete team</p>
@@ -556,7 +589,7 @@ export default function AdminTeams() {
           onClick={() => setShowCreateModal(false)}
         >
           <div
-            className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6"
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-3 md:mx-4 p-4 md:p-6 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
               <div className="mb-4">
