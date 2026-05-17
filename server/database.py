@@ -470,6 +470,22 @@ def ensure_trending_product_is_trending_column() -> None:
         pass
 
 
+def ensure_whatsapp_broadcast_tables() -> None:
+    """Create whatsapp_templates / broadcast_campaigns / broadcast_recipients if missing."""
+    try:
+        from models import (  # noqa: WPS433
+            WhatsAppTemplate,
+            BroadcastCampaign,
+            BroadcastRecipient,
+        )
+
+        WhatsAppTemplate.__table__.create(bind=engine, checkfirst=True)
+        BroadcastCampaign.__table__.create(bind=engine, checkfirst=True)
+        BroadcastRecipient.__table__.create(bind=engine, checkfirst=True)
+    except Exception:
+        pass
+
+
 def get_db():
     db = SessionLocal()
     try:

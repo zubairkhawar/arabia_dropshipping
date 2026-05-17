@@ -1764,6 +1764,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)) -> D
     sequentially (Meta may pack multiple messages in one delivery — see TC9).
     """
     body = await request.json()
+    # Dispatch template-approval + delivery-status events (broadcasts) alongside
+    # inbound user messages. Failures here are non-fatal for the message path.
+    try:
+        from services.broadcasts_service.template_webhook import dispatch_meta_webhook_extras
+
+        await dispatch_meta_webhook_extras(db, body)
+    except Exception:
+        logger.exception("dispatch_meta_webhook_extras failed")
     inbound_list = _parse_meta_whatsapp_inbound_all(body)
     if not inbound_list:
         # Non-message webhooks (delivery/read/status) are valid and should ACK.

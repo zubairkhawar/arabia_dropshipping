@@ -424,6 +424,81 @@ class MetaWhatsAppClient:
                 return []
             return [x for x in rows if isinstance(x, dict)]
 
+    async def create_message_template(
+        self,
+        *,
+        name: str,
+        language: str,
+        category: str,
+        components: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        POST ``/{waba-id}/message_templates`` to submit a template for Meta approval.
+        Returns the Graph response (typically ``{"id": "...", "status": "PENDING", "category": ...}``).
+        """
+        if not self.waba_templates_configured():
+            raise RuntimeError("Meta WABA not configured (need access token + WABA id).")
+        waba = (settings.meta_whatsapp_waba_id or "").strip()
+        url = f"https://graph.facebook.com/{self.graph_version}/{waba}/message_templates"
+        payload: Dict[str, Any] = {
+            "name": name.strip().lower(),
+            "language": language.strip(),
+            "category": category.strip().upper(),
+            "components": components,
+        }
+        headers = self._headers()
+        logger.info(
+            "Submitting WhatsApp template name=%s lang=%s category=%s",
+            payload["name"],
+            payload["language"],
+            payload["category"],
+        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta create message_template HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_message_template(self, meta_template_id: str) -> Dict[str, Any]:
+        """Fetch a single template by Meta id — used to reconcile status if webhook missed."""
+        if not self.access_token or not meta_template_id:
+            raise RuntimeError("access_token and meta_template_id are required")
+        url = f"https://graph.facebook.com/{self.graph_version}/{meta_template_id}"
+        params = {"fields": "name,language,status,category,components,rejected_reason"}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, params=params, headers=self._auth_headers())
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta get message_template HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def delete_message_template(self, name: str) -> Dict[str, Any]:
+        """DELETE ``/{waba-id}/message_templates?name=...`` — removes all language variants."""
+        if not self.waba_templates_configured():
+            raise RuntimeError("Meta WABA not configured.")
+        waba = (settings.meta_whatsapp_waba_id or "").strip()
+        url = f"https://graph.facebook.com/{self.graph_version}/{waba}/message_templates"
+        params = {"name": name.strip().lower()}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.delete(url, params=params, headers=self._auth_headers())
+            if resp.status_code >= 400:
+                logger.error(
+                    "Meta delete message_template HTTP %s: %s",
+                    resp.status_code,
+                    (resp.text or "")[:800],
+                )
+            resp.raise_for_status()
+            return resp.json()
+
     async def send_template_message(
         self,
         to_phone: str,

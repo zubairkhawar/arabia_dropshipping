@@ -499,3 +499,81 @@ class TrendingProduct(Base):
     is_trending = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WhatsAppTemplate(Base):
+    """
+    Admin-authored Meta WhatsApp message template. Lifecycle:
+      DRAFT (local only) → submit → PENDING (Meta is reviewing)
+      → APPROVED / REJECTED (+rejection_reason) / PAUSED / DISABLED.
+    Template ``components`` mirror Meta's shape (header/body/footer/buttons).
+    """
+
+    __tablename__ = "whatsapp_templates"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", "language", name="uq_wa_template_name_lang"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    name = Column(String(512), nullable=False)
+    language = Column(String(32), nullable=False)
+    category = Column(String(32), nullable=False)  # MARKETING | UTILITY | AUTHENTICATION
+    components = Column(JSON, nullable=False)
+    body_placeholder_count = Column(Integer, nullable=False, default=0)
+    status = Column(String(32), nullable=False, default="DRAFT")
+    rejection_reason = Column(Text, nullable=True)
+    meta_template_id = Column(String(64), nullable=True, index=True)
+    submitted_at = Column(DateTime, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BroadcastCampaign(Base):
+    """
+    A customer broadcast send job. Uses an APPROVED WhatsAppTemplate and a recipient
+    source (CSV upload or existing AI-bot customers). Recipients live in
+    :class:`BroadcastRecipient`.
+    """
+
+    __tablename__ = "broadcast_campaigns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    template_id = Column(Integer, ForeignKey("whatsapp_templates.id"), nullable=False, index=True)
+    recipient_source = Column(String(32), nullable=False)  # CSV | AI_CUSTOMERS
+    recipient_count = Column(Integer, nullable=False, default=0)
+    sent_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    status = Column(String(32), nullable=False, default="DRAFT")
+    # DRAFT | QUEUED | SENDING | COMPLETED | FAILED | CANCELED
+    scheduled_at = Column(DateTime, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BroadcastRecipient(Base):
+    """One row per intended recipient of a :class:`BroadcastCampaign`."""
+
+    __tablename__ = "broadcast_recipients"
+
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(
+        Integer, ForeignKey("broadcast_campaigns.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    phone = Column(String(32), nullable=False, index=True)
+    name = Column(String(255), nullable=True)
+    variables = Column(JSON, nullable=True)  # list[str] body params resolved per recipient
+    status = Column(String(16), nullable=False, default="QUEUED")
+    # QUEUED | SENT | DELIVERED | READ | FAILED
+    wa_message_id = Column(String(255), nullable=True, index=True)
+    error_code = Column(String(64), nullable=True)
+    error_message = Column(Text, nullable=True)
+    sent_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

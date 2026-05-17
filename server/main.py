@@ -30,6 +30,7 @@ from database import (
     ensure_trending_product_image_arrays,
     ensure_trending_product_unit_pieces_column,
     ensure_trending_product_is_trending_column,
+    ensure_whatsapp_broadcast_tables,
 )
 from models import Tenant, User
 from services.auth_service.services import get_password_hash
@@ -45,6 +46,9 @@ from services.agents_service.api import router as agents_router
 from services.teams_service.api import router as teams_router
 from services.notifications_service.api import router as notifications_router
 from services.broadcasts_service.api import router as broadcasts_router
+from services.broadcasts_service.templates_api import router as wa_templates_router
+from services.broadcasts_service.campaigns_api import router as broadcast_campaigns_router
+from services.admin_realtime_service.api import router as admin_realtime_router
 from services.knowledge_service.api import router as knowledge_router
 from services.internal_dm_service.api import router as internal_dm_router
 from services.agent_portal_service.api import router as agent_portal_router
@@ -171,6 +175,7 @@ async def lifespan(app: FastAPI):
     ensure_trending_product_image_arrays()
     ensure_trending_product_unit_pieces_column()
     ensure_trending_product_is_trending_column()
+    ensure_whatsapp_broadcast_tables()
     ensure_pgvector_extension()
     ensure_admin_user()
     hydrate_openai_api_key_from_db()
@@ -234,6 +239,9 @@ app.include_router(agents_router, prefix="/api/agents", tags=["agents"])
 app.include_router(teams_router, prefix="/api/teams", tags=["teams"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(broadcasts_router, prefix="/api", tags=["broadcasts"])
+app.include_router(wa_templates_router, prefix="/api/broadcasts", tags=["broadcasts"])
+app.include_router(broadcast_campaigns_router, prefix="/api/broadcasts", tags=["broadcasts"])
+app.include_router(admin_realtime_router, prefix="/api/admin-realtime", tags=["admin-realtime"])
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["knowledge"])
 app.include_router(internal_dm_router, prefix="/api/internal-dm", tags=["internal-dm"])
 app.include_router(agent_portal_router, prefix="/api/agent-portal", tags=["agent-portal"])
