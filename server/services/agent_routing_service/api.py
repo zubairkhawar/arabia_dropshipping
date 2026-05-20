@@ -29,64 +29,6 @@ from services.whatsapp_service.meta_cloud import MetaWhatsAppClient
 router = APIRouter()
 
 
-def _clear_assigned_chats_pending(db: Session, agent: Agent) -> int:
-    """Remove ``pending_reason`` from all non-closed chats assigned to this agent."""
-    convs = (
-        db.query(Conversation)
-        .filter(
-            Conversation.agent_id == agent.id,
-            Conversation.tenant_id == agent.tenant_id,
-            func.lower(func.coalesce(Conversation.status, "")).notin_(
-                ["closed", "resolved"]
-            ),
-        )
-        .all()
-    )
-    cleared = 0
-    for c in convs:
-        meta = c.conversation_metadata if isinstance(c.conversation_metadata, dict) else {}
-        if "pending_reason" not in meta and "pending_since" not in meta:
-            continue
-        new_meta = {k: v for k, v in meta.items() if k not in ("pending_reason", "pending_since")}
-        c.conversation_metadata = new_meta
-        db.add(c)
-        cleared += 1
-    if cleared:
-        db.commit()
-    return cleared
-
-
-def _mark_assigned_chats_pending(db: Session, agent: Agent) -> int:
-    """
-    Tag every non-closed conversation assigned to this agent with
-    ``conversation_metadata.pending_reason = "agent_offline"`` so the frontend
-    can surface a 'pending' badge. Conversation stays assigned to the agent —
-    when they come back online, the queue is exactly where they left it.
-    """
-    convs = (
-        db.query(Conversation)
-        .filter(
-            Conversation.agent_id == agent.id,
-            Conversation.tenant_id == agent.tenant_id,
-            func.lower(func.coalesce(Conversation.status, "")).notin_(
-                ["closed", "resolved"]
-            ),
-        )
-        .all()
-    )
-    now_iso = datetime.utcnow().isoformat()
-    for c in convs:
-        meta = c.conversation_metadata if isinstance(c.conversation_metadata, dict) else {}
-        c.conversation_metadata = {
-            **meta,
-            "pending_reason": "agent_offline",
-            "pending_since": now_iso,
-        }
-        db.add(c)
-    db.commit()
-    return len(convs)
-
-
 class AgentStatus(str, Enum):
     online = "online"
     busy = "busy"
@@ -108,10 +50,6 @@ class AgentStatusUpdate(BaseModel):
     max_concurrent_chats: Optional[int] = None
     team: Optional[str] = None
     accepting_chats: Optional[bool] = None
-    # When False (default), going offline leaves chats assigned to the agent so
-    # they can resume on next login. Set True for the explicit "go offline and
-    # hand my chats back to the bot" action.
-    release_chats: Optional[bool] = False
 
 
 class AssignRequest(BaseModel):
@@ -347,15 +285,12 @@ async def update_agent_status(
             open_session.ended_at = now
             db.add(open_session)
 
-    if was_active and not is_active:
-        if bool(payload.release_chats):
-            from services.messaging_service.conversation_offline_release import (
-                release_live_conversations_when_agent_went_offline,
-            )
-
-            await release_live_conversations_when_agent_went_offline(db, agent)
-        else:
-            _mark_assigned_chats_pending(db, agent)
+    # Going offline no longer touches chat assignments. Chats stay with the agent
+    # — the customer continues messaging the same thread — until the agent comes
+    # back and replies, the agent closes the chat, or the 24h idle safety net
+    # releases it back to the bot. New routing already filters offline agents
+    # (see _agent_accepts_new_routing_assignments), so no chat will be assigned
+    # to this agent while they are offline.
 
     agent.status = next_status
     if payload.max_concurrent_chats is not None:
