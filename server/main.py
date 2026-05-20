@@ -85,6 +85,33 @@ async def _broadcast_agent_enforcement_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def _stale_chat_release_loop() -> None:
+    """
+    Periodically release conversations that have been assigned to an agent
+    with no agent reply for ``agent_chat_stale_release_hours`` (default 24h).
+    Safety net for the case where an agent disappears permanently — without
+    this they could hold customer chats hostage now that we no longer auto-
+    offline on WebSocket disconnect.
+    """
+    hours = int(getattr(settings, "agent_chat_stale_release_hours", 0) or 0)
+    if hours <= 0:
+        return
+    interval = int(getattr(settings, "agent_chat_stale_check_interval_seconds", 300) or 0)
+    if interval <= 0:
+        return
+    from services.messaging_service.stale_chat_release import run_stale_chat_release_tick
+
+    await asyncio.sleep(30)
+    while True:
+        try:
+            count = await run_stale_chat_release_tick()
+            if count:
+                logger.info("stale_chat_release_loop: released %s conversations", count)
+        except Exception:
+            logger.exception("stale_chat_release_loop tick failed")
+        await asyncio.sleep(interval)
+
+
 async def _memory_stats_background_loop() -> None:
     """Periodic Redis INFO logging for ops (non-blocking; failures are logged only)."""
     if not bool(getattr(settings, "memory_stats_log_enabled", True)):
@@ -189,12 +216,19 @@ async def lifespan(app: FastAPI):
         if intv > 0:
             memory_stats_task = asyncio.create_task(_memory_stats_background_loop())
     broadcast_agent_task = asyncio.create_task(_broadcast_agent_enforcement_loop())
+    stale_chat_task: Optional[asyncio.Task] = asyncio.create_task(_stale_chat_release_loop())
     yield
     # Shutdown
     if broadcast_agent_task is not None:
         broadcast_agent_task.cancel()
         try:
             await broadcast_agent_task
+        except asyncio.CancelledError:
+            pass
+    if stale_chat_task is not None:
+        stale_chat_task.cancel()
+        try:
+            await stale_chat_task
         except asyncio.CancelledError:
             pass
     if memory_stats_task is not None:

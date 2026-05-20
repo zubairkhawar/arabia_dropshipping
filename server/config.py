@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # Agent attendance: Redis key idle TTL (no heartbeat → expire → DB session closed).
     attendance_redis_enabled: bool = True
     attendance_idle_ttl_seconds: int = 900  # 15 minutes
+    # Safety net: if a conversation has been assigned to an agent with no agent
+    # reply for this many hours, release it back to the bot. 0 = disabled.
+    agent_chat_stale_release_hours: int = 24
+    agent_chat_stale_check_interval_seconds: int = 300  # 5 min
     # Background log of Redis INFO/keyspace for ops (0 = disable periodic task).
     memory_stats_log_enabled: bool = True
     memory_stats_log_interval_seconds: int = 86400

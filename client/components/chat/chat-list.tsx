@@ -34,6 +34,8 @@ interface Conversation {
   /** True when last message is from customer and agent has not replied yet. Only live conversations. */
   isNewLead?: boolean;
   lastActivityIso?: string | null;
+  /** "agent_offline" means the assigned agent went offline and this chat is parked. */
+  pendingReason?: string;
 }
 
 const defaultConversations: Conversation[] = [
@@ -449,6 +451,16 @@ export function ChatList() {
                             }`}
                           >
                             {conv.customerName}
+                            {conv.pendingReason === 'agent_offline' && (
+                              <span
+                                className={`shrink-0 px-1.5 h-5 rounded-full flex items-center text-[9px] font-semibold uppercase tracking-wide ${
+                                  isSelected ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-700'
+                                }`}
+                                title="Parked — you went offline. Reply when back online."
+                              >
+                                Pending
+                              </span>
+                            )}
                             {conv.unread > 0 && (
                               <span
                                 className={`shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-full flex items-center justify-center text-[10px] font-semibold ${
