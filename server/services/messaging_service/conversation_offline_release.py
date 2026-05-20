@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 OFFLINE_HANDOVER_TEXT = (
     "The agent went offline. Arabia Dropbot will continue helping you from here."
 )
+IDLE_HANDOVER_TEXT = (
+    "This conversation has been idle for a while — Arabia Dropbot is back to help."
+)
 
 
 def _message_dict_minimal_for_inbox_ws(m: Message) -> dict:
@@ -60,11 +63,19 @@ def _live_assigned_conversations(db: Session, agent: Agent) -> List[Conversation
     )
 
 
-async def release_live_conversations_when_agent_went_offline(db: Session, agent: Agent) -> int:
+async def release_live_conversations_when_agent_went_offline(
+    db: Session,
+    agent: Agent,
+    handover_text: str = OFFLINE_HANDOVER_TEXT,
+) -> int:
     """
     Close every active/escalated conversation still assigned to this agent: clear assignment,
     set status closed, reset bot flow to conversational, persist handover line, notify inbox WS,
     and send WhatsApp when applicable.
+
+    Pass ``handover_text`` to override the default message — used by the 24h idle
+    safety net so the customer doesn't see "agent went offline" when the agent
+    didn't actually go offline.
 
     Returns how many conversations were updated.
     """
@@ -110,7 +121,7 @@ async def release_live_conversations_when_agent_went_offline(db: Session, agent:
 
         notice = Message(
             conversation_id=conversation.id,
-            content=OFFLINE_HANDOVER_TEXT,
+            content=handover_text,
             sender_type="ai",
             sender_id=None,
             created_at=datetime.utcnow(),
@@ -163,7 +174,7 @@ async def release_live_conversations_when_agent_went_offline(db: Session, agent:
             if phone and wa.is_configured():
                 try:
                     wa_resp = await wa.send_text_message(
-                        to_phone=str(phone), text=OFFLINE_HANDOVER_TEXT
+                        to_phone=str(phone), text=handover_text
                     )
                     row_meta = dict(notice.message_metadata or {})
                     msgs = wa_resp.get("messages") if isinstance(wa_resp, dict) else None

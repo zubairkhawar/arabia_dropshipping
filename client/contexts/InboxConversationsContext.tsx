@@ -43,8 +43,6 @@ export interface InboxConversation {
   transferredAt?: string;
   /** Raw API `last_activity_at` for sorting merged rows (not shown in UI). */
   lastActivityIso?: string | null;
-  /** Server-set marker — e.g. "agent_offline" — surfaced as a Pending badge. */
-  pendingReason?: string;
 }
 
 export interface InboxMessage {
@@ -131,7 +129,6 @@ interface ConversationSummaryApi {
   transfer_from_agent_name?: string | null;
   transfer_to_agent_id?: number | null;
   transfer_to_agent_name?: string | null;
-  pending_reason?: string | null;
 }
 
 interface ConversationDetailsApi {
@@ -326,7 +323,6 @@ export function InboxConversationsProvider({ children }: { children: ReactNode }
           c.transfer_to_agent_name || c.transfer_from_agent_name
             ? formatConversationListTime(c.last_activity_at, timeZone)
             : undefined,
-        pendingReason: c.pending_reason ?? undefined,
       };
     },
     [timeZone],

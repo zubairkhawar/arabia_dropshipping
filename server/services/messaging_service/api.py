@@ -124,7 +124,6 @@ class ConversationSummary(BaseModel):
     transfer_from_agent_name: Optional[str] = None
     transfer_to_agent_id: Optional[int] = None
     transfer_to_agent_name: Optional[str] = None
-    pending_reason: Optional[str] = None
 
 
 class ConversationSearchResult(BaseModel):
@@ -220,7 +219,6 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
     transfer_meta = meta.get("last_transfer") if isinstance(meta.get("last_transfer"), dict) else {}
     transfer_from_agent_id = transfer_meta.get("from_agent_id")
     transfer_to_agent_id = transfer_meta.get("to_agent_id")
-    pending_reason = meta.get("pending_reason") if isinstance(meta.get("pending_reason"), str) else None
 
     return ConversationSummary(
         id=c.id,
@@ -242,7 +240,6 @@ def _build_conversation_summary(c: Conversation, unread_count: int = 0) -> Conve
         if isinstance(transfer_meta.get("from_agent_name"), str)
         else None,
         transfer_to_agent_id=transfer_to_agent_id if isinstance(transfer_to_agent_id, int) else None,
-        pending_reason=pending_reason,
         transfer_to_agent_name=transfer_meta.get("to_agent_name")
         if isinstance(transfer_meta.get("to_agent_name"), str)
         else None,
